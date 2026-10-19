@@ -560,20 +560,32 @@ class ReviaSession
     // that waits for a restart is not committed, so the running settings describe what runs.
     // Returns whether ApplyPreference has live work to do.
     bool CommitPreferenceLocked(const std::string& lowered, const appSettings& updated, core::PreferenceResult& result);
-    // The live work for a committed preference. Runs after preferenceUpdateMutex is released,
-    // because it may join workers or restart services, and reads the committed value when it
-    // starts, so a newer write simply runs it again with the newer value.
+    // The live work for a committed preference, run by DrainLiveAppliers. It may join workers
+    // or restart services, and reads the committed value when it starts, so a newer write
+    // simply runs it again with the newer value.
     void ApplyPreference(const std::string& lowered);
     // Callers hold preferenceUpdateMutex. Commits a live owner key's persisted value into the
     // running session; returns whether ApplyOwnerSetting has work to do.
     bool CommitOwnerSettingLocked(const std::string& key, const appSettings& persisted);
+    // Callers hold preferenceUpdateMutex. Start's last look at the overlay: commits every live
+    // owner key as saved, because a choice saved while Start ran was not committed. Returns
+    // whether an MCP server changed.
+    bool CommitLiveOwnerSettingsLocked();
     // The live work for a committed owner key, run like ApplyPreference.
     void ApplyOwnerSetting(const std::string& key);
+    // Marks a committed key's applier as due and runs whatever is due, unless another thread
+    // is already doing so; that thread then runs this one too. So a caller never waits for an
+    // applier on another thread: a turn changing a preference holds operationMutex, and an
+    // applier may be joining a worker.
+    void RunLiveApplier(const std::string& key, bool owner);
+    void DrainLiveAppliers();
     // One owner overlay change: the shared admission checks, then write, which edits the
     // overlay, then the commit and the applier. description words the new value for the log.
     core::PreferenceResult WriteOwnerSetting(const std::string& key,
         const std::function<bool(core::SettingsFileEditor&, std::string&)>& write, const std::string& description);
     [[nodiscard]] visionSettings VisionSnapshot() const;
+    [[nodiscard]] performanceSettings PerformanceSnapshot() const;
+    [[nodiscard]] bool SpeechRecognitionEnabledNow() const;
     void PublishVisionStatus();
     bool EnsureLLMAvailable(std::stop_token stopToken);
     bool EnsureFastBrainAvailable(std::stop_token stopToken);
@@ -1018,9 +1030,23 @@ class ReviaSession
     mutable std::recursive_mutex preferenceUpdateMutex;
     // Held only for preference snapshots and assignments, never worker joins/events.
     mutable std::mutex preferenceSnapshotMutex;
-    // Serialises live appliers, which run outside preferenceUpdateMutex. Recursive because a
-    // synchronous status observer may change another preference from inside one.
+    // Held by the one thread running live appliers, which run outside preferenceUpdateMutex,
+    // by Start while it launches the workers they start and stop, and by Stop while it closes
+    // them off. Recursive because Start publishes status while holding it, and a synchronous
+    // observer may change a preference from inside.
     mutable std::recursive_mutex preferenceApplyMutex;
+    // Guarded by preferenceApplyMutex. Whether appliers may start, stop or reconfigure workers
+    // and services: set once Start launches them, cleared when Stop begins.
+    bool liveWorkersOpen = false;
+    struct DueApplier
+    {
+        std::string key;
+        bool owner = false;
+    };
+    // Appliers marked due and not yet run, and whether a thread is running them.
+    mutable std::mutex dueAppliersMutex;
+    std::vector<DueApplier> dueAppliers;
+    std::atomic<bool> drainingAppliers{false};
     // The overlay's Booleans as Start loaded them, before startup derived anything from them.
     // A setting that applies at the next start reports this as running.
     std::map<std::string, bool> startupOwnerSettings;

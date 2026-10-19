@@ -374,6 +374,134 @@ void RunningSessionKeepsRestartValuesUntilRestart()
     }
 }
 
+// A configured cloud endpoint, one MCP server and continuous screen vision: everything
+// Settings changes while Revia runs through a service of its own.
+json LiveOwnerFixture()
+{
+    return {{"llm", {{"cloud", {{"baseUrl", "https://cloud.example/v1"}, {"model", "fixture-model"}}}}},
+        {"vision", {{"enabled", true}, {"continuousAwareness", true}}},
+        {"mcp", {{"servers", json::array({{{"id", "files"}, {"transport", "http"}, {"url", "http://127.0.0.1:9/files"}, {"enabled", false}}})}}}};
+}
+
+void LiveOwnerSettingsReachTheirServices()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root, LiveOwnerFixture());
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Live owner session did not start.");
+
+    // The cloud service's copy is what every turn asks, both ways.
+    Check(!session.BooleanSettings().at("llm.cloud.enabled").running, "The cloud fixture started with the cloud on.");
+    Check(session.SetOwnerSetting("llm.cloud.enabled", true).succeeded && session.BooleanSettings().at("llm.cloud.enabled").running,
+        "Turning the cloud on in Settings did not reach the cloud service.");
+    Check(session.SetOwnerSetting("llm.cloud.enabled", false).succeeded && !session.BooleanSettings().at("llm.cloud.enabled").running,
+        "Turning the cloud off in Settings did not reach the cloud service.");
+    static_cast<void>(session.Submit("/cloud on"));
+    Check(session.IsCloudSessionEnabled() && !session.BooleanSettings().at("llm.cloud.enabled").running,
+        "/cloud on brought back a cloud model Settings turned off.");
+    Check(session.SetOwnerChoice("llm.cloud.useFor", "never").succeeded && Access::CloudUseFor(session) == "never",
+        "The cloud use choice did not reach the cloud service.");
+
+    // MCP servers are reconfigured, not only recorded.
+    Check(Access::McpServerEnabled(session, "files") == false, "The MCP fixture server started enabled.");
+    Check(session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded &&
+              session.BooleanSettings().at("mcp.servers[files].enabled").running && Access::McpServerEnabled(session, "files") == true,
+        "Turning an MCP server on did not reach the MCP manager.");
+    Check(session.SetOwnerSetting("mcp.servers[files].enabled", false).succeeded && Access::McpServerEnabled(session, "files") == false,
+        "Turning an MCP server off did not reach the MCP manager.");
+
+    // What continuous awareness last saw goes with the switch that allowed it.
+    Access::RecordScreenObservation(session, "A text editor fills the left monitor.");
+    Check(!Access::ScreenContext(session).empty(), "The screen observation fixture was not offered.");
+    Check(session.SetOwnerSetting("vision.enabled", false).succeeded && !session.BooleanSettings().at("vision.enabled").running,
+        "Turning vision off did not reach the running session.");
+    Check(Access::ScreenContext(session).empty() && Access::CachedScreenObservation(session).empty(),
+        "Turning vision off left the last screen observation in every turn.");
+    Check(session.SetOwnerSetting("vision.enabled", true).succeeded && Access::ScreenContext(session).empty(),
+        "Turning vision back on revived an observation from before it was off.");
+    Access::RecordScreenObservation(session, "A video call fills the right monitor.");
+    Check(session.SetOwnerSetting("vision.continuousAwareness", false).succeeded && Access::ScreenContext(session).empty() &&
+              Access::CachedScreenObservation(session).empty(),
+        "Turning continuous awareness off left its last observation in use.");
+}
+
+void LivePreferencesReachTheirServices()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root, {{"speechRecognition", {{"enabled", false}, {"requireWakeWord", false}, {"wakeWords", {"revia"}}}},
+                                  {"presence", {{"enabled", false}, {"avatarBridgeEnabled", false}, {"externalAdaptersEnabled", false}}}});
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Live preference session did not start.");
+
+    Check(Access::AcceptsUnnamedSpeech(session, "what time is it"), "The wake-word fixture started requiring her name.");
+    Check(session.SetPreference("speechRecognition.requireWakeWord", "on").succeeded &&
+              !Access::AcceptsUnnamedSpeech(session, "what time is it") && Access::AcceptsUnnamedSpeech(session, "revia, what time is it"),
+        "Requiring a wake word did not reach the addressee gate.");
+    Check(session.SetPreference("speechRecognition.requireWakeWord", "off").succeeded && Access::AcceptsUnnamedSpeech(session, "what time is it"),
+        "Dropping the wake-word requirement did not reach the addressee gate.");
+
+    Check(!session.Presence().enabled, "The presence fixture started enabled.");
+    Check(session.SetPreference("presence.enabled", "on").succeeded && session.Presence().enabled, "Turning presence on did not restart it.");
+    Check(session.SetPreference("presence.enabled", "off").succeeded && !session.Presence().enabled, "Turning presence off did not restart it.");
+}
+
+void OwnerChoicesSavedDuringStartupApply()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root, LiveOwnerFixture());
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    bool written = false;
+    std::vector<bool> saved;
+    const auto subscription = session.Events().Subscribe([&](const auto& event)
+    {
+        if (event.component != "Response filters" || written || session.IsStarted()) return;
+        // Start has read the settings and configured MCP, and nothing it starts runs yet.
+        written = true;
+        saved = {session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded,
+            session.SetOwnerSetting("llm.cloud.enabled", true).succeeded, session.SetOwnerSetting("vision.enabled", false).succeeded};
+    });
+    Check(session.Start(), "Startup-write session did not start.");
+    session.Events().Unsubscribe(subscription);
+    Check(written && saved == std::vector<bool>{true, true, true}, "The startup-write fixture did not save its changes.");
+    const auto states = session.BooleanSettings();
+    Check(states.at("mcp.servers[files].enabled").running && Access::McpServerEnabled(session, "files") == true,
+        "An MCP change saved during startup was lost until the next start.");
+    Check(states.at("llm.cloud.enabled").running, "A cloud change saved during startup was lost until the next start.");
+    Check(!states.at("vision.enabled").running, "A vision change saved during startup was lost until the next start.");
+}
+
+void APreferenceChangeNeverWaitsForAnotherApplier()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Configure(directory.root);
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    std::atomic<bool> entered{false};
+    std::future<revia::core::PreferenceResult> other;
+    std::future_status waited = std::future_status::deferred;
+    const auto subscription = session.Events().Subscribe([&](const auto& event)
+    {
+        if (event.component != "Response filters" || entered.exchange(true)) return;
+        // This applier is still running. A change from another thread returns without waiting
+        // for it, as one from a turn holding operationMutex must while an applier joins a worker.
+        other = std::async(std::launch::async, [&] { return session.SetPreference("bargeIn.enabled", "on"); });
+        waited = other.wait_for(2s);
+    });
+    const auto outer = session.SetPreference("responseFilter.aiReviewEnabled", "off");
+    session.Events().Unsubscribe(subscription);
+    Check(entered.load() && other.valid(), "The applier fixture did not run.");
+    const auto inner = other.get();
+    Check(waited == std::future_status::ready, "A preference change waited for an applier running on another thread.");
+    Check(outer.succeeded && inner.succeeded && session.IsBargeInEnabled(), "The change made during another applier was not applied.");
+}
+
 void ConcurrentWritersAndReadersStayConsistent()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -430,6 +558,10 @@ void RunPreferenceResetTests()
     RequireWakeWordNeedsWakeWords();
     EveryPreferenceCommitsOnlyItsOwnField();
     RunningSessionKeepsRestartValuesUntilRestart();
+    LiveOwnerSettingsReachTheirServices();
+    LivePreferencesReachTheirServices();
+    OwnerChoicesSavedDuringStartupApply();
+    APreferenceChangeNeverWaitsForAnotherApplier();
     ConcurrentWritersAndReadersStayConsistent();
     std::cout << "Preference reset tests passed.\n";
 }

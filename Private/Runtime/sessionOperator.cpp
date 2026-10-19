@@ -41,7 +41,7 @@ void ReviaSession::ConfigureOperatorCallbacks()
             }
             if (recovery == goals::NextStep::Recovery::NeedVision)
             {
-                if (!settings.vision.bEnabled)
+                if (!VisionSnapshot().bEnabled)
                 {
                     detail = "Visual recovery requires the configured vision model.";
                     return false;

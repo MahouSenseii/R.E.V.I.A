@@ -903,8 +903,14 @@ bool ReviaSession::Start()
     {
         selfAssessmentSubscriptionId = eventBus.Subscribe([this](const RuntimeEvent& event) { selfAssessment.Observe(event); });
     }
+    presenceSettings presenceAtStart;
+    {
+        // Compared once her workers start, in case Settings changed presence meanwhile.
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        presenceAtStart = settings.presence;
+    }
     presenceRuntime.Start(
-        settings.presence, [this](const presence::PresenceNotice& notice)
+        presenceAtStart, [this](const presence::PresenceNotice& notice)
         { PublishComponent(notice.component, notice.phase, notice.detail, -1.0, notice.queueDepth); },
         [this](const presence::ExternalAdapterEvent& event) { QueueExternalAdapterEvent(event); });
     startupTimings.push_back({"presence_runtime_init", ElapsedMilliseconds(stageStarted)});
@@ -1129,7 +1135,7 @@ bool ReviaSession::Start()
             // either half of it.
             speakingIntentId.store(0);
             speechCoordinator.NoteUserSpoke();
-            if (settings.speechRecognition.bEnabled && !speechRecognitionService.IsHandsFreeEnabled())
+            if (SpeechRecognitionEnabledNow() && !speechRecognitionService.IsHandsFreeEnabled())
             {
                 speechRecognitionService.BeginRecording();
             }
@@ -1184,7 +1190,7 @@ bool ReviaSession::Start()
                 // her taste.
                 constexpr const char* TasteIsYourOwn = "That list is only what you can perform; "
                                                        "your taste in music is your own and has nothing to do with it.";
-                if (!settings.performance.bEnabled)
+                if (!PerformanceSnapshot().bEnabled)
                 {
                     return "Singing is switched off in settings.";
                 }
@@ -1418,7 +1424,40 @@ bool ReviaSession::Start()
         return false;
     }
 
-    started.store(true);
+    // Until her workers are running, a live applier on another thread waits here rather than
+    // starting or joining one of them as it is launched. Appliers marked meanwhile run below.
+    std::unique_lock applyLock(preferenceApplyMutex);
+    bool mcpChanged = false;
+    {
+        // A live owner choice saved while Start ran was not committed, since nothing was
+        // running to change. Read again under the update lock that also covers started, so
+        // every later write commits itself.
+        std::lock_guard preferenceLock(preferenceUpdateMutex);
+        mcpChanged = CommitLiveOwnerSettingsLocked();
+        started.store(true);
+    }
+    liveWorkersOpen = true;
+    if (mcpChanged)
+    {
+        mcpSettings mcp;
+        {
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            mcp = settings.mcp;
+        }
+        mcpManager.Configure(mcp);
+    }
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        const presenceSettings& presence = settings.presence;
+        if (presence.bEnabled != presenceAtStart.bEnabled || presence.bAvatarBridgeEnabled != presenceAtStart.bAvatarBridgeEnabled ||
+            presence.bExternalAdaptersEnabled != presenceAtStart.bExternalAdaptersEnabled ||
+            presence.bRequireAddressedStreamMessages != presenceAtStart.bRequireAddressedStreamMessages)
+        {
+            // Changed after the presence runtime started above; its applier restarts it.
+            std::lock_guard dueLock(dueAppliersMutex);
+            dueAppliers.push_back({"presence.enabled", false});
+        }
+    }
     // Guest preparation waits asynchronously for the remaining voice warmup before
     // measuring available RAM; conversation does not wait for either worker.
     StartVirtualMachine();
@@ -1471,6 +1510,8 @@ bool ReviaSession::Start()
     StartLocalApi();
     StartInitiativeLoop();
     StartCuriosityLoop();
+    applyLock.unlock();
+    DrainLiveAppliers();
     StartSelfImprovement();
     StartStateMaintenance();
     if (settings.speech.bEnabled && settings.speech.bSpeakGreeting && !Greeting().empty())
@@ -1796,14 +1837,18 @@ void ReviaSession::StartScreenAwareness()
 
 void ReviaSession::StopScreenAwareness()
 {
-    if (!screenAwarenessWorker.joinable())
-        return;
-    screenAwarenessWorker.request_stop();
-    screenAwareness.CancelAttempt();
-    // Wakes whichever wait the worker is sitting in, so the stop is noticed now rather
-    // than at the end of a refresh interval.
-    screenAwareness.Signal("stopping");
-    screenAwarenessWorker.join();
+    if (screenAwarenessWorker.joinable())
+    {
+        screenAwarenessWorker.request_stop();
+        screenAwareness.CancelAttempt();
+        // Wakes whichever wait the worker is sitting in, so the stop is noticed now rather
+        // than at the end of a refresh interval.
+        screenAwareness.Signal("stopping");
+        screenAwarenessWorker.join();
+    }
+    // What it last saw goes with it. Settings can turn vision off while Revia runs, and an
+    // observation kept past that would still be offered to every turn as what is on screen.
+    screenAwareness.Clear();
 }
 
 void ReviaSession::SignalScreenAwareness(const std::string& reason)
@@ -1823,6 +1868,12 @@ void ReviaSession::CancelScreenAwarenessAttempt()
 
 std::string ReviaSession::CurrentScreenContext() const
 {
+    // Only while the awareness that produced it is switched on, whatever is still cached.
+    const visionSettings vision = VisionSnapshot();
+    if (!vision.bEnabled || !vision.bContinuousAwareness)
+    {
+        return {};
+    }
     return screenAwareness.CurrentContext();
 }
 
@@ -1878,7 +1929,15 @@ void ReviaSession::StartExternalAdapterLoop()
                         SessionResult result;
                         speech::VoiceOperationResult adapterAudio;
                         {
-                            std::lock_guard operationLock(operationMutex);
+                            // Waited for where a stop can reach it: a preference applier joins
+                            // this worker, and may be running on a turn that holds the lock.
+                            std::unique_lock operationLock(operationMutex, std::defer_lock);
+                            while (!operationLock.try_lock())
+                            {
+                                if (stopToken.stop_requested())
+                                    return;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                            }
                             if (!started.load())
                             {
                                 result.reason = "The Revia session is offline.";
@@ -2084,7 +2143,13 @@ agents::InputVerdict ReviaSession::OfferInput(const std::string& text, const age
 void ReviaSession::StartInitiativeLoop()
 {
     StopInitiativeLoop();
-    if (!settings.initiative.bEnabled)
+    bool enabled = false;
+    {
+        // A preference applier calls this while Settings may commit another initiative switch.
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        enabled = settings.initiative.bEnabled;
+    }
+    if (!enabled)
     {
         return;
     }
@@ -2342,7 +2407,12 @@ void ReviaSession::SignalInitiative(const std::string& reason)
 void ReviaSession::StartCuriosityLoop()
 {
     StopCuriosityLoop();
-    if (!settings.initiative.bEnabled || !settings.initiative.bCuriosityEnabled)
+    bool enabled = false;
+    {
+        std::lock_guard snapshotLock(preferenceSnapshotMutex);
+        enabled = settings.initiative.bEnabled && settings.initiative.bCuriosityEnabled;
+    }
+    if (!enabled)
     {
         return;
     }
@@ -2488,7 +2558,15 @@ void ReviaSession::StartCuriosityLoop()
                         std::string desktopContext;
                         std::uint64_t inputGeneration = 0;
                         {
-                            std::lock_guard operationLock(operationMutex);
+                            // Waited for where a stop can reach it, as below: a preference
+                            // applier joins this worker, perhaps from a turn holding the lock.
+                            std::unique_lock operationLock(operationMutex, std::defer_lock);
+                            while (!operationLock.try_lock())
+                            {
+                                if (workerStop.stop_requested())
+                                    return;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                            }
                             if (!started.load() || busy.load() || !Admits(curiosityOrigin) ||
                                 Audience().revision != curiosityAudience.revision)
                                 continue;
@@ -3346,7 +3424,7 @@ std::vector<memory::ArchivedTurn> ReviaSession::ConversationsInRange(
 std::string ReviaSession::RecallConversation(
     const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope) const
 {
-    if (!request.Wanted() || !settings.conversation.bArchiveEnabled || !memory::IsAttributedPrivateScope(scope) ||
+    if (!request.Wanted() || !ConversationSnapshot().bArchiveEnabled || !memory::IsAttributedPrivateScope(scope) ||
         Audience().revision != scope.audience.revision || Audience().kind != scope.audience.kind)
     {
         return {};
@@ -3437,7 +3515,7 @@ core::PreferenceResult ReviaSession::SetPreference(const std::string& name, cons
     }
     if (live)
     {
-        ApplyPreference(lowered);
+        RunLiveApplier(lowered, false);
     }
     PublishComponent("Preferences", "Changed", core::PreferenceStore::Find(name)->name);
     return result;
@@ -3470,7 +3548,7 @@ core::PreferenceResult ReviaSession::ClearPreference(const std::string& name)
     }
     if (live)
     {
-        ApplyPreference(lowered);
+        RunLiveApplier(lowered, false);
     }
     PublishComponent("Preferences", "Changed", core::PreferenceStore::Find(name)->name);
     return result;
@@ -3527,7 +3605,8 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
 
 void ReviaSession::ApplyPreference(const std::string& lowered)
 {
-    std::lock_guard applyLock(preferenceApplyMutex);
+    // Workers and services are only started, stopped or restarted while liveWorkersOpen:
+    // before that Start reads the committed value itself, and after it Stop is taking them down.
     if (lowered == "speech.enabled")
     {
         bool enabled = false;
@@ -3572,13 +3651,13 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
             std::lock_guard snapshotLock(preferenceSnapshotMutex);
             initiative = settings.initiative;
         }
-        if (started.load() && curiosityWorker.joinable())
+        if (liveWorkersOpen && curiosityWorker.joinable())
         {
             StopCuriosityLoop();
         }
         initiativeController.UpdateSettings(initiative);
         conversationStarter.UpdateSettings(initiative);
-        if (started.load() && initiative.bEnabled != initiativeWorker.joinable())
+        if (liveWorkersOpen && initiative.bEnabled != initiativeWorker.joinable())
         {
             if (initiative.bEnabled)
             {
@@ -3589,14 +3668,14 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
                 StopInitiativeLoop();
             }
         }
-        if (started.load() && initiative.bEnabled && initiative.bCuriosityEnabled)
+        if (liveWorkersOpen && initiative.bEnabled && initiative.bCuriosityEnabled)
         {
             StartCuriosityLoop();
         }
     }
     else if (lowered == "resources.usagesampleseconds")
     {
-        if (started.load())
+        if (liveWorkersOpen)
         {
             resourceMonitor.Stop();
             StartResourceMonitor();
@@ -3613,9 +3692,8 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
         PublishComponent("Response filters", review ? "Ready" : "Hard only",
             review ? "Hard filtering is on and AI response review is on." : "Hard filtering remains on; AI response review is off.");
     }
-    else if (lowered.starts_with("presence.") && started.load())
+    else if (lowered.starts_with("presence.") && liveWorkersOpen)
     {
-        // Before startup there is nothing to restart; Start reads the saved value.
         presenceSettings presence;
         {
             std::lock_guard snapshotLock(preferenceSnapshotMutex);
@@ -3626,8 +3704,7 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
             presence, [this](const presence::PresenceNotice& notice)
             { PublishComponent(notice.component, notice.phase, notice.detail, -1.0, notice.queueDepth); },
             [this](const presence::ExternalAdapterEvent& event) { QueueExternalAdapterEvent(event); });
-        if (started.load())
-            StartExternalAdapterLoop();
+        StartExternalAdapterLoop();
     }
 }
 
@@ -4017,7 +4094,7 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
     // One voice. A song and a spoken reply are the same throat, so she stops singing to
     // answer rather than talking over herself. Commands are exempt: /sing status and
     // /songs are questions about the performance, not interruptions of it.
-    if (settings.performance.bInterruptSongToSpeak && performanceRuntime.IsPerforming() && input.rfind('/', 0) != 0)
+    if (PerformanceSnapshot().bInterruptSongToSpeak && performanceRuntime.IsPerforming() && input.rfind('/', 0) != 0)
     {
         performanceRuntime.Stop("she stopped singing to answer you");
     }
@@ -4637,6 +4714,12 @@ void ReviaSession::RequestStop()
 
 void ReviaSession::Stop()
 {
+    {
+        // Closes the live appliers first. Once this lock is held no applier is running, and
+        // later ones leave workers and services alone, so nothing below races one of them.
+        std::lock_guard applyLock(preferenceApplyMutex);
+        liveWorkersOpen = false;
+    }
     if (interactiveBrowser)
         interactiveBrowser->Stop();
     CancelSpeakerEnrollment();
@@ -5600,7 +5683,7 @@ SessionResult ReviaSession::ActOnScreenLocked(const std::string& instruction)
 
 bool ReviaSession::StartSong(const std::string& songQuery, std::string& outError)
 {
-    if (!settings.performance.bEnabled)
+    if (!PerformanceSnapshot().bEnabled)
     {
         outError = "Singing is turned off in settings.";
         return false;
@@ -9323,7 +9406,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
     // really in her library. Anything else ("sing happy birthday" with no such file) is
     // left to the model, whose posture lists what she can actually sing, so she says so
     // in her own words instead of the runtime answering for her.
-    if (settings.performance.bEnabled)
+    if (PerformanceSnapshot().bEnabled)
     {
         if (const std::optional<performance::SingRequest> request = performance::ParseSingRequest(input))
         {

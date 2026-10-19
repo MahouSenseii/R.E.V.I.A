@@ -44,6 +44,18 @@ visionSettings ReviaSession::VisionSnapshot() const
     return settings.vision;
 }
 
+performanceSettings ReviaSession::PerformanceSnapshot() const
+{
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
+    return settings.performance;
+}
+
+bool ReviaSession::SpeechRecognitionEnabledNow() const
+{
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
+    return settings.speechRecognition.bEnabled;
+}
+
 void ReviaSession::PublishVisionStatus()
 {
     const visionSettings vision = VisionSnapshot();
@@ -259,7 +271,8 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
         }
         appLogger.Log("Owner changed " + key + " to " + description + " from Settings.");
         // A live key also changes the running session, from the value just saved as the
-        // merged settings now read it. Before startup there is nothing running to change.
+        // merged settings now read it. Until Start sets started, under this lock, it commits
+        // every live key itself, so a change saved before then is not lost.
         if (entry->live && started.load() && config.LoadSettings(persisted))
         {
             live = CommitOwnerSettingLocked(key, persisted);
@@ -267,7 +280,7 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
     }
     if (live)
     {
-        ApplyOwnerSetting(key);
+        RunLiveApplier(key, true);
     }
     PublishComponent("Preferences", "Changed", key);
     const std::string change = description == FollowsSettingsFile ? " follows Config/settings.json again" : " is now " + description;
@@ -320,9 +333,49 @@ bool ReviaSession::CommitOwnerSettingLocked(const std::string& key, const appSet
     return true;
 }
 
+bool ReviaSession::CommitLiveOwnerSettingsLocked()
+{
+    appSettings persisted;
+    if (!config.LoadSettings(persisted))
+    {
+        return false;
+    }
+    // The cloud service was configured from the settings Start loaded; see
+    // CommitOwnerSettingLocked for why its copy is the one that changes.
+    llm::cloud::CloudModelSettings cloud = router.Cloud().Settings();
+    if (cloud.bEnabled != persisted.llm.cloud.bEnabled || cloud.useFor != persisted.llm.cloud.useFor)
+    {
+        cloud.bEnabled = persisted.llm.cloud.bEnabled;
+        cloud.useFor = persisted.llm.cloud.useFor;
+        router.Cloud().ApplySettings(cloud);
+    }
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
+    settings.vision.bEnabled = persisted.vision.bEnabled;
+    settings.vision.bContinuousAwareness = persisted.vision.bContinuousAwareness;
+    bool mcpChanged = false;
+    for (mcpServerSettings& running : settings.mcp.servers)
+    {
+        const auto stored = std::find_if(persisted.mcp.servers.begin(), persisted.mcp.servers.end(),
+            [&running](const mcpServerSettings& server) { return server.id == running.id; });
+        if (stored != persisted.mcp.servers.end() &&
+            (running.bEnabled != stored->bEnabled || running.bRequireConfirmation != stored->bRequireConfirmation))
+        {
+            running.bEnabled = stored->bEnabled;
+            running.bRequireConfirmation = stored->bRequireConfirmation;
+            mcpChanged = true;
+        }
+    }
+    return mcpChanged;
+}
+
 void ReviaSession::ApplyOwnerSetting(const std::string& key)
 {
-    std::lock_guard applyLock(preferenceApplyMutex);
+    // Before Start has launched what these change, or once Stop has begun taking it down,
+    // there is nothing to change: Start reads the committed value itself.
+    if (!liveWorkersOpen)
+    {
+        return;
+    }
     if (key.starts_with("mcp."))
     {
         mcpSettings mcp;
@@ -339,9 +392,63 @@ void ReviaSession::ApplyOwnerSetting(const std::string& key)
     {
         PublishVisionStatus();
     }
-    // Stops the worker when vision or continuous awareness is now off, and starts it when
-    // both are on and app awareness is running.
+    // Stops the worker, dropping what it last saw, when vision or continuous awareness is
+    // now off, and starts it when both are on and app awareness is running.
     StartScreenAwareness();
+}
+
+void ReviaSession::RunLiveApplier(const std::string& key, const bool owner)
+{
+    {
+        std::lock_guard dueLock(dueAppliersMutex);
+        const bool due = std::any_of(dueAppliers.begin(), dueAppliers.end(),
+            [&](const DueApplier& applier) { return applier.key == key && applier.owner == owner; });
+        if (!due)
+            dueAppliers.push_back({key, owner});
+    }
+    DrainLiveAppliers();
+}
+
+void ReviaSession::DrainLiveAppliers()
+{
+    for (;;)
+    {
+        if (drainingAppliers.exchange(true))
+        {
+            // The thread draining runs this key too: it looks again once it is done.
+            return;
+        }
+        try
+        {
+            // Waits only for Start or Stop, which never wait on an applier.
+            std::lock_guard applyLock(preferenceApplyMutex);
+            for (;;)
+            {
+                DueApplier next;
+                {
+                    std::lock_guard dueLock(dueAppliersMutex);
+                    if (dueAppliers.empty())
+                        break;
+                    next = std::move(dueAppliers.front());
+                    dueAppliers.erase(dueAppliers.begin());
+                }
+                if (next.owner)
+                    ApplyOwnerSetting(next.key);
+                else
+                    ApplyPreference(next.key);
+            }
+        }
+        catch (...)
+        {
+            drainingAppliers.store(false);
+            throw;
+        }
+        drainingAppliers.store(false);
+        // A caller that found the flag set after the last look left its key here.
+        std::lock_guard dueLock(dueAppliersMutex);
+        if (dueAppliers.empty())
+            return;
+    }
 }
 
 std::string ReviaSession::OwnerChoice(const std::string& key) const
