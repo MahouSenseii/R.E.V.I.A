@@ -9,7 +9,9 @@
 #include <chrono>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 namespace revia::core
@@ -22,6 +24,15 @@ using json = nlohmann::json;
 // Every companion's session writes the same install-wide overlay, each under its own lock.
 // This keeps one read-modify-replace from losing another's change.
 std::mutex overlayWriteMutex;
+// Held by every read of the overlay and by the swap that replaces it, and only for those: a load
+// never sees the moment the old file has gone and the new one is not yet in place (which would
+// read as "no owner choices"), and never waits for a write's validation.
+std::mutex overlaySwapMutex;
+// A read that finds a file it cannot open tries again for about this long.
+constexpr int OpenAttempts = 5;
+constexpr std::chrono::milliseconds OpenRetryDelay{20};
+// At most this many left-out entries are named per read; the rest are counted in one line.
+constexpr std::size_t NamedWarnings = 8;
 
 constexpr std::string_view McpPrefix = "mcp.servers[";
 
@@ -140,51 +151,6 @@ bool IsUsableOverlay(const json& overlay)
            overlay["schemaVersion"].get<int>() == 1 && overlay.contains("values") && overlay["values"].is_object();
 }
 
-enum class OverlayFile
-{
-    Missing,
-    Usable,
-    // Present, but it could not be opened: perhaps only for a moment, while another reader
-    // or a scanner holds it.
-    Unopenable,
-    // Present and readable, but not JSON, or not in the form a load accepts.
-    Unusable,
-};
-
-OverlayFile ReadOverlay(const std::filesystem::path& path, json& outOverlay)
-{
-    outOverlay = EmptyOverlay();
-    std::error_code error;
-    if (!std::filesystem::exists(path, error) && !error)
-        return OverlayFile::Missing;
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-        return OverlayFile::Unopenable;
-    try
-    {
-        json overlay;
-        stream >> overlay;
-        if (!IsUsableOverlay(overlay))
-            return OverlayFile::Unusable;
-        // Entries no load applies are dropped here, so a write never carries (or recursively
-        // dumps) a hand-written value that could only ever be ignored.
-        json& values = overlay["values"];
-        for (auto entry = values.begin(); entry != values.end();)
-        {
-            if (IsAcceptedOwnerValue(entry.key(), entry.value()))
-                ++entry;
-            else
-                entry = values.erase(entry);
-        }
-        outOverlay = std::move(overlay);
-        return OverlayFile::Usable;
-    }
-    catch (const std::exception&)
-    {
-        return OverlayFile::Unusable;
-    }
-}
-
 // A name beside the overlay that nothing uses yet, for keeping an unusable one.
 std::filesystem::path UnusedAsideName(const std::filesystem::path& path)
 {
@@ -236,6 +202,90 @@ bool IsAcceptedOwnerValue(const std::string_view key, const json& value)
     return entry != nullptr && HasOwnerType(*entry, value);
 }
 
+OwnerOverlayRead ReadOwnerOverlay(const std::filesystem::path& path, json& outOverlay, std::vector<std::string>* outWarnings)
+{
+    outOverlay = EmptyOverlay();
+    std::string text;
+    for (int attempt = 0;; ++attempt)
+    {
+        {
+            std::lock_guard swapLock(overlaySwapMutex);
+            std::error_code error;
+            const bool present = std::filesystem::exists(path, error);
+            if (!present && !error)
+                return OwnerOverlayRead::Missing;
+            std::ifstream stream(path, std::ios::binary);
+            if (stream)
+            {
+                // At most one byte past the limit is read, whatever size the file claims.
+                text.assign(static_cast<std::size_t>(kMaxOwnerOverlayBytes) + 1, '\0');
+                stream.read(text.data(), static_cast<std::streamsize>(text.size()));
+                text.resize(static_cast<std::size_t>(stream.gcount()));
+                if (!stream.bad())
+                    break;
+            }
+        }
+        if (attempt + 1 >= OpenAttempts)
+            return OwnerOverlayRead::Unopenable;
+        std::this_thread::sleep_for(OpenRetryDelay);
+    }
+    if (text.size() > kMaxOwnerOverlayBytes)
+        return OwnerOverlayRead::Unusable;
+    json overlay;
+    try
+    {
+        overlay = json::parse(text);
+    }
+    catch (const std::exception&)
+    {
+        return OwnerOverlayRead::Unusable;
+    }
+    if (!IsUsableOverlay(overlay) || overlay["values"].size() > kMaxOwnerOverlayEntries)
+        return OwnerOverlayRead::Unusable;
+    // Only what a load applies is kept, and only it is copied: a boolean or a choice. A write
+    // therefore never carries (or recursively dumps) anything hand-written beside it.
+    std::size_t leftOut = 0;
+    for (const auto& [key, value] : overlay["values"].items())
+    {
+        if (IsAcceptedOwnerValue(key, value))
+        {
+            outOverlay["values"][key] = value;
+            continue;
+        }
+        if (outWarnings != nullptr && leftOut++ < NamedWarnings)
+        {
+            outWarnings->push_back(FindOwnerKey(key) == nullptr
+                                       ? "Owner setting \"" + key + "\" is not one Settings may change, so it was ignored."
+                                       : "Owner setting \"" + key + "\" holds a value of the wrong kind, so it was ignored.");
+        }
+    }
+    if (outWarnings != nullptr && leftOut > NamedWarnings)
+        outWarnings->push_back(std::to_string(leftOut - NamedWarnings) + " more owner settings could not be used, so they were ignored.");
+    return OwnerOverlayRead::Usable;
+}
+
+json FailClosedOwnerOverlay(const json& settings)
+{
+    json values = {{"vision.enabled", false}, {"vision.continuousAwareness", false}, {"perception.enabled", false},
+        {"llm.cloud.enabled", false}, {"llm.cloud.useFor", "ask"}, {"localApi.trustedPrivate", false}, {"improvement.verify", false},
+        {"image.offline", true}};
+    const auto mcp = settings.find("mcp");
+    if (settings.is_object() && mcp != settings.end() && mcp->is_object())
+    {
+        const auto servers = mcp->find("servers");
+        if (servers != mcp->end() && servers->is_array())
+        {
+            for (const json& server : *servers)
+            {
+                const auto id = server.is_object() ? server.find("id") : server.end();
+                if (server.is_object() && id != server.end() && id->is_string() && IsServerId(id->get<std::string>()))
+                    values[std::string(McpPrefix) + id->get<std::string>() + "].requireConfirmation"] = true;
+            }
+        }
+    }
+    return {{"schemaVersion", 1}, {"values", std::move(values)}};
+}
+
 std::optional<json> OwnerSettingValue(const appSettings& settings, const std::string_view key)
 {
     std::string serverId;
@@ -267,24 +317,33 @@ bool ApplyOwnerOverrides(json& data, const json& overlay, std::vector<std::strin
         warnings.push_back("The owner settings file is not in the expected form, so it was ignored.");
         return false;
     }
+    // Each load logs and publishes its warnings, so a file with many bad entries names only a few.
+    std::size_t ignored = 0;
+    const auto warn = [&](std::string warning)
+    {
+        if (ignored++ < NamedWarnings)
+            warnings.push_back(std::move(warning));
+    };
     for (const auto& [key, value] : overlay["values"].items())
     {
         std::string serverId;
         const OwnerKey* entry = FindOwnerKey(key, &serverId);
         if (!entry)
         {
-            warnings.push_back("Owner setting \"" + key + "\" is not one Settings may change, so it was ignored.");
+            warn("Owner setting \"" + key + "\" is not one Settings may change, so it was ignored.");
             continue;
         }
         if (!HasOwnerType(*entry, value))
         {
-            warnings.push_back("Owner setting \"" + key + "\" holds a value of the wrong kind, so it was ignored.");
+            warn("Owner setting \"" + key + "\" holds a value of the wrong kind, so it was ignored.");
             continue;
         }
         std::string reason;
         if (!SetPath(data, key, serverId, value, reason))
-            warnings.push_back("Owner setting \"" + key + "\" was ignored: " + reason);
+            warn("Owner setting \"" + key + "\" was ignored: " + reason);
     }
+    if (ignored > NamedWarnings)
+        warnings.push_back(std::to_string(ignored - NamedWarnings) + " more owner settings could not be used, so they were ignored.");
     return true;
 }
 
@@ -337,9 +396,9 @@ bool SettingsFileEditor::Remove(const std::string& key, std::string& outError)
 
 std::optional<json> SettingsFileEditor::Value(const std::string& key) const
 {
-    // An overlay that is missing or unusable decides nothing, exactly as a load treats it.
+    // What the overlay itself holds; one that is missing or unusable holds nothing.
     json overlay;
-    static_cast<void>(ReadOverlay(overlayPath, overlay));
+    static_cast<void>(ReadOwnerOverlay(overlayPath, overlay));
     const auto found = overlay["values"].find(key);
     if (found == overlay["values"].end())
         return std::nullopt;
@@ -356,19 +415,20 @@ bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>
     std::lock_guard writeLock(overlayWriteMutex);
     notice.clear();
     json overlay;
-    switch (ReadOverlay(overlayPath, overlay))
+    switch (ReadOwnerOverlay(overlayPath, overlay))
     {
-    case OverlayFile::Missing:
-    case OverlayFile::Usable:
+    case OwnerOverlayRead::Missing:
+    case OwnerOverlayRead::Usable:
         break;
-    case OverlayFile::Unopenable:
+    case OwnerOverlayRead::Unopenable:
         outError = overlayPath.string() + " could not be opened just now, so nothing was saved. Try again in a moment.";
         return false;
-    case OverlayFile::Unusable:
+    case OwnerOverlayRead::Unusable:
     {
-        // Every load already ignores it, so starting from empty takes away no choice that
-        // is in effect. It is kept under its own name rather than overwritten, because the
-        // owner may want what is in it.
+        // Every load already uses the fail-closed overlay in its place, so the new file starts
+        // from it: the change takes away nothing in effect and brings back nothing turned off.
+        // The old file is kept under its own name rather than overwritten, because the owner
+        // may want what is in it.
         const std::filesystem::path aside = UnusedAsideName(overlayPath);
         std::error_code moveError;
         std::filesystem::rename(overlayPath, aside, moveError);
@@ -378,8 +438,20 @@ bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>
                        "), so nothing was saved.";
             return false;
         }
+        json settings = json::object();
+        try
+        {
+            std::ifstream settingsStream(settingsPath, std::ios::binary);
+            settings = json::parse(settingsStream);
+        }
+        catch (const std::exception&)
+        {
+            // No tool servers to name; the rest of the safe side needs nothing from the file.
+        }
+        overlay = FailClosedOwnerOverlay(settings);
         notice = overlayPath.filename().string() + " could not be read, so it was moved to " + aside.filename().string() +
-                 " and Settings started a new one.";
+                 ". Settings started a new one with screen vision, app awareness, the cloud model, the trusted local API and "
+                 "building suggested code off, as Revia was already running them.";
         break;
     }
     }
@@ -430,9 +502,10 @@ bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>
     std::vector<std::string> after;
     const bool loaded = probe.LoadSettings(candidate, after);
     std::vector<std::string> added;
+    const std::set<std::string> known(before.begin(), before.end());
     for (const std::string& warning : after)
     {
-        if (std::find(before.begin(), before.end(), warning) == before.end())
+        if (!known.contains(warning))
             added.push_back(warning);
     }
     const bool reached = !value || OwnerSettingValue(candidate, key) == *value;
@@ -454,6 +527,7 @@ bool SettingsFileEditor::Write(const std::string& key, const std::optional<json>
         }
         return false;
     }
+    std::lock_guard swapLock(overlaySwapMutex);
     return ReplaceFileAtomically(overlayPath, pending, outError);
 }
 

@@ -202,18 +202,50 @@ void TestAMissingServerIsSkippedWithAWarning()
     fixture.CheckBaseUntouched();
 }
 
-void TestAnUnusableOverlayIsIgnored()
+// Every privacy or risky owner setting on its safe side, as a load holds them when the owner's
+// file cannot be used.
+bool HeldOnTheSafeSide(const appSettings& loaded)
 {
+    return !loaded.vision.bEnabled && !loaded.vision.bContinuousAwareness && !loaded.perception.bEnabled && !loaded.llm.cloud.bEnabled &&
+           loaded.llm.cloud.useFor == "ask" && !loaded.localApi.bTrustedPrivate && !loaded.improvement.bVerify && loaded.image.bOffline &&
+           std::all_of(loaded.mcp.servers.begin(), loaded.mcp.servers.end(), [](const auto& server) { return server.bRequireConfirmation; });
+}
+
+void TestAnUnusableOverlayFailsClosed()
+{
+    // Ignoring the file would bring back every shipped default, several of them the risky side
+    // of their switch (settings.json here has vision on), and with it what the owner turned off.
     Fixture fixture;
     Write(fixture.overlay, "{not json");
     std::vector<std::string> warnings;
     appSettings loaded = fixture.Load(&warnings);
-    Check(!warnings.empty() && loaded.vision.bEnabled, "An unparseable overlay was not ignored with a warning.");
+    Check(Mentions(warnings, std::string(revia::core::kOwnerOverlayUnusableWarning)) && HeldOnTheSafeSide(loaded),
+        "An unparseable overlay did not hold the risky settings on their safe side, with a warning.");
 
-    Write(fixture.overlay, R"({"schemaVersion":2,"values":{"vision.enabled":false}})");
+    Write(fixture.overlay, R"({"schemaVersion":2,"values":{"vision.enabled":true,"improvement.verify":true}})");
     warnings.clear();
     loaded = fixture.Load(&warnings);
-    Check(!warnings.empty() && loaded.vision.bEnabled, "An overlay of an unknown schema was applied.");
+    Check(Mentions(warnings, std::string(revia::core::kOwnerOverlayUnusableWarning)) && HeldOnTheSafeSide(loaded),
+        "An overlay of an unknown schema was applied, or ignored without holding the safe side.");
+
+    // The editor saved two choices, then the file was cut short (a crash mid-copy, a sync client):
+    // the off choices stay off, and the next change starts a file that keeps them so.
+    Fixture truncated;
+    SettingsFileEditor editor = truncated.Editor();
+    std::string error;
+    Check(editor.SetBool("improvement.verify", false, error) && editor.SetBool("llm.autoTune", false, error),
+        "The truncation fixture could not save its choices: " + error);
+    const std::string full = Read(truncated.overlay);
+    Write(truncated.overlay, full.substr(0, full.size() / 2));
+    warnings.clear();
+    loaded = truncated.Load(&warnings);
+    Check(Mentions(warnings, std::string(revia::core::kOwnerOverlayUnusableWarning)) && HeldOnTheSafeSide(loaded),
+        "A truncated overlay brought back a risky shipped default.");
+    Check(editor.SetBool("llm.autoMaxTokens", false, error), "A change over a truncated overlay failed: " + error);
+    warnings.clear();
+    loaded = truncated.Load(&warnings);
+    Check(warnings.empty() && HeldOnTheSafeSide(loaded) && !loaded.llm.bAutoMaxTokens,
+        "The overlay that replaced a truncated one did not keep the safe side it was loaded with.");
 
     // Written by hand past the editor: the one entry settings.json can no longer accept is
     // set aside, and the owner's other choice is kept rather than dropped with it.
@@ -224,7 +256,6 @@ void TestAnUnusableOverlayIsIgnored()
         "A stale overlay entry was not set aside on its own.");
 
     // With the stale entry present, the editor can still return a key to settings.json.
-    std::string error;
     Check(fixture.Editor().Remove("llm.visionEnabled", error), "The stale entry could not be removed: " + error);
     fixture.CheckBaseUntouched();
 }
@@ -235,7 +266,9 @@ void TestADeeplyNestedJunkEntryIsNeverCopied()
     // entry-by-entry path. No load or write may copy the junk: nested this deep, a recursive
     // copy or dump runs out of stack, and Revia could neither start nor repair the file.
     Fixture fixture;
-    const int depth = 60000;
+    // Under the size limit, so it is read: nested this deep, a recursive copy or dump still runs
+    // out of stack on a worker thread.
+    const int depth = 30000;
     std::string junk(static_cast<std::size_t>(depth), '[');
     junk.append(static_cast<std::size_t>(depth), ']');
     Write(fixture.overlay, R"({"schemaVersion":1,"values":{"llm.visionEnabled":true,"vision.enabled":false,"zzz":)" + junk + "}}");
@@ -250,6 +283,32 @@ void TestADeeplyNestedJunkEntryIsNeverCopied()
     Check(!saved["values"].contains("zzz") && saved["values"]["vision.enabled"] == false && saved["values"]["image.keepLoaded"] == true,
         "The editor kept an entry no load applies, or lost one that loads.");
     fixture.CheckBaseUntouched();
+
+    // The same junk beside "values", as a member of its own: it is never carried into a write.
+    Fixture beside;
+    Write(beside.overlay, R"({"schemaVersion":1,"values":{"vision.enabled":false},"note":)" + junk + "}");
+    warnings.clear();
+    Check(!beside.Load(&warnings).vision.bEnabled && warnings.empty(), "Junk beside the values changed how the overlay loads.");
+    SettingsFileEditor besideEditor = beside.Editor();
+    Check(besideEditor.SetBool("improvement.verify", false, error), "A change beside top-level junk failed: " + error);
+    const json besideSaved = json::parse(Read(beside.overlay));
+    Check(besideSaved.size() == 2 && besideSaved["schemaVersion"] == 1 && besideSaved["values"]["vision.enabled"] == false &&
+              besideSaved["values"]["improvement.verify"] == false,
+        "The editor carried a member beside the values into its write.");
+
+    // Far more entries than Settings ever writes (stale tool-server keys): every load gives up on
+    // the file at once and holds the safe side, rather than warning about each entry, and the
+    // next change replaces it.
+    Fixture many;
+    std::string values;
+    for (int index = 0; index < 2000; ++index)
+        values += (index == 0 ? "" : ",") + std::string("\"mcp.servers[s") + std::to_string(index) + "].enabled\":true";
+    Write(many.overlay, R"({"schemaVersion":1,"values":{)" + values + "}}");
+    warnings.clear();
+    Check(HeldOnTheSafeSide(many.Load(&warnings)) && warnings.size() == 1, "An overlay with thousands of entries was read entry by entry.");
+    SettingsFileEditor manyEditor = many.Editor();
+    Check(manyEditor.SetBool("llm.autoTune", false, error) && json::parse(Read(many.overlay))["values"].size() < 20,
+        "A change over an oversized overlay failed or kept its entries: " + error);
 }
 
 void TestAStaleEntryDoesNotBlockOtherChanges()
@@ -291,8 +350,9 @@ void TestAStaleEntryDoesNotBlockOtherChanges()
 
 void TestAnUnreadableOverlayIsMovedAside()
 {
-    // Every load ignores these files. The next change keeps them under a new name instead of
-    // overwriting them, and never brings back a value the load had refused.
+    // Every load holds the safe side over these files. The next change keeps them under a new name
+    // instead of overwriting them, starts from that safe side, and never brings back a value the
+    // load had refused.
     for (const std::string& unreadable : {std::string("{not json"),
              std::string(R"({"schemaVersion":2,"values":{"vision.enabled":false,"image.keepLoaded":true}})")})
     {
@@ -300,7 +360,7 @@ void TestAnUnreadableOverlayIsMovedAside()
         Write(fixture.overlay, unreadable);
         SettingsFileEditor editor = fixture.Editor();
         std::string error;
-        Check(editor.SetBool("vision.continuousAwareness", true, error), "A change over an unusable overlay failed: " + error);
+        Check(editor.SetBool("llm.autoTune", false, error), "A change over an unusable overlay failed: " + error);
         Check(editor.Notice().find("unreadable-") != std::string::npos, "Moving an unusable overlay aside was not reported.");
         std::vector<std::filesystem::path> aside;
         for (const auto& entry : std::filesystem::directory_iterator(fixture.overlay.parent_path()))
@@ -309,11 +369,13 @@ void TestAnUnreadableOverlayIsMovedAside()
                 aside.push_back(entry.path());
         }
         Check(aside.size() == 1 && Read(aside.front()) == unreadable, "The unusable overlay was not kept under its own name.");
+        json expected = revia::core::FailClosedOwnerOverlay(BaseSettings(fixture.directory.root))["values"];
+        expected["llm.autoTune"] = false;
         const json saved = json::parse(Read(fixture.overlay));
-        Check(saved["schemaVersion"] == 1 && saved["values"] == json({{"vision.continuousAwareness", true}}),
-            "The new overlay carried over values a load had refused.");
+        Check(saved["schemaVersion"] == 1 && saved["values"] == expected,
+            "The new overlay did not start from the safe side, or carried over values a load had refused.");
         const appSettings loaded = fixture.Load();
-        Check(loaded.vision.bEnabled && !loaded.image.bKeepLoaded && loaded.vision.bContinuousAwareness,
+        Check(HeldOnTheSafeSide(loaded) && !loaded.image.bKeepLoaded && !loaded.llm.bAutoTune,
             "Settings from an unusable overlay took effect after the next change.");
         Check(editor.SetBool("vision.enabled", false, error) && editor.Notice().empty(), "The fresh overlay was not used: " + error);
         fixture.CheckBaseUntouched();
@@ -410,7 +472,7 @@ void RunSettingsFileEditorTests()
     TestAWrongPathIsRefused();
     TestMcpServersAreAddressedById();
     TestAMissingServerIsSkippedWithAWarning();
-    TestAnUnusableOverlayIsIgnored();
+    TestAnUnusableOverlayFailsClosed();
     TestAStaleEntryDoesNotBlockOtherChanges();
     TestADeeplyNestedJunkEntryIsNeverCopied();
     TestAnUnreadableOverlayIsMovedAside();

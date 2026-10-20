@@ -1681,22 +1681,27 @@ bool configManager::LoadSettings(appSettings& outSettings, std::vector<std::stri
         return false;
     }
 
-    std::error_code missing;
-    if (ownerOverlayPath.empty() || !std::filesystem::exists(ownerOverlayPath, missing))
+    if (ownerOverlayPath.empty())
     {
         return ReadSettings(data, outSettings);
     }
-
     json overlay;
-    try
+    switch (revia::core::ReadOwnerOverlay(ownerOverlayPath, overlay, &outWarnings))
     {
-        std::ifstream overlayFile(ownerOverlayPath, std::ios::binary);
-        overlayFile >> overlay;
-    }
-    catch (const std::exception&)
-    {
-        outWarnings.push_back("The owner settings file " + ownerOverlayPath + " could not be read, so it was ignored.");
+    case revia::core::OwnerOverlayRead::Missing:
         return ReadSettings(data, outSettings);
+    case revia::core::OwnerOverlayRead::Usable:
+        break;
+    case revia::core::OwnerOverlayRead::Unopenable:
+    case revia::core::OwnerOverlayRead::Unusable:
+        // Several shipped defaults are the risky side of their switch, so ignoring the file
+        // would quietly bring back what the owner turned off. Every such setting is held on its
+        // safe side instead until the file is readable again or Settings replaces it.
+        outWarnings.push_back(std::string(revia::core::kOwnerOverlayUnusableWarning) + " (" + ownerOverlayPath +
+                              "), so screen vision, app awareness, the cloud model, the trusted local API and building suggested "
+                              "code are off, and every tool server asks first, until it is fixed or Settings starts a new one.");
+        overlay = revia::core::FailClosedOwnerOverlay(data);
+        break;
     }
 
     // The owner's choices are laid over the file before any field is read, so they pass the
