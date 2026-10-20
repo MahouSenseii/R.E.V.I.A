@@ -317,7 +317,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .label = "Notice which app I'm using",
         .description = "{name} notes which app and window title you are using. Kept in memory only, with exclusions.",
         .store = Store::SettingsFile,
-        .apply = Apply::Restart,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .risk = Risk::Privacy,
         .allCompanions = true,
         .defaultValue = true,
@@ -947,7 +947,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .description = "Let other programs on this PC talk to Revia with the install token. They are treated as a shared "
                        "guest by default.",
         .store = Store::SettingsFile,
-        .apply = Apply::Restart,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .risk = Risk::Privacy,
         .allCompanions = true,
         .keywords = {"api", "http", "token", "integration", "local server"}});
@@ -959,7 +959,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .description = "Treat every API request as if you typed it, with your memories, tools and approvals.",
         .warning = "Any program on this PC with the install token speaks as you.",
         .store = Store::SettingsFile,
-        .apply = Apply::Restart,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .risk = Risk::Dangerous,
         .confirm = Confirm::TurningOn,
         .requiresAll = {"localApi.enabled"},
@@ -1002,7 +1002,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .description = "While you are away, {name} reviews Revia's code and writes suggested fixes. Your installed code is "
                        "never changed.",
         .store = Store::SettingsFile,
-        .apply = Apply::Restart,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .allCompanions = true,
         .defaultValue = true,
         .keywords = {"improvement", "self review", "code", "suggestions"}});
@@ -1026,7 +1026,7 @@ std::vector<SettingDescriptor> BuildCatalog()
         .description = "Compile and test each suggestion in a separate copy. Uses a lot of CPU.",
         .warning = "Model-written code is compiled and run on this PC.",
         .store = Store::SettingsFile,
-        .apply = Apply::Restart,
+        .apply = Apply::LiveWhenOffRestartWhenOn,
         .risk = Risk::Dangerous,
         .confirm = Confirm::TurningOn,
         .requiresAll = {"improvement.enabled"},

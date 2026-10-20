@@ -78,6 +78,19 @@ public:
         Require(editor.SetProcessSettings(path, process, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
                 !saved.process.enabled && !saved.process.allowCommandInterpreters && !saved.process.allowTaskExecution,
             "Shells or delegated programs survived running programs being turned off.");
+
+        // The visible browser asks before it is turned on; internet access coming back must not
+        // bring it back without that question.
+        Require(editor.SetInternetAccess(path, true, true, error) && editor.SetInternetBrowser(path, true, true, error) &&
+                    revia::policy::PermissionStore().Load(path, saved, error) && saved.internet.visibleBrowser &&
+                    saved.internet.autonomousResearch,
+            "The visible browser could not be allowed.");
+        Require(editor.SetInternetAccess(path, false, true, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                    !saved.internet.enabled && !saved.internet.visibleBrowser && !saved.internet.autonomousResearch,
+            "The visible browser survived internet access being turned off.");
+        Require(editor.SetInternetAccess(path, true, true, error) && revia::policy::PermissionStore().Load(path, saved, error) &&
+                    saved.internet.enabled && !saved.internet.visibleBrowser,
+            "Turning internet access on again brought the visible browser back unasked.");
     }
 private:
     std::filesystem::path path;

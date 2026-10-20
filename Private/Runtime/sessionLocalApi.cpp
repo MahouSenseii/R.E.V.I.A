@@ -32,7 +32,9 @@ void ReviaSession::StartLocalApi()
         PublishComponent("Local API", "Disabled", "The local API could not listen on " + address + ".");
         return;
     }
-    localApiToken = token;
+    // The same token when Settings restarts the API untrusted; a reader may hold the old one.
+    if (localApiToken != token)
+        localApiToken = token;
     localApiRuntime.store(std::move(api));
     if (settings.localApi.bTrustedPrivate)
     {
@@ -50,7 +52,13 @@ std::string ReviaSession::LocalApiStatusText() const
     const auto api = localApiRuntime.load();
     if (!api)
     {
-        return settings.localApi.bEnabled
+        bool enabled = false;
+        {
+            // Settings turns it off while Revia runs.
+            std::lock_guard snapshotLock(preferenceSnapshotMutex);
+            enabled = settings.localApi.bEnabled;
+        }
+        return enabled
                    ? "The local API is enabled in settings but is not running; see the Local API status in the log for why."
                    : "The local API is OFF. To let other programs on this PC talk to Revia, set \"localApi\": {\"enabled\": true} in "
                      "Config/settings.json and restart her.";

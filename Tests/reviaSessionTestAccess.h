@@ -238,6 +238,7 @@ struct ReviaSessionTestAccess
     static void RecordScreenObservation(ReviaSession& session, const std::string& text) { session.screenAwareness.Record(text); }
     static std::string CachedScreenObservation(const ReviaSession& session) { return session.screenAwareness.LatestObservation().text; }
     static std::string ScreenContext(const ReviaSession& session) { return session.CurrentScreenContext(); }
+    static bool ScreenAwarenessRunning(const ReviaSession& session) { return session.screenAwarenessWorker.joinable(); }
     // In a call only her name counts, so no earlier exchange opens a follow-up window.
     static bool AcceptsUnnamedSpeech(ReviaSession& session, const std::string& transcript)
     { return session.addresseeGate.Accept(transcript, speech::AddresseeGate::Clock::now(), true); }

@@ -112,6 +112,7 @@ bool ActionRuntime::SetInternetAccess(const bool enabled, const bool automaticLo
         {
             settings.internet.enabled = settings.internet.enabled && enabled;
             settings.internet.automaticLookup = settings.internet.automaticLookup && automaticLookup;
+            settings.internet.visibleBrowser = settings.internet.visibleBrowser && enabled;
             settings.internet.autonomousResearch = settings.internet.autonomousResearch && enabled;
         },
         "internet-access", outError);

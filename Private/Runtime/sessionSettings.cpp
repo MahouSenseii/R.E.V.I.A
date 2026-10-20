@@ -18,7 +18,9 @@ namespace revia::runtime
 
 namespace
 {
-constexpr const char* UnreadableSettings = "Config/settings.json could not be read, so this setting cannot be shown.";
+// Also the dialog's one notice for the whole store, so its rows do not each repeat it.
+constexpr const char* UnreadableSettings =
+    "Config/settings.json could not be read, so the settings kept in it cannot be shown or changed until it is fixed.";
 constexpr const char* CloudSetupNeeded = "Set llm.cloud.baseUrl and llm.cloud.model in Config/settings.json first.";
 constexpr const char* PicturesSetupNeeded = "Set llm.multimodalProjectorPath and llm.mediaPath in Config/settings.json first.";
 constexpr const char* FollowsSettingsFile = "the value in Config/settings.json";
@@ -51,7 +53,8 @@ struct InnerOwnerSetting
 // question covers.
 std::vector<InnerOwnerSetting> InnerOwnerSettings(const std::string& key)
 {
-    if (key == "vision.enabled")
+    // Keeping track of the screen needs both seeing it and noticing apps.
+    if (key == "vision.enabled" || key == "perception.enabled")
         return {{"vision.continuousAwareness", false}};
     if (key == "localApi.enabled")
         return {{"localApi.trustedPrivate", false}};
@@ -65,6 +68,31 @@ std::vector<InnerOwnerSetting> InnerOwnerSettings(const std::string& key)
     if (core::FindOwnerKey(key, &serverId) && !serverId.empty() && key.ends_with("].enabled"))
         return {{"mcp.servers[" + serverId + "].requireConfirmation", true}};
     return {};
+}
+// The owner grants that end as soon as they are turned off, as the microphone does: noticing
+// apps, a program speaking to her (or speaking as the owner), and suggested code being reviewed
+// (or built and run) must not outlast the switch until a restart. Turning one on still waits for
+// the restart that starts it. The running field each one stops, in settings.
+bool* GrantStoppedWhenOff(appSettings& settings, const std::string& key)
+{
+    if (key == "perception.enabled")
+        return &settings.perception.bEnabled;
+    if (key == "localApi.enabled")
+        return &settings.localApi.bEnabled;
+    if (key == "localApi.trustedPrivate")
+        return &settings.localApi.bTrustedPrivate;
+    if (key == "improvement.enabled")
+        return &settings.improvement.bEnabled;
+    if (key == "improvement.verify")
+        return &settings.improvement.bVerify;
+    return nullptr;
+}
+
+bool StopsWhenTurnedOff(const std::string& key)
+{
+    // Only the address of a field is taken; nothing reads or writes the probe.
+    static appSettings probe;
+    return GrantStoppedWhenOff(probe, key) != nullptr;
 }
 } // namespace
 
@@ -92,9 +120,17 @@ bool ReviaSession::SpeechRecognitionEnabledNow() const
     return settings.speechRecognition.bEnabled;
 }
 
+bool ReviaSession::PerceptionEnabledNow() const
+{
+    std::lock_guard snapshotLock(preferenceSnapshotMutex);
+    return settings.perception.bEnabled;
+}
+
 void ReviaSession::PublishVisionStatus()
 {
-    const visionSettings vision = VisionSnapshot();
+    visionSettings vision = VisionSnapshot();
+    // Keeping track of the screen runs only while app awareness does: say so only then.
+    vision.bContinuousAwareness = vision.bContinuousAwareness && PerceptionEnabledNow();
     RuntimeEvent visionEvent;
     visionEvent.kind = RuntimeEventKind::ComponentStatus;
     visionEvent.state = state.load();
@@ -150,12 +186,13 @@ std::map<std::string, BooleanSettingState> ReviaSession::BooleanSettings() const
         ownerKeys.push_back("mcp.servers[" + server.id + "].requireConfirmation");
     }
 
+    // A value that could not be read shows as off, not as a default dressed up as the owner's.
     std::map<std::string, BooleanSettingState> states;
     for (const std::string& key : preferenceKeys)
     {
         BooleanSettingState& state = states[key];
         state.available = loaded;
-        state.value = state.running = core::BooleanPreference(persisted, key).value_or(false);
+        state.value = state.running = loaded && core::BooleanPreference(persisted, key).value_or(false);
         if (!loaded)
             state.unavailableReason = UnreadableSettings;
     }
@@ -163,7 +200,7 @@ std::map<std::string, BooleanSettingState> ReviaSession::BooleanSettings() const
     {
         BooleanSettingState& state = states[key];
         state.available = loaded;
-        state.value = state.running = OwnerFlag(persisted, key, false);
+        state.value = state.running = loaded && OwnerFlag(persisted, key, false);
         if (!loaded)
             state.unavailableReason = UnreadableSettings;
     }
@@ -199,7 +236,7 @@ std::map<std::string, BooleanSettingState> ReviaSession::BooleanSettings() const
         perceptionRunning = settings.perception.bEnabled;
         machineAtStart = virtualMachineEnabledAtStart;
     }
-    if (running)
+    if (running && loaded)
     {
         // The cloud service holds the running copy; Settings changes it directly.
         states["llm.cloud.enabled"].running = router.Cloud().Settings().bEnabled;
@@ -235,6 +272,20 @@ std::map<std::string, BooleanSettingState> ReviaSession::BooleanSettings() const
     machine.value = IsVirtualMachineEnabled();
     machine.running = machineAtStart.value_or(machine.value);
     return states;
+}
+
+std::string ReviaSession::SettingsNotice() const
+{
+    appSettings persisted;
+    std::vector<std::string> warnings;
+    if (!config.LoadSettings(persisted, warnings))
+        return UnreadableSettings;
+    for (const std::string& warning : warnings)
+    {
+        if (warning.starts_with(core::kOwnerOverlayUnusableWarning))
+            return warning;
+    }
+    return {};
 }
 
 core::PreferenceResult ReviaSession::SetOwnerSetting(const std::string& key, const bool value)
@@ -317,6 +368,7 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
     std::string serverId;
     const core::OwnerKey* entry = core::FindOwnerKey(key, &serverId);
     bool live = false;
+    bool stopsNow = false;
     std::string notice;
     {
         std::lock_guard preferenceLock(preferenceUpdateMutex);
@@ -344,11 +396,14 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
         }
         appLogger.Log("Owner changed " + key + " to " + description + " from Settings.");
         // A live key also changes the running session, from the value just saved as the
-        // merged settings now read it. Until Start sets started, under this lock, it commits
-        // every live key itself, so a change saved before then is not lost.
-        if (entry->live && started.load() && config.LoadSettings(persisted))
+        // merged settings now read it, and so does a grant that stops when turned off. Until
+        // Start sets started, under this lock, it commits these itself, so a change saved
+        // before then is not lost.
+        if ((entry->live || StopsWhenTurnedOff(key)) && started.load() && config.LoadSettings(persisted))
         {
-            live = CommitOwnerSettingLocked(key, persisted);
+            stopsNow = !entry->live && !OwnerFlag(persisted, key, true);
+            if (entry->live || stopsNow)
+                live = CommitOwnerSettingLocked(key, persisted);
         }
     }
     if (live)
@@ -357,8 +412,10 @@ core::PreferenceResult ReviaSession::WriteOwnerSetting(const std::string& key,
     }
     PublishComponent("Preferences", "Changed", key);
     const std::string change = description == FollowsSettingsFile ? " follows Config/settings.json again" : " is now " + description;
-    return {true, key + change + ", for every companion." +
-                      (entry->live ? std::string() : std::string(" It takes effect the next time Revia starts.")) + notice};
+    const std::string when = entry->live ? std::string()
+                             : stopsNow  ? std::string(" It stops now; turning it back on takes effect the next time Revia starts.")
+                                         : std::string(" It takes effect the next time Revia starts.");
+    return {true, key + change + ", for every companion." + when + notice};
 }
 
 bool ReviaSession::CommitOwnerSettingLocked(const std::string& key, const appSettings& persisted)
@@ -375,6 +432,15 @@ bool ReviaSession::CommitOwnerSettingLocked(const std::string& key, const appSet
         return false;
     }
     std::lock_guard snapshotLock(preferenceSnapshotMutex);
+    if (bool* running = GrantStoppedWhenOff(settings, key))
+    {
+        // Reached only when it was turned off. What is running is now off, so Settings counts a
+        // later "on" as waiting for a restart.
+        const bool wasRunning = *running;
+        *running = false;
+        startupOwnerSettings[key] = false;
+        return wasRunning;
+    }
     if (key == "vision.enabled")
     {
         settings.vision.bEnabled = persisted.vision.bEnabled;
@@ -425,6 +491,19 @@ bool ReviaSession::CommitLiveOwnerSettingsLocked()
     std::lock_guard snapshotLock(preferenceSnapshotMutex);
     settings.vision.bEnabled = persisted.vision.bEnabled;
     settings.vision.bContinuousAwareness = persisted.vision.bContinuousAwareness;
+    // A grant turned off while Start ran stops before anything uses it: its applier runs once
+    // Start drains them, and what Start launches after this reads it as off.
+    for (const core::OwnerKey& entry : core::kOwnerKeys)
+    {
+        const std::string key(entry.key);
+        bool* running = GrantStoppedWhenOff(settings, key);
+        if (running == nullptr || !*running || OwnerFlag(persisted, key, true))
+            continue;
+        *running = false;
+        startupOwnerSettings[key] = false;
+        std::lock_guard dueLock(dueAppliersMutex);
+        dueAppliers.push_back({key, true});
+    }
     bool mcpChanged = false;
     for (mcpServerSettings& running : settings.mcp.servers)
     {
@@ -461,7 +540,44 @@ void ReviaSession::ApplyOwnerSetting(const std::string& key)
         mcpManager.Configure(mcp);
         return;
     }
-    if (key == "vision.enabled")
+    if (key == "perception.enabled")
+    {
+        // Only turning it off is committed; turning it on waits for the hook Start installs.
+        if (PerceptionEnabledNow())
+            return;
+        windowEventMonitor.Shutdown();
+        // Keeping track of the screen runs only while app awareness does.
+        StopScreenAwareness();
+        PublishComponent("Perception", "Off",
+            "App awareness is off. Turning Notice which app I'm using back on takes effect the next time Revia starts.");
+        PublishVisionStatus();
+        return;
+    }
+    if (key.starts_with("localApi."))
+    {
+        // Off, or no longer trusted: the running API stops, and only an API that is still on
+        // listens again, as a shared audience. One that was not running stays stopped.
+        if (const auto api = localApiRuntime.exchange({}))
+        {
+            api->Stop();
+            StartLocalApi();
+            if (!localApiRuntime.load())
+                PublishComponent("Local API", "Disabled", "The local API is off. Turning it back on takes effect the next time Revia starts.");
+        }
+        return;
+    }
+    if (key.starts_with("improvement."))
+    {
+        // Off, or no longer building what it suggests: the reviewer stops (and a build with it),
+        // and one that is still on starts again without a workbench.
+        if (improvementAgent.Running())
+        {
+            StopSelfImprovement();
+            StartSelfImprovement();
+        }
+        return;
+    }
+    if (key == "vision.enabled" || key == "vision.continuousAwareness")
     {
         PublishVisionStatus();
     }

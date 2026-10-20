@@ -500,6 +500,52 @@ void AnInnerOwnerSettingGoesBackWithItsParent()
         "Connecting an MCP server changed its per-call question.");
 }
 
+// The grants that stop when turned off (noticing apps, the local API and its trust, reviewing and
+// building suggested code) stop at once, as the microphone does; only turning them on waits for a
+// restart. Keeping track of the screen, which needs app awareness, goes back with it.
+void GrantsStopAsSoonAsTheyAreTurnedOff()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    json fixture = LiveOwnerFixture();
+    fixture["perception"] = {{"enabled", true}};
+    fixture["localApi"] = {{"enabled", true}, {"trustedPrivate", true}};
+    fixture["improvement"] = {{"enabled", true}, {"verify", true}};
+    Configure(directory.root, fixture);
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Grant session did not start.");
+
+    auto states = session.BooleanSettings();
+    Check(states.at("perception.enabled").running && session.IsPerceptionEnabled() && Access::ScreenAwarenessRunning(session),
+        "The fixture started without app and screen awareness.");
+    const auto off = session.SetOwnerSetting("perception.enabled", false);
+    states = session.BooleanSettings();
+    Check(off.succeeded && off.message.find("stops now") != std::string::npos && !states.at("perception.enabled").value &&
+              !states.at("perception.enabled").running && !session.IsPerceptionEnabled() && !Access::ScreenAwarenessRunning(session),
+        "Turning app awareness off left it, or keeping track of the screen, running until a restart.");
+    Check(!states.at("vision.continuousAwareness").value && !states.at("vision.continuousAwareness").running &&
+              !states.at("perception.paused").available,
+        "Keeping track of the screen survived app awareness being turned off.");
+    const auto on = session.SetOwnerSetting("perception.enabled", true);
+    states = session.BooleanSettings();
+    Check(on.succeeded && on.message.find("next time") != std::string::npos && states.at("perception.enabled").value &&
+              !states.at("perception.enabled").running && !session.IsPerceptionEnabled(),
+        "Turning app awareness back on claimed to apply before a restart.");
+    Check(!states.at("vision.continuousAwareness").value, "Turning app awareness back on brought back keeping track of the screen unasked.");
+
+    for (const char* key : {"localApi.trustedPrivate", "localApi.enabled", "improvement.verify", "improvement.enabled"})
+    {
+        Check(session.BooleanSettings().at(key).running, std::string("The fixture started with ") + key + " off.");
+        const auto result = session.SetOwnerSetting(key, false);
+        states = session.BooleanSettings();
+        Check(result.succeeded && !states.at(key).value && !states.at(key).running,
+            std::string("Turning ") + key + " off waited for a restart.");
+    }
+    Check(session.SetOwnerSetting("improvement.enabled", true).succeeded && !session.BooleanSettings().at("improvement.enabled").running,
+        "Turning self-improvement back on claimed to apply before a restart.");
+}
+
 void TheScreenIsWithheldOnceVisionIsOffBeforeItsApplierRuns()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -595,7 +641,9 @@ void OwnerChoicesSavedDuringStartupApply()
 {
     revia::tests::ScopedTestDirectory directory;
     WorkingDirectory cwd(directory.root);
-    Configure(directory.root, LiveOwnerFixture());
+    json fixture = LiveOwnerFixture();
+    fixture["perception"] = {{"enabled", true}};
+    Configure(directory.root, fixture);
     ReviaSession session;
     Access::UsePreferences(session, directory.root);
     bool written = false;
@@ -606,11 +654,14 @@ void OwnerChoicesSavedDuringStartupApply()
         // Start has read the settings and configured MCP, and nothing it starts runs yet.
         written = true;
         saved = {session.SetOwnerSetting("mcp.servers[files].enabled", true).succeeded,
-            session.SetOwnerSetting("llm.cloud.enabled", true).succeeded, session.SetOwnerSetting("vision.enabled", false).succeeded};
+            session.SetOwnerSetting("llm.cloud.enabled", true).succeeded, session.SetOwnerSetting("vision.enabled", false).succeeded,
+            session.SetOwnerSetting("perception.enabled", false).succeeded};
     });
     Check(session.Start(), "Startup-write session did not start.");
     session.Events().Unsubscribe(subscription);
-    Check(written && saved == std::vector<bool>{true, true, true}, "The startup-write fixture did not save its changes.");
+    Check(written && saved == std::vector<bool>{true, true, true, true}, "The startup-write fixture did not save its changes.");
+    Check(!session.IsPerceptionEnabled() && !session.BooleanSettings().at("perception.enabled").running,
+        "App awareness turned off during startup kept running until the next start.");
     const auto states = session.BooleanSettings();
     Check(states.at("mcp.servers[files].enabled").running && Access::McpServerEnabled(session, "files") == true,
         "An MCP change saved during startup was lost until the next start.");
@@ -702,6 +753,7 @@ void RunPreferenceResetTests()
     RunningSessionKeepsRestartValuesUntilRestart();
     LiveOwnerSettingsReachTheirServices();
     AnInnerOwnerSettingGoesBackWithItsParent();
+    GrantsStopAsSoonAsTheyAreTurnedOff();
     LivePreferencesReachTheirServices();
     OwnerChoicesSavedDuringStartupApply();
     APreferenceChangeNeverWaitsForAnotherApplier();

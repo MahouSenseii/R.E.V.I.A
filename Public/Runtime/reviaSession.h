@@ -443,8 +443,10 @@ class ReviaSession
     // The owner's choices for Config/settings.json values, kept in the install-wide overlay
     // RuntimeData/Settings/owner-settings.json and shared by every companion. Only the keys in
     // core::kOwnerKeys are accepted; an MCP server is addressed as "mcp.servers[<id>].enabled"
-    // or ".requireConfirmation". Live keys change the running session too; the rest wait for
-    // the next start. These are for the owner's desktop and are reachable from no command.
+    // or ".requireConfirmation". Live keys change the running session too; app awareness, the
+    // local API and its trust, and self-improvement and its building stop at once when turned
+    // off; the rest, and turning those on, wait for the next start. These are for the owner's
+    // desktop and are reachable from no command.
     core::PreferenceResult SetOwnerSetting(const std::string& key, bool value);
     core::PreferenceResult SetOwnerChoice(const std::string& key, const std::string& value);
     // Removes the overlay key, so settings.json decides again.
@@ -460,6 +462,10 @@ class ReviaSession
     // written, MCP keys as above, "perception.paused", "cloud.session" and
     // "virtualMachine.enabled". It never waits for a writer.
     [[nodiscard]] std::map<std::string, BooleanSettingState> BooleanSettings() const;
+    // A problem every Settings row kept in settings.json or its overlay shares, worded for the
+    // owner: settings.json cannot be read, or the owner settings file cannot be used and its
+    // privacy and risky settings are held on their safe side. Empty when there is none.
+    [[nodiscard]] std::string SettingsNotice() const;
 
     // Whether this companion starts its Ubuntu workspace. Persisted, and applied at the next start.
     core::PreferenceResult SetVirtualMachineEnabled(bool enabled);
@@ -568,12 +574,14 @@ class ReviaSession
     // or restart services, and reads the committed value when it starts, so a newer write
     // simply runs it again with the newer value.
     void ApplyPreference(const std::string& lowered);
-    // Callers hold preferenceUpdateMutex. Commits a live owner key's persisted value into the
-    // running session; returns whether ApplyOwnerSetting has work to do.
+    // Callers hold preferenceUpdateMutex. Commits a live owner key's persisted value, or a grant
+    // that stops when turned off (perception, local API, self-improvement), into the running
+    // session; returns whether ApplyOwnerSetting has work to do.
     bool CommitOwnerSettingLocked(const std::string& key, const appSettings& persisted);
     // Callers hold preferenceUpdateMutex. Start's last look at the overlay: commits every live
-    // owner key as saved, because a choice saved while Start ran was not committed. Returns
-    // whether an MCP server changed.
+    // owner key as saved, because a choice saved while Start ran was not committed, and stops
+    // each grant turned off meanwhile (its applier is marked due). Returns whether an MCP server
+    // changed.
     bool CommitLiveOwnerSettingsLocked();
     // The live work for a committed owner key, run like ApplyPreference.
     void ApplyOwnerSetting(const std::string& key);
@@ -593,6 +601,8 @@ class ReviaSession
     [[nodiscard]] visionSettings VisionSnapshot() const;
     [[nodiscard]] performanceSettings PerformanceSnapshot() const;
     [[nodiscard]] bool SpeechRecognitionEnabledNow() const;
+    // The running app awareness switch: Settings turns it off while Revia runs.
+    [[nodiscard]] bool PerceptionEnabledNow() const;
     void PublishVisionStatus();
     bool EnsureLLMAvailable(std::stop_token stopToken);
     bool EnsureFastBrainAvailable(std::stop_token stopToken);

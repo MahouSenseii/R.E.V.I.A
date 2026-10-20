@@ -445,7 +445,14 @@ bool CapabilityEditor::Apply(const std::filesystem::path& path, const Mutation m
         {
             internet["enabled"] = enabled;
             internet["automaticLookup"] = automaticLookup;
-            if (!enabled) internet["autonomousResearch"] = false;
+            // The visible browser and research on her own sit inside internet access: like the
+            // camera's and the browser's inner grants, they go with it, so turning it on again
+            // never brings back a browser window without its own question.
+            if (!enabled)
+            {
+                internet["visibleBrowser"] = false;
+                internet["autonomousResearch"] = false;
+            }
         }
         else
         {

@@ -1638,7 +1638,7 @@ void ReviaSession::StartScreenAwareness()
     StopScreenAwareness();
     // Settings may switch vision and continuous awareness while Revia runs.
     const visionSettings vision = VisionSnapshot();
-    if (!settings.perception.bEnabled || !vision.bEnabled || !vision.bContinuousAwareness)
+    if (!PerceptionEnabledNow() || !vision.bEnabled || !vision.bContinuousAwareness)
     {
         return;
     }
@@ -1872,7 +1872,7 @@ void ReviaSession::StopScreenAwareness()
 void ReviaSession::SignalScreenAwareness(const std::string& reason)
 {
     const visionSettings vision = VisionSnapshot();
-    if (!settings.perception.bEnabled || !vision.bEnabled || !vision.bContinuousAwareness)
+    if (!PerceptionEnabledNow() || !vision.bEnabled || !vision.bContinuousAwareness)
     {
         return;
     }
@@ -4874,7 +4874,7 @@ void ReviaSession::Stop()
     // Before the rest: a system-wide event hook outlives the process that installed it if
     // it is not unhooked, so this is not a step to leave until after something can fail.
     stageStarted = std::chrono::steady_clock::now();
-    if (settings.perception.bEnabled)
+    if (PerceptionEnabledNow())
     {
         // Counts only. How much was observed is worth recording for transparency; what
         // was observed is not written to a plaintext log on disk.
@@ -5097,7 +5097,7 @@ std::string ReviaSession::OutputChannelStatus() const
 
 bool ReviaSession::IsPerceptionEnabled() const
 {
-    return settings.perception.bEnabled;
+    return PerceptionEnabledNow();
 }
 
 bool ReviaSession::IsPerceptionPaused() const
@@ -5128,7 +5128,7 @@ perception::PerceptionCounters ReviaSession::PerceptionCounters() const
 std::string ReviaSession::PerceptionStatus() const
 {
     std::ostringstream stream;
-    if (!settings.perception.bEnabled)
+    if (!PerceptionEnabledNow())
     {
         stream << "Ambient activity metadata is OFF.\n"
                << "Enable it in Config/settings.json under \"perception\".\n"
@@ -5152,7 +5152,7 @@ std::string ReviaSession::PerceptionStatus() const
 
 std::string ReviaSession::RecentActivity(const std::chrono::minutes window) const
 {
-    if (!settings.perception.bEnabled)
+    if (!PerceptionEnabledNow())
     {
         return "Ambient perception is off, so nothing has been observed.";
     }
@@ -6410,7 +6410,7 @@ autonomy::AutonomyCost ReviaSession::GatherAutonomyCost() const
 
     const actions::CapabilitySettings capabilities = actionRuntime.Settings();
     cost.researchAllowed = capabilities.internet.enabled && capabilities.internet.autonomousResearch;
-    cost.observationAllowed = settings.perception.bEnabled;
+    cost.observationAllowed = PerceptionEnabledNow();
 
     {
         std::lock_guard autonomyLock(autonomyMutex);
@@ -6604,7 +6604,7 @@ autonomy::ActivityOutcome ReviaSession::ExecuteObserve(
     const autonomy::Activity& activity, const autonomy::ActivityDecision& decision, const std::stop_token stopToken)
 {
     autonomy::ActivityOutcome outcome;
-    if (!settings.perception.bEnabled)
+    if (!PerceptionEnabledNow())
     {
         outcome.status = autonomy::ActivityStatus::Failed;
         outcome.summary = "Perception is switched off, so there is nothing to look at.";
@@ -7637,7 +7637,8 @@ ProfileOperationResult ReviaSession::SaveProfileLocked(const ProfileSummary& def
         return {false, error};
     }
     std::string message = "Saved profile '" + candidate.displayName + "'.";
-    if (candidate.id == settings.activeProfile)
+    const bool active = candidate.id == settings.activeProfile;
+    if (active)
     {
         aiProfile reloaded;
         if (!config.LoadProfile(candidate.id, reloaded))
@@ -7654,6 +7655,12 @@ ProfileOperationResult ReviaSession::SaveProfileLocked(const ProfileSummary& def
     }
     appLogger.Log(message);
     Publish(RuntimeEventKind::Activity, message);
+    if (active)
+    {
+        // Settings shows the active profile's switches ("This profile"); it may be open beside
+        // the Profiles window that saved this.
+        PublishComponent("Preferences", "Changed", "profile");
+    }
     return {true, message};
 }
 
@@ -10459,7 +10466,7 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         }
         if (argument == "pause" || argument == "resume")
         {
-            if (!settings.perception.bEnabled)
+            if (!PerceptionEnabledNow())
             {
                 result.succeeded = false;
                 result.text = "Ambient perception is off, so there is nothing to " + argument + ".";
