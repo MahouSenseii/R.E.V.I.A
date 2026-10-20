@@ -41,6 +41,9 @@ class ChatSessionsPanel final : public QWidget
     bool ExportSelected(const QString& path, bool json, QString& error);
     [[nodiscard]] std::string SelectedId() const;
     void SetStatus(const QString& text);
+    // Highlights the row of the chat on screen (a saved chat being read, or the live one again)
+    // without opening anything; clears the highlight when that chat is not listed.
+    void HighlightChat(const std::string& id);
     // What New chat does: the window's start, then a fresh list.
     void StartNewChat();
     // Folds the list under its "Recents" heading without touching the rest of the panel.
@@ -84,4 +87,6 @@ class ChatSessionsPanel final : public QWidget
     // From the last refresh, so the title stays right while the panel is folded or hidden.
     std::vector<revia::memory::ArchivedSession> sessions;
     bool loadFailed = false;
+    // The open chat as the last refresh found it: when it changes, the highlight moves to it.
+    std::string shownCurrentId;
 };

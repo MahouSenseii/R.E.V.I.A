@@ -113,6 +113,8 @@ private:
     QFrame* MakeRowFrame(Row& row, const QString& objectName);
     void PlaceInGroup(Group& group, Row& row, bool beforeRisky);
     QLabel* AddBadge(Row& row, const QString& kind, const QString& text);
+    void HoistSharedBadges(Group& group);
+    void ShowBadgeRow(Row& row);
     Row* FindRow(const std::string& keyOrObjectName) const;
     Row* FindRowByWidget(const QObject* widget) const;
 
@@ -159,6 +161,8 @@ private:
     QStackedWidget* stack = nullptr;
     QFrame* restartBanner = nullptr;
     QLabel* restartLabel = nullptr;
+    // The backend's store-wide problem, said once (SettingsBackend::notice).
+    QLabel* storeNotice = nullptr;
     QPushButton* restartNow = nullptr;
     QLabel* noResults = nullptr;
     QButtonGroup* themeButtons = nullptr;

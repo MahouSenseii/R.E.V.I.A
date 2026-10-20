@@ -140,24 +140,17 @@ QString SectionIntro(const SettingsSection section)
             return QStringLiteral("How {name} starts conversations, thinks and checks replies. Profile switches change the "
                                   "active profile.");
         case SettingsSection::Voice: return QStringLiteral("Spoken replies, listening and singing. Applies to {name}.");
-        case SettingsSection::Vision:
-            return QStringLiteral("What {name} may see. Settings marked All companions apply to every companion.");
+        // Which settings apply to every companion is said once per group, under its title.
+        case SettingsSection::Vision: return QStringLiteral("What {name} may see and notice.");
         case SettingsSection::Internet:
             return QStringLiteral("Web lookups and the interactive browser. These permissions apply to every companion.");
-        case SettingsSection::Memory:
-            return QStringLiteral("What {name} keeps and how it is found again. Settings marked All companions apply to every "
-                                  "companion.");
-        case SettingsSection::Models:
-            return QStringLiteral("Helper models, the cloud model and pictures. Settings marked All companions apply to every "
-                                  "companion.");
+        case SettingsSection::Memory: return QStringLiteral("What {name} keeps and how it is found again.");
+        case SettingsSection::Models: return QStringLiteral("Helper models, the cloud model and pictures.");
         case SettingsSection::Permissions:
             return QStringLiteral("What {name} may do on this PC. Permissions apply to every companion; the Ubuntu workspace "
                                   "starts with {name}.");
-        case SettingsSection::Integrations:
-            return QStringLiteral("Avatar, streaming, the local API and tool servers. Settings marked All companions apply to "
-                                  "every companion.");
-        case SettingsSection::Advanced:
-            return QStringLiteral("Self-improvement and hardware. Settings marked All companions apply to every companion.");
+        case SettingsSection::Integrations: return QStringLiteral("Avatar, streaming, the local API and tool servers.");
+        case SettingsSection::Advanced: return QStringLiteral("Self-improvement and hardware.");
     }
     return {};
 }
@@ -305,6 +298,10 @@ struct SettingsDialog::Row
     QLabel* description = nullptr;
     QWidget* badgeRow = nullptr;
     QLabel* restartBadge = nullptr;
+    QLabel* globalBadge = nullptr;
+    // The group's title line already says "Applies after restart" for every row in it: the row's
+    // own badge shows only while a change is waiting ("Restart to apply").
+    bool restartHoisted = false;
     QLabel* warning = nullptr;
     QLabel* status = nullptr;
     ToggleSwitch* toggle = nullptr;
@@ -338,6 +335,9 @@ struct SettingsDialog::Group
     QFrame* riskyDivider = nullptr;
     QLabel* riskyHeader = nullptr;
     QLabel* note = nullptr;
+    // What every row in the group shares ("All companions · Applies after restart"), said once
+    // under the title instead of on each row.
+    QLabel* sharedNote = nullptr;
     std::vector<Row*> rows;
 };
 
@@ -440,6 +440,20 @@ void SettingsDialog::BuildFrame()
     bannerSpace->addWidget(restartBanner);
     rightLayout->addLayout(bannerSpace);
     restartBanner->hide();
+
+    // One line for a problem every row of a store shares, rather than the same sentence under
+    // each of them.
+    storeNotice = new QLabel(right);
+    storeNotice->setObjectName(QStringLiteral("settingsNotice"));
+    storeNotice->setProperty("tone", QStringLiteral("warning"));
+    storeNotice->setWordWrap(true);
+    storeNotice->setTextFormat(Qt::PlainText);
+    storeNotice->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    auto* noticeSpace = new QVBoxLayout();
+    noticeSpace->setContentsMargins(32, 16, 32, 0);
+    noticeSpace->addWidget(storeNotice);
+    rightLayout->addLayout(noticeSpace);
+    storeNotice->hide();
 
     noResults = new QLabel(right);
     noResults->setObjectName(QStringLiteral("settingsNoResults"));
@@ -576,9 +590,48 @@ void SettingsDialog::BuildSections()
     {
         for (const SettingDescriptor* descriptor : OrderGroup(descriptors))
             AddSwitchRow(*group, *descriptor);
+        HoistSharedBadges(*group);
     }
     BuildServerRows();
     ApplyIcons();
+}
+
+void SettingsDialog::HoistSharedBadges(Group& group)
+{
+    // Said once under the title when every switch in the group shares it, so the badges left on
+    // the rows (Privacy, Autonomy, a waiting restart) are the ones that tell rows apart.
+    std::vector<Row*> switches;
+    for (Row* row : group.rows)
+    {
+        if (row->hasSwitch)
+            switches.push_back(row);
+    }
+    const auto everyRow = [&switches](const auto& test) { return switches.size() >= 2 && std::all_of(switches.begin(), switches.end(), test); };
+    const bool global = everyRow([](const Row* row) { return row->globalBadge != nullptr; });
+    const SettingApply apply = switches.empty() ? SettingApply::Live : switches.front()->descriptor.apply;
+    const bool restart = apply != SettingApply::Live && everyRow([apply](const Row* row) { return row->descriptor.apply == apply; });
+    QStringList shared;
+    if (global)
+        shared.push_back(QStringLiteral("All companions"));
+    if (restart)
+        shared.push_back(RestartBadgeText(apply));
+    for (Row* row : switches)
+    {
+        if (row->globalBadge != nullptr)
+            row->globalBadge->setVisible(!global);
+        row->restartHoisted = restart;
+        if (row->restartBadge != nullptr)
+            row->restartBadge->setVisible(!restart);
+        ShowBadgeRow(*row);
+    }
+    group.sharedNote->setText(shared.join(QStringLiteral(" · ")));
+    group.sharedNote->setVisible(!shared.isEmpty());
+}
+
+void SettingsDialog::ShowBadgeRow(Row& row)
+{
+    const QList<QLabel*> badges = row.badgeRow->findChildren<QLabel*>();
+    row.badgeRow->setVisible(std::any_of(badges.begin(), badges.end(), [](const QLabel* badge) { return !badge->isHidden(); }));
 }
 
 void SettingsDialog::ApplyIcons()
@@ -683,6 +736,7 @@ void SettingsDialog::BuildServerRows()
         Group& group = GroupFor(SettingsSection::Integrations, enabledRow.group, true);
         AddSwitchRow(group, enabledRow);
         AddSwitchRow(group, ServerRow(*confirmation, id));
+        HoistSharedBadges(group);
     }
 }
 
@@ -718,6 +772,11 @@ SettingsDialog::Group& SettingsDialog::GroupFor(const SettingsSection sectionId,
     group->titleLabel->setObjectName(QStringLiteral("settingsGroupTitle"));
     group->titleLabel->setTextFormat(Qt::PlainText);
     boxLayout->addWidget(group->titleLabel);
+    group->sharedNote = new QLabel(group->box);
+    group->sharedNote->setObjectName(QStringLiteral("settingsGroupNote"));
+    group->sharedNote->setTextFormat(Qt::PlainText);
+    group->sharedNote->hide();
+    boxLayout->addWidget(group->sharedNote);
     group->frame = new QFrame(group->box);
     group->frame->setObjectName(QStringLiteral("settingsGroup"));
     group->layout = new QVBoxLayout(group->frame);
@@ -778,14 +837,18 @@ SettingsDialog::Row& SettingsDialog::AddSwitchRow(Group& group, const SettingDes
             RestartBadgeText(descriptor.apply));
     }
     if (descriptor.allCompanions)
-        AddBadge(row, QStringLiteral("global"), QStringLiteral("All companions"));
+        row.globalBadge = AddBadge(row, QStringLiteral("global"), QStringLiteral("All companions"));
     if (descriptor.risk == SettingRisk::Privacy)
         AddBadge(row, QStringLiteral("privacy"), QStringLiteral("Privacy"));
     if (descriptor.risk == SettingRisk::Dangerous)
-        AddBadge(row, QStringLiteral("danger"), QStringLiteral("Risky"));
+    {
+        // Every risky row sits under its group's "Risky" header, which says it once; the badge
+        // stays only for the row's accessible description.
+        AddBadge(row, QStringLiteral("danger"), QStringLiteral("Risky"))->hide();
+    }
     if (descriptor.autonomy)
         AddBadge(row, QStringLiteral("autonomy"), QStringLiteral("Autonomy"));
-    row.badgeRow->setVisible(row.badgeRow->findChild<QLabel*>() != nullptr);
+    ShowBadgeRow(row);
 
     row.warning = new QLabel(row.frame);
     row.warning->setObjectName(QStringLiteral("settingWarning"));
@@ -1175,7 +1238,21 @@ void SettingsDialog::FinishWrite(const std::string& key, const quint64 serial, c
             if (row->descriptor.apply == SettingApply::Live)
                 row->running = *written;
         }
-        ReadRows({row});
+        // A write can change more than its own key: turning off the Ubuntu workspace withdraws the
+        // grants inside it, and an owner setting puts back the ones inside it. Every row kept in
+        // the same store is read again, so none keeps showing what was just withdrawn.
+        std::vector<Row*> reread{row};
+        for (const auto& other : rows)
+        {
+            if (other.get() != row && other->hasSwitch && !other->busy && other->descriptor.store == row->descriptor.store)
+                reread.push_back(other.get());
+        }
+        ReadRows(reread);
+        for (Row* other : reread)
+        {
+            if (other != row)
+                RenderRowTexts(*other);
+        }
     }
     RenderRowTexts(*row);
     EvaluateDependencies();
@@ -1446,8 +1523,11 @@ void SettingsDialog::RenderStatus(Row& row)
     }
     if (text.isEmpty())
     {
-        // Why a row cannot be used is said on the row, not only in a tooltip.
+        // Why a row cannot be used is said on the row, not only in a tooltip, unless the notice
+        // above the sections already says it for every row of its store.
         text = row.disabledReason.isEmpty() ? row.dependencyHint : row.disabledReason;
+        if (!text.isEmpty() && text == storeNotice->text())
+            text.clear();
         tone = QStringLiteral("info");
     }
     row.status->setText(text);
@@ -1513,6 +1593,11 @@ void SettingsDialog::UpdateRestartBanner()
             continue;
         const bool waiting = row->value != row->running && row->available;
         row->restartBadge->setText(waiting ? QStringLiteral("Restart to apply") : RestartBadgeText(row->descriptor.apply));
+        if (row->restartHoisted && row->restartBadge->isHidden() == waiting)
+        {
+            row->restartBadge->setVisible(waiting);
+            ShowBadgeRow(*row);
+        }
         // Only a change that is actually waiting is drawn as a warning; "Applies after restart" on
         // its own is a quiet fact about the row.
         if (row->restartBadge->property("pending").toBool() != waiting)
@@ -1598,6 +1683,9 @@ void SettingsDialog::Refresh()
     profileName = backend.readChoice ? backend.readChoice("profile.displayName") : QString();
     if (backend.mcpServers && backend.mcpServers() != serverIds)
         BuildServerRows();
+    const QString notice = backend.notice ? backend.notice() : QString();
+    storeNotice->setText(notice);
+    storeNotice->setVisible(!notice.isEmpty());
 
     QSettings settings;
     std::vector<Row*> stored;

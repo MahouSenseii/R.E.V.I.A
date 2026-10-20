@@ -363,6 +363,7 @@ QStackedWidget#settingsStack { border: none; }
 QLabel#settingsSectionTitle { font-size: 22px; font-weight: 600; }
 QLabel#settingsSectionIntro { font-size: 13px; }
 QLabel#settingsGroupTitle, QLabel#permGroupTitle { font-size: 13px; font-weight: 600; padding-top: 8px; }
+QLabel#settingsGroupNote { font-size: 12px; }
 QFrame#settingsGroup { border: 1px solid; border-radius: 10px; }
 QFrame#settingsDivider { border: none; min-height: 1px; max-height: 1px; }
 QLabel#settingsRiskyHeader { font-size: 12px; font-weight: 600; }
@@ -371,9 +372,11 @@ QLabel#settingsRiskyHeader { font-size: 12px; font-weight: 600; }
 QFrame[reviaClass="settingRow"] { border: 1px solid transparent; border-radius: 6px; }
 QLabel#settingTitle { font-size: 13px; font-weight: 600; }
 QLabel#settingDescription { font-size: 12px; }
-QLabel#settingBadge { border: none; border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
+/* Every badge has the 1px outline a neutral one draws, so all of them are the same size. */
+QLabel#settingBadge { border: 1px solid; border-radius: 4px; padding: 0px 5px; font-size: 11px; font-weight: 600; }
 QLabel#settingWarning, QLabel#settingStatus { font-size: 12px; }
 QFrame#settingsRestartBanner { border: 1px solid; border-radius: 10px; padding: 8px 12px; }
+QLabel#settingsNotice { border: 1px solid; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
 QPushButton#settingsRestartNow { padding: 4px 12px; font-size: 12px; }
 QPushButton#settingsRestartNow:focus { padding: 3px 11px; }
 QLabel#settingsNoResults { padding: 24px; font-size: 13px; }
@@ -397,12 +400,11 @@ QDoubleSpinBox#profileTemperatureSpin, QSpinBox#profileMaxTokensSpin { min-width
 
 QFrame#permCard, QFrame#gatedCard { border: 1px solid; border-radius: 10px; }
 QFrame#introBar { border: 1px solid; border-left-width: 2px; border-radius: 10px; }
-QFrame#iconWell, QFrame#iconWellGated { border: 1px solid; border-radius: 8px; }
-QLabel#cardTitle { font-size: 15px; font-weight: 600; }
-QLabel#cardSubtitle { font-size: 12px; }
-/* A dependent permission is indented under the one it needs, and titled like every other row. */
+/* Each card is titled the way a Settings group is (permGroupTitle above), with an optional line. */
+QLabel#permGroupSubtitle { font-size: 12px; }
+/* A dependent permission is titled like every other row. */
 QLabel#permLabel, QLabel#permLabelNested { font-size: 13px; font-weight: 600; }
-QLabel#permHelp, QLabel#permRowHelp { font-size: 12px; }
+QLabel#permHelp, QLabel#permRowHelp, QLabel#permRowReason { font-size: 12px; }
 QFrame#permRow, QFrame#permRowNested { border: none; border-radius: 6px; }
 QFrame#rowSeparator { border: none; }
 /* Risk is carried by a chip's word as well as its colour, so it survives a colour-blind read. */

@@ -134,6 +134,10 @@ struct SettingsBackend
     std::function<void(const std::string& field, double, SettingDone)> writeProfileValue;
     std::function<std::vector<std::string>()> mcpServers;
     std::function<QString(const std::string& key)> statusText;
+    // A problem every row of a store shares (its file cannot be read, or is held on its safe
+    // side), worded for the owner; empty when there is none. The dialog says it once, above the
+    // sections, and a row whose unavailable reason is this text does not repeat it. UI thread.
+    std::function<QString()> notice;
 };
 
 struct SettingsHooks

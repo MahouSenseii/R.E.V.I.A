@@ -68,6 +68,7 @@
 #include <QWidgetAction>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <iostream>
 #include <fstream>
@@ -1202,6 +1203,68 @@ struct ReviaWindowStopTests
             window.RenderChat();
         }
 
+        // Opening a thought at the bottom leaves the reader where they were: neither a relayout (the
+        // composer growing) nor the next streamed line may pull the opened block off the top.
+        {
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            QString thought;
+            for (int line = 0; line < 40; ++line)
+                thought += QStringLiteral("Step %1 of the scroll fixture's reasoning, one full sentence.\n").arg(line);
+            for (int turn = 0; turn < 14; ++turn)
+            {
+                window.AppendChat("You", QStringLiteral("Scroll fixture question %1").arg(turn), true);
+                window.AppendChat(window.DisplayName(),
+                    QStringLiteral("Scroll fixture answer %1, long enough to wrap across the measure at least once.").arg(turn), false,
+                    turn == 13 ? thought : QString());
+            }
+            SettleLayouts();
+            QScrollBar* bar = window.chatHistory->verticalScrollBar();
+            bar->setValue(bar->maximum());
+            SettleLayouts();
+            const QString thoughtLink = QStringLiteral("thought:%1").arg(window.chatEntries.size() - 1);
+            const int atBottom = bar->value();
+            emit window.chatHistory->anchorClicked(QUrl(thoughtLink));
+            SettleLayouts();
+            expect(bar->maximum() > atBottom && bar->value() == atBottom, "opening a thought at the bottom must not move the reader");
+            window.messageInput->setPlainText(QStringLiteral("one\ntwo\nthree\nfour\nfive"));
+            SettleLayouts();
+            expect(bar->value() == atBottom, "a growing composer must not pull an opened thought off the top");
+            // The reading column keeps the composer's edges while the scroll bar shows: centred on the
+            // transcript's full width, with the bar taken from the right margin.
+            {
+                const QTextFrameFormat format = window.chatHistory->document()->rootFrame()->frameFormat();
+                const int full = window.chatHistory->width() - 2 * window.chatHistory->frameWidth();
+                const int left = std::max(16, (full - 760) / 2);
+                const int column = window.chatHistory->viewport()->width() - static_cast<int>(format.leftMargin()) -
+                                   static_cast<int>(format.rightMargin());
+                expect(bar->isVisible() && static_cast<int>(format.leftMargin()) == left && column == std::min(760, full - 2 * left),
+                    "the transcript's column must keep its place and width when the scroll bar shows");
+            }
+            // One line pitch for replies and bubbles, 1.6 times the chat text size in pixels.
+            expect(window.TranscriptCss().contains(QStringLiteral("line-height: %1px").arg(std::lround(window.chatTextSize * 1.6))),
+                "the transcript's line pitch must be a pixel height that follows the chat text size");
+            window.messageInput->clear();
+            SettleLayouts();
+
+            // The same while the turn is still running, and the next streamed line arrives.
+            emit window.chatHistory->anchorClicked(QUrl(thoughtLink));
+            SettleLayouts();
+            bar->setValue(bar->maximum());
+            SettleLayouts();
+            window.chatTurnInFlight = true;
+            const int streaming = bar->value();
+            emit window.chatHistory->anchorClicked(QUrl(thoughtLink));
+            SettleLayouts();
+            window.AppendChat(window.DisplayName(), QStringLiteral("One more streamed sentence."));
+            SettleLayouts();
+            expect(bar->value() == streaming, "a streamed line must not pull a thought opened mid-turn off the top");
+            window.chatTurnInFlight = false;
+            window.chatEntries.clear();
+            window.ResetConversationPresentation();
+            window.RenderChat();
+        }
+
         // A turn reads in order: the speaker line, the work, the thought process, the answer, what
         // was remembered, and last the actions that close it.
         {
@@ -1318,6 +1381,27 @@ struct ReviaWindowStopTests
         expect(privacyDesktop && privacyDesktop->isVisible() && headerStop && headerStop->isVisible() &&
                    window.stateLabel->text() == "Controlling desktop",
             "an active desktop action must show its indicator, the header Stop and the Controlling desktop state");
+        // With every indicator up and a long detail, the header still fits the narrowest window: the
+        // detail is elided to the room left, never the reason the window cannot shrink.
+        {
+            const QSize before = window.size();
+            window.perceptionWatching = true;
+            window.screenAwarenessRunning = true;
+            window.RefreshPrivacyIndicators();
+            window.UpdateState(RuntimeState::Acting, "Executing a fixture action whose detail runs far longer than any header has room for");
+            window.resize(760, 540);
+            SettleLayouts();
+            expect(window.width() <= 760 && window.chatHeader->minimumSizeHint().width() <= window.chatHeader->width() &&
+                       (window.stateDetailLabel->isHidden() ||
+                           window.stateDetailLabel->geometry().right() < window.findChild<QToolButton*>("chatMoreButton")->geometry().left()),
+                "the chat header must fit a 760px window with every indicator and a long detail");
+            window.perceptionWatching = false;
+            window.screenAwarenessRunning = false;
+            window.RefreshPrivacyIndicators();
+            window.UpdateState(RuntimeState::Acting, "Executing a fixture action.");
+            window.resize(before);
+            SettleLayouts();
+        }
         automation.phase = "Ready";
         window.HandleRuntimeEvent(automation);
         window.UpdateState(RuntimeState::Idle, "Ready");
@@ -1788,7 +1872,11 @@ struct ReviaWindowStopTests
             "the earlier chat and the current one were not both listed");
         if (earlier)
         {
-            earlier->setSelected(true);
+            // The open chat is highlighted after a refresh; choosing another row moves it, as a click does.
+            QListWidgetItem* open = list->currentItem();
+            expect(open != nullptr && open->isSelected() && open->data(Qt::UserRole).toString() == "current-chat",
+                "the chat list did not highlight the open chat");
+            list->setCurrentItem(earlier);
             QTemporaryDir exportDirectory;
             QString error;
             const QString markdownPath = exportDirectory.filePath("chat.md");

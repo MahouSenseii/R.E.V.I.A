@@ -212,6 +212,13 @@ void ReviaWindow::BuildSettingsDialog()
         RefreshAccount();
     };
     const desktop::SettingsBackend backend = desktop::MakeSessionSettingsBackend(std::move(deps));
+    screenAwarenessOff = [backend](std::function<void(bool, QString)> done)
+    {
+        if (!backend.write)
+            return done(false, QStringLiteral("Available once Revia has started."));
+        backend.write({"vision.continuousAwareness", desktop::SettingStore::SettingsFile}, false,
+            [done = std::move(done)](const desktop::SettingWrite result) { done(result.succeeded, result.message); });
+    };
 
     desktop::SettingsHooks hooks;
     hooks.valueChanged = [this](const std::string& key, const bool value) { ApplyShellSetting(key, value); };
@@ -356,6 +363,7 @@ void ReviaWindow::BuildSettingsDialog()
     settingsDialog->SetHostedWidget(SettingsSection::Internet, QStringLiteral("internet"), capabilityPanel->DetachInternetGroup(), 0);
     settingsDialog->SetResizeHook([this](const QSize contentSize) { ApplySettingsLayout(contentSize.width()); });
     settingsDialog->SetCompanionName(DisplayName());
+    capabilityPanel->SetCompanionName(DisplayName());
 
     preferenceRefreshTimer = new QTimer(this);
     preferenceRefreshTimer->setSingleShot(true);
@@ -704,11 +712,19 @@ void ReviaWindow::BuildChatColumn(QWidget* parent)
     connect(privacyScreen, &QToolButton::clicked, this,
         [this]()
         {
-            // Through Settings' own switch, so the write takes the backend's path and the row
-            // shows it.
-            if (QCheckBox* awareness = settingsDialog->Switch("vision.continuousAwareness"); awareness != nullptr && awareness->isEnabled())
-                awareness->setChecked(false);
-            ShowStatus(QStringLiteral("Turned off. Change it in Settings › Vision."), 5000);
+            // Straight through the Settings backend, whatever the dialog's switch can do just now (a
+            // write in flight, a requirement shown as off). The write stops awareness before it
+            // answers, so "Turned off" is said only once it is true; the dialog follows its
+            // Preferences event.
+            if (!screenAwarenessOff || !privacyScreen->isEnabled())
+                return;
+            privacyScreen->setEnabled(false);
+            screenAwarenessOff(
+                [this](const bool saved, const QString& message)
+                {
+                    privacyScreen->setEnabled(true);
+                    ShowStatus(saved ? QStringLiteral("Turned off. Change it in Settings › Vision.") : message, saved ? 5000 : 8000);
+                });
         });
     connect(privacyDesktop, &QToolButton::clicked, this, [this]() { StopDesktopControlFromShell(); });
     header->addWidget(privacyIndicators);
@@ -745,6 +761,8 @@ void ReviaWindow::BuildChatColumn(QWidget* parent)
     stateDetailLabel->setObjectName("stateDetailLabel");
     stateDetailLabel->setTextFormat(Qt::PlainText);
     stateDetailLabel->setMaximumWidth(280);
+    // Never the reason the header, and so the window, cannot shrink: FitStateDetail elides it.
+    stateDetailLabel->setMinimumWidth(1);
     stateDetailLabel->hide();
     header->addWidget(stateDetailLabel);
 
@@ -1575,6 +1593,7 @@ void ReviaWindow::RefreshPrivacyIndicators()
     headerDesktopStop->setVisible(desktopControl);
     if (menuStopDesktop)
         menuStopDesktop->setVisible(desktopControl);
+    FitStateDetail();
 }
 
 void ReviaWindow::UpdateConversationStrip()

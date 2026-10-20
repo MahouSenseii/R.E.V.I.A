@@ -410,6 +410,8 @@ SettingsBackend MakeSessionSettingsBackend(SessionBackendDeps deps)
         return QString();
     };
 
+    backend.notice = [context]() { return QString::fromStdString(context->deps.session().SettingsNotice()); };
+
     return backend;
 }
 }

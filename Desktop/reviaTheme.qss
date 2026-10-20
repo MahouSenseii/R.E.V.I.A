@@ -516,6 +516,7 @@ QListWidget#settingsSections::item:selected { color: {{text}}; background: {{sid
 QLabel#settingsSectionTitle { color: {{text}}; }
 QLabel#settingsSectionIntro { color: {{textSecondary}}; }
 QLabel#settingsGroupTitle, QLabel#permGroupTitle { color: {{text}}; }
+QLabel#settingsGroupNote { color: {{textSecondary}}; }
 QFrame#settingsGroup { background: {{surface}}; border-color: {{border}}; }
 QFrame#settingsDivider { background: {{divider}}; }
 QLabel#settingsRiskyHeader { color: {{danger}}; }
@@ -526,12 +527,16 @@ QFrame[reviaClass="settingRow"]:hover { background: {{surfaceHover}}; }
 QFrame[reviaClass="settingRow"][highlight="true"] { background: {{surfaceHover}}; border-color: {{accent}}; }
 QLabel#settingTitle { color: {{text}}; }
 QLabel#settingDescription { color: {{textSecondary}}; }
-QLabel#settingBadge { color: {{textSecondary}}; background: {{surfaceAlt}}; }
-QLabel#settingBadge[kind="restart"], QLabel#settingBadge[kind="partial"] { color: {{textSecondary}}; background: {{surfaceAlt}}; }
-QLabel#settingBadge[pending="true"] { color: {{warning}}; background: {{warningSoft}}; }
-QLabel#settingBadge[kind="global"] { color: {{textSecondary}}; background: {{surfaceAlt}}; }
-QLabel#settingBadge[kind="privacy"], QLabel#settingBadge[kind="autonomy"] { color: {{accent}}; background: {{accentSoft}}; }
-QLabel#settingBadge[kind="danger"] { color: {{danger}}; background: {{dangerSoft}}; }
+/* Neutral badges (restart, partial, global): a fill one step lighter than a group in dark and an
+   outline in both schemes, so the pill never sinks into the row (ContrastPairs checks both). */
+QLabel#settingBadge { color: {{textSecondary}}; background: {{surfaceHover}}; border-color: {{border}}; }
+QLabel#settingBadge[pending="true"] { color: {{warning}}; background: {{warningSoft}}; border-color: {{warningSoft}}; }
+QLabel#settingBadge[kind="privacy"], QLabel#settingBadge[kind="autonomy"] {
+    color: {{accent}};
+    background: {{accentSoft}};
+    border-color: {{accentSoft}};
+}
+QLabel#settingBadge[kind="danger"] { color: {{danger}}; background: {{dangerSoft}}; border-color: {{dangerSoft}}; }
 QLabel#settingWarning { color: {{danger}}; }
 QLabel#settingStatus, QLabel#settingStatus[tone="info"] { color: {{textSecondary}}; }
 QLabel#settingStatus[tone="success"] { color: {{success}}; }
@@ -547,6 +552,7 @@ QFrame#permRowNested[reachable="false"] QLabel#permHelp, QFrame#permRowNested[re
 }
 QFrame#settingsRestartBanner { background: {{warningSoft}}; border-color: {{warning/35}}; }
 QFrame#settingsRestartBanner QLabel { color: {{text}}; background: transparent; }
+QLabel#settingsNotice, QLabel#settingsNotice[tone="warning"] { color: {{warning}}; background: {{warningSoft}}; border-color: {{warning/35}}; }
 QLabel#settingsNoResults { color: {{textSecondary}}; }
 QLineEdit#settingsSearch:focus { border-color: {{inputBorder}}; }
 QLineEdit#settingsSearch[kbdFocus="true"]:focus { border-color: {{focusRing}}; }
@@ -574,12 +580,11 @@ QDoubleSpinBox#profileTemperatureSpin:disabled, QSpinBox#profileMaxTokensSpin:di
 QFrame#permCard { background: {{surface}}; border-color: {{border}}; }
 QFrame#gatedCard { background: {{surface}}; border-color: {{warning/35}}; }
 QFrame#introBar { background: {{surfaceAlt}}; border-color: {{border}}; border-left-color: {{accent}}; }
-QFrame#iconWell { background: {{accentSoft}}; border-color: {{accent/30}}; }
-QFrame#iconWellGated { background: {{warningSoft}}; border-color: {{warning/30}}; }
-QLabel#cardTitle { color: {{text}}; }
-QLabel#cardSubtitle { color: {{textSecondary}}; }
+QLabel#permGroupSubtitle { color: {{textSecondary}}; }
 QLabel#permLabel, QLabel#permLabelNested { color: {{text}}; }
 QLabel#permHelp, QLabel#permRowHelp { color: {{textSecondary}}; }
+/* Why a dependent permission cannot be used now: never greyed with the rest of its row. */
+QLabel#permRowReason { color: {{textSecondary}}; }
 QFrame#permRow, QFrame#permRowNested { background: transparent; }
 QFrame#permRow:hover, QFrame#permRowNested:hover { background: {{surfaceHover}}; }
 QFrame#rowSeparator { background: {{divider}}; }

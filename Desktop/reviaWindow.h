@@ -127,6 +127,9 @@ class ReviaWindow final : public QMainWindow
     // Window-size rules (design spec 2.11): the sidebar falls back to its rail below 900px and the
     // header drops its detail text below 640px of chat column.
     void ApplyResponsiveLayout();
+    // Elides the state's detail to the room the chat header has left (at most 280px), and hides it
+    // when there is too little, so the header never asks for more width than the window has.
+    void FitStateDetail();
     // Settings' reflow at its content width: the permission cards' columns and the microphone row.
     void ApplySettingsLayout(int contentWidth);
     // The Activity window's toolbar: two columns below 640px, otherwise one row.
@@ -519,6 +522,9 @@ class ReviaWindow final : public QMainWindow
     QWidget* microphoneRow = nullptr;
     QComboBox* cloudUseForCombo = nullptr;
     std::function<QString(const std::string&)> cloudUseForReader;
+    // Turns continuous screen awareness off through the Settings backend, for the header's
+    // screen indicator; done gets whether it was saved and the backend's message.
+    std::function<void(std::function<void(bool, QString)>)> screenAwarenessOff;
     QTimer* preferenceRefreshTimer = nullptr;
     // The permission panel re-reads the capability file once a burst of capability events settles.
     QTimer* capabilityRefreshTimer = nullptr;

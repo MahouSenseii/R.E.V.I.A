@@ -161,7 +161,15 @@ void ChatSessionsPanel::Refresh()
     sessions = controls.list ? controls.list(search->text().trimmed().toStdString(), error) : std::vector<revia::memory::ArchivedSession>{};
     loadFailed = !error.empty();
     const std::string current = CurrentId();
+    // The highlight means "open" unless the owner moved it: whenever the open chat changes (a
+    // click, a new chat, the palette, a companion switch) it moves to the open row, and the
+    // owner's own highlight lasts only while the same chat stays open. So the row Delete and F2
+    // act on is never a chat that was open some time ago.
+    const bool currentChanged = current != shownCurrentId;
+    shownCurrentId = current;
     list->clear();
+    QListWidgetItem* currentItem = nullptr;
+    QListWidgetItem* kept = nullptr;
     for (const auto& session : sessions)
     {
         const bool isCurrent = session.id == current;
@@ -170,15 +178,21 @@ void ChatSessionsPanel::Refresh()
         item->setToolTip(SessionDetail(session, isCurrent));
         if (isCurrent)
         {
-            // Marked, not selected: the selection is the owner's (Export acts on it).
+            // Bold as well as highlighted, so it still reads as open while the owner's highlight
+            // sits on another row.
             QFont font = item->font();
             font.setWeight(QFont::DemiBold);
             item->setFont(font);
-            item->setBackground(revia::desktop::theme::Current().sidebarSelected);
+            currentItem = item;
         }
         if (session.id == selected)
-            item->setSelected(true);
+            kept = item;
     }
+    QListWidgetItem* highlighted = currentChanged || kept == nullptr ? currentItem : kept;
+    if (highlighted != nullptr)
+        list->setCurrentItem(highlighted);
+    else
+        list->clearSelection();
     if (!error.empty())
         SetStatus(QString::fromStdString(error));
     else if (sessions.empty() && !search->text().trimmed().isEmpty())
@@ -206,6 +220,19 @@ std::string ChatSessionsPanel::TargetId() const
     // The row the owner highlighted (a click also opens it), never the live chat behind it.
     const std::string selected = SelectedId();
     return selected.empty() ? CurrentId() : selected;
+}
+
+void ChatSessionsPanel::HighlightChat(const std::string& id)
+{
+    for (int row = 0; row < list->count(); ++row)
+    {
+        if (list->item(row)->data(Qt::UserRole).toString().toStdString() == id)
+        {
+            list->setCurrentRow(row);
+            return;
+        }
+    }
+    list->clearSelection();
 }
 
 void ChatSessionsPanel::SetStatus(const QString& text)

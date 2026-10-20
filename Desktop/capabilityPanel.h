@@ -6,6 +6,8 @@
 #include <QWidget>
 
 #include <functional>
+#include <initializer_list>
+#include <vector>
 
 class QLabel;
 class QComboBox;
@@ -32,6 +34,10 @@ public:
     ~CapabilityPanel() override;
 
     void Refresh();
+    // Words every row's label and help, and the notes that name her, with this name: the active
+    // companion's display name, known only once her session has started. Refresh picks up a
+    // changed name by itself.
+    void SetCompanionName(const QString& name);
     void ShowDiscovery(const revia::actions::windows::ApplicationControlInventory& inventory);
     void SetStatus(const QString& text, bool error = false);
     // The internet and interactive-browser cards. They stay laid out in this panel until this is
@@ -63,6 +69,11 @@ private:
     QWidget* CreateListFooter(QPushButton*& apply, const QString& applyName, std::function<void()> onApply,
         std::function<void()> onDiscard);
     QFrame* MakeRow(ToggleSwitch* toggle, const QString& tip = QString(), bool nested = false, const QString& riskText = QString());
+    void RenderRowText(std::size_t index);
+    // "Turn on A first", "Turn on A and B first" (or "A or B" when any one will do): the switches
+    // a row needs that are still off.
+    [[nodiscard]] QString NeedsFirst(std::initializer_list<const ToggleSwitch*> needed, bool anyOne = false) const;
+    [[nodiscard]] QString Label(const ToggleSwitch* toggle) const;
     void RefreshInteractiveBrowserSettings(const revia::actions::CapabilitySettings& settings);
     void ApplyInteractiveBrowserSettings();
     void CommitBrowserFlag(const std::function<void(revia::browser::BrowserSettings&)>& change);
@@ -72,16 +83,34 @@ private:
     void ApplyDesktopControlSettings(const ToggleSwitch* changed);
     void ToggleDesktopStop();
     // Puts the switch back off and asks; on "Turn on" the switch goes on again and apply runs.
-    // Window-modal and non-blocking, so no nested event loop waits on the answer.
-    void ConfirmTurnOn(ToggleSwitch* toggle, const QString& explanation, std::function<void()> apply);
-    // The shared question: Turn on or Cancel (the default), accepted runs only on Turn on.
-    void AskToConfirm(const QString& question, const QString& consequence, const QString& details, std::function<void()> accepted);
+    // Window-modal and non-blocking, so no nested event loop waits on the answer. note is an
+    // optional short sentence after the switch's warning.
+    void ConfirmTurnOn(ToggleSwitch* toggle, const QString& note, std::function<void()> apply);
+    // The shared question: the question, its consequence, and Turn on or Cancel (the default);
+    // accepted runs only on Turn on.
+    void AskToConfirm(const QString& question, const QString& consequence, std::function<void()> accepted);
     void ShowInternetResult(const QString& text, bool error);
     [[nodiscard]] QString CompanionName() const;
     [[nodiscard]] QString Warning(const ToggleSwitch* toggle) const;
 
+    // What a row says, kept so a new companion name can word it again.
+    struct RowText
+    {
+        ToggleSwitch* toggle = nullptr;
+        QFrame* row = nullptr;
+        QLabel* label = nullptr;
+        QLabel* help = nullptr;
+        QLabel* detail = nullptr;
+        QString tip;
+        QStringList badges;
+    };
+
     revia::runtime::ReviaSession& session;
     DiscoveryRequest requestDiscovery;
+    QString companionName;
+    std::vector<RowText> rowTexts;
+    QLabel* gatedNotice = nullptr;
+    QLabel* approvedHelp = nullptr;
     QPointer<QWidget> internetGroup;
     bool internetDetached = false;
     QLabel* internetStatusLabel = nullptr;

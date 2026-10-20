@@ -919,7 +919,8 @@ QString DocumentCss()
     css += QStringLiteral("a { color: %1; text-decoration: none; }\n").arg(c(tokens.link));
     css += QStringLiteral(".speaker { color: %1; font-size: 13px; font-weight: 600; margin-top: 24px; margin-bottom: 4px; }\n")
                .arg(c(tokens.textSecondary));
-    css += QStringLiteral(".assistant { color: %1; font-size: 15px; line-height: 160%; }\n").arg(c(tokens.text));
+    // The line pitch goes with the owner's chat text size, so the window adds it (TranscriptCss).
+    css += QStringLiteral(".assistant { color: %1; font-size: 15px; }\n").arg(c(tokens.text));
     css += QStringLiteral(".actions, .actions a { color: %1; font-size: 12px; }\n").arg(c(tokens.textSecondary));
     css += QStringLiteral(".userBubble, .userBubble td { color: %1; background-color: %2; font-size: 15px; }\n")
                .arg(c(tokens.text), c(tokens.userBubble));
@@ -1164,8 +1165,8 @@ std::vector<ContrastPair> ContrastPairs(const Tokens& t)
     add("textSecondary on sidebarHover", t.textSecondary, t.sidebarHover, Text);
     add("textSecondary on sidebarSelected", t.textSecondary, t.sidebarSelected, Text);
     add("textSecondary on surface", t.textSecondary, t.surface, Text);
-    add("textSecondary on surfaceAlt (neutral badge)", t.textSecondary, t.surfaceAlt, Text);
-    add("textSecondary on surfaceHover", t.textSecondary, t.surfaceHover, Text);
+    add("textSecondary on surfaceAlt", t.textSecondary, t.surfaceAlt, Text);
+    add("textSecondary on surfaceHover (neutral badge)", t.textSecondary, t.surfaceHover, Text);
     add("textSecondary on selection (palette subtitle)", t.textSecondary, t.selection, Text);
     add("textSecondary on userBubble", t.textSecondary, t.userBubble, Text);
     add("textSecondary on accentSoft (banners)", t.textSecondary, t.accentSoft, Text);
@@ -1248,6 +1249,12 @@ std::vector<ContrastPair> ContrastPairs(const Tokens& t)
     add("accent icon on sidebarSelected (checked tool button)", t.accent, t.sidebarSelected, Boundary);
     add("background inset ring on accent", t.background, t.accent, Boundary);
     add("background inset ring on danger", t.background, t.danger, Boundary);
+
+    // A neutral badge ("Applies after restart", "All companions") is told from the row it sits in
+    // by its fill and outline, not by its text alone: neither may sink into the surface, as a
+    // surfaceAlt fill did in dark (darker than surface, 1.04:1).
+    add("neutral badge outline (border) on surface", t.border, t.surface, 1.2);
+    add("neutral badge fill (surfaceHover) on surface", t.surfaceHover, t.surface, 1.1);
     return pairs;
 }
 

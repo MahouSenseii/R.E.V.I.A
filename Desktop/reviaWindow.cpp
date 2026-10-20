@@ -93,6 +93,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <string>
@@ -416,6 +417,8 @@ bool ReviaWindow::eventFilter(QObject* watched, QEvent* event)
     if ((watched == chatHeader && event->type() == QEvent::Resize) ||
         (composerShadow && watched == composerShadow && (event->type() == QEvent::Move || event->type() == QEvent::Resize)))
     {
+        if (watched == chatHeader)
+            FitStateDetail();
         RefreshChatTitle();
         if (jumpToLatest && composerShadow)
         {
@@ -2424,9 +2427,9 @@ void ReviaWindow::RefreshStateBadge()
     const QString cleanDetail = detail.trimmed().compare(shown.label, Qt::CaseInsensitive) == 0 ? QString() : detail.trimmed();
     if (stateDetailLabel != nullptr)
     {
+        // The full text stays in the tooltip; FitStateDetail elides it to the header's room.
         stateDetailLabel->setToolTip(cleanDetail);
-        stateDetailLabel->setText(stateDetailLabel->fontMetrics().elidedText(cleanDetail, Qt::ElideRight, 280));
-        stateDetailLabel->setVisible(!cleanDetail.isEmpty() && (chatColumn == nullptr || chatColumn->width() >= 640));
+        FitStateDetail();
     }
     if (runtimeDetailsButton)
         runtimeDetailsButton->setVisible(newState == revia::runtime::RuntimeState::Error);
@@ -2636,11 +2639,15 @@ void ReviaWindow::AppendWorkEntry(const EntryKind kind, const QString& body, con
 QString ReviaWindow::TranscriptCss() const
 {
     // The theme's classes, with the owner's chat text size (Appearance › Chat text size) for the
-    // replies and the user's bubble.
+    // replies and the user's bubble, and one line pitch for both: 1.6 times the size in pixels
+    // (22, 24 or 27). Qt reads a percentage against the font's own line spacing, which differs by
+    // font and platform; pixels are a minimum height, so a taller glyph still gets its room.
+    const int pitch = static_cast<int>(std::lround(chatTextSize * 1.6));
     return revia::desktop::theme::DocumentCss() +
            QStringLiteral(".assistant, .userBubble, .userBubble td { font-size: %1px; }\n"
-                          ".assistant p, .assistant li { line-height: 160%; }\n")
-               .arg(chatTextSize);
+                          ".assistant p, .assistant li, .userBubble td, .userBubble p { line-height: %2px; }\n")
+               .arg(chatTextSize)
+               .arg(pitch);
 }
 
 QString ReviaWindow::UserBubbleHtml(const QString& text) const
@@ -2905,6 +2912,10 @@ void ReviaWindow::RenderChat()
     if (renderKeepsPosition || !pinned)
     {
         bar->setValue(previousValue);
+        // Where the reader now is: a block opened at the bottom grows the document under the
+        // reader, who then no longer follows the bottom (valueChanged ignores this render), so a
+        // later relayout or streamed line must not pull the opened block off the top.
+        transcriptPinned = bar->maximum() - bar->value() <= 48;
         if (!renderKeepsPosition && changed && jumpToLatest != nullptr && chatColumn != nullptr && chatColumn->isVisible())
         {
             jumpToLatest->show();
@@ -3267,6 +3278,8 @@ void ReviaWindow::OpenArchivedChat(const std::string& id)
         return;
     }
     viewingArchivedChat = id;
+    // The list points at the chat on screen, however it was opened (a click, the palette).
+    chatSessionsPanel->HighlightChat(id);
     archivedChatLabel->setText(QStringLiteral("Reading a saved chat. It is not part of the current conversation."));
     continueChatButton->setEnabled(!turns.empty());
     archivedChatBanner->show();
@@ -3307,6 +3320,7 @@ void ReviaWindow::CloseArchivedChat()
         return;
     viewingArchivedChat.clear();
     archivedChatBanner->hide();
+    chatSessionsPanel->HighlightChat(Session().CurrentConversationId());
     RenderChat();
 }
 

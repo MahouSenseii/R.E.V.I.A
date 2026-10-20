@@ -818,6 +818,22 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
     auto* restoreOpen = dialog.findChild<QCheckBox*>(QStringLiteral("sw_panels_restoreOpen"));
     if (embedding && autoTune && restoreOpen && banner && restartNow && later)
     {
+        // Every row in "Performance and hardware" waits for a restart and applies to every
+        // companion, so the group says so once and the rows' own badges stay out of the way until a
+        // change waits. "Search" has one row, which keeps its own.
+        const QLabel* hoisted = Badge(dialog.findChild<QFrame*>("sw_llm_autoTuneRow"), "restart");
+        const QLabel* global = Badge(dialog.findChild<QFrame*>("sw_llm_autoTuneRow"), "global");
+        const QLabel* groupNote = nullptr;
+        for (QLabel* note : dialog.findChildren<QLabel*>(QStringLiteral("settingsGroupNote")))
+        {
+            if (note->parentWidget()->isAncestorOf(autoTune))
+                groupNote = note;
+        }
+        expect(hoisted && hoisted->isHidden() && global && global->isHidden() && groupNote && !groupNote->isHidden() &&
+                   groupNote->text() == QStringLiteral("All companions · Applies after restart"),
+            "a badge every row of a group shares is said once under the group's title");
+        expect(!Badge(dialog.findChild<QFrame*>("sw_embedding_enabledRow"), "restart")->isHidden(),
+            "a group of one keeps its row's badges");
         embedding->click();
         Settle();
         const QLabel* badge = Badge(dialog.findChild<QFrame*>("sw_embedding_enabledRow"), "restart");
@@ -833,6 +849,8 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         autoTune->click();
         Settle();
         expect(dialog.PendingRestartCount() == base + 2 && !banner->isHidden(), "a further change brings the banner back");
+        expect(hoisted && !hoisted->isHidden() && hoisted->text() == "Restart to apply",
+            "a row's hoisted restart badge comes back while its change waits");
         restoreOpen->click();
         Settle();
         expect(dialog.PendingRestartCount() == base + 3 && QSettings().value("panels/restoreOpen").toBool(),
@@ -843,6 +861,7 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
         expect(dialog.PendingRestartCount() == base && banner->findChild<QLabel*>()->text() == bannerText(base),
             "changing them back takes them out of the count");
         expect(badge && badge->text() == "Applies after restart", "the badge returns to its resting text");
+        expect(hoisted && hoisted->isHidden(), "a hoisted badge goes again once nothing waits, the group's title saying it");
         if (trusted)
             trusted->click(); // turning a risky switch off needs no confirmation
         Settle();
@@ -1297,6 +1316,37 @@ void CheckDialog(Expect& expect, revia::runtime::ReviaSession& session)
 // default and presses it on Enter from anywhere; with the capability panel hosted that button was
 // Stop desktop control. A fresh dialog, shown once with the panel in place, the way the window
 // builds it.
+// A problem every row of a store shares is said once, above the sections, as a warning; a row whose
+// reason is that problem keeps it in its tooltip only, and a value that could not be read shows off.
+void CheckStoreNotice(Expect& expect)
+{
+    FakeBackend fake;
+    const QString unreadable = QStringLiteral("Config/settings.json could not be read, so the settings kept in it cannot be shown or changed until it is fixed.");
+    for (const SettingDescriptor& descriptor : SettingCatalog())
+    {
+        if (descriptor.store == SettingStore::Preference || descriptor.store == SettingStore::SettingsFile)
+            fake.state[descriptor.key] = SettingRead{false, false, false, unreadable};
+    }
+    SettingsBackend backend = fake.Make();
+    backend.notice = [&unreadable]() { return unreadable; };
+    SettingsHooks hooks;
+    hooks.companionName = []() { return QStringLiteral("Revia"); };
+    SettingsDialog dialog(backend, hooks, nullptr);
+    dialog.resize(920, 640);
+    dialog.show();
+    dialog.Refresh();
+    dialog.ShowSection(SettingsSection::Models);
+    Settle();
+    auto* notice = dialog.findChild<QLabel*>(QStringLiteral("settingsNotice"));
+    expect(notice && notice->isVisible() && notice->text() == unreadable && notice->property("tone").toString() == "warning",
+        "a store-wide problem shows once above the sections, as a warning");
+    auto* helpers = dialog.findChild<QCheckBox*>(QStringLiteral("sw_intelligence_enabled"));
+    const QLabel* status = RowLabel(&dialog, "sw_intelligence_enabledRow", "settingStatus");
+    expect(helpers && !helpers->isEnabled() && !helpers->isChecked() && helpers->toolTip() == unreadable && status && status->isHidden(),
+        "a row the notice covers is off and greyed, with the reason in its tooltip and not repeated under it");
+    dialog.hide();
+}
+
 void CheckEnterKey(Expect& expect, revia::runtime::ReviaSession& session)
 {
     FakeBackend fake;
@@ -1357,6 +1407,29 @@ void CheckCapabilityPanel(Expect& expect, revia::runtime::ReviaSession& session)
     }
     for (const QLabel* label : panel.findChildren<QLabel*>())
         expect(!label->text().contains(kGenderedWords), "CapabilityPanel text must be companion-neutral: " + label->text());
+    // Groups are titled the way Settings' own are, above their cards, with no icon tiles.
+    expect(panel.findChildren<QLabel*>(QStringLiteral("permGroupTitle")).size() >= 7 && panel.findChild<QLabel*>("cardTitle") == nullptr &&
+               panel.findChild<QFrame*>("iconWell") == nullptr,
+        "every permission card has a Settings-style group title above it");
+    // A dependent permission that cannot be used says why, on the row and on hover.
+    if (auto* lookup = panel.findChild<QCheckBox*>("automaticLookupCheck"); lookup != nullptr && !session.Capabilities().internet.enabled)
+    {
+        const QLabel* reason = lookup->parentWidget()->findChild<QLabel*>(QStringLiteral("permRowReason"));
+        expect(!lookup->isEnabled() && reason && !reason->isHidden() && reason->text() == "Turn on Internet lookups first" &&
+                   lookup->toolTip() == reason->text(),
+            "an unreachable permission row names the switch to turn on first");
+    }
+    if (auto* research = panel.findChild<QCheckBox*>("autonomousResearchCheck"); research != nullptr && !session.Capabilities().internet.enabled)
+    {
+        const QLabel* reason = research->parentWidget()->findChild<QLabel*>(QStringLiteral("permRowReason"));
+        expect(reason && reason->text() == "Turn on Internet lookups and Search in a visible browser first",
+            "a row that needs two switches names both");
+    }
+    // Her own name, once it is known, in every row that names her.
+    panel.SetCompanionName(QStringLiteral("Fixture Profile"));
+    if (auto* look = panel.findChild<QCheckBox*>("autonomousCameraCheck"))
+        expect(look->accessibleName() == "Let Fixture Profile decide when to look", "the permission rows follow the companion's name");
+    panel.SetCompanionName(QStringLiteral("Revia"));
     const auto footers = panel.findChildren<QWidget*>("capabilityListFooter");
     expect(footers.size() == 2, "each list editor has its own Unsaved changes footer");
     for (QWidget* footer : footers)
@@ -1668,6 +1741,7 @@ int RunSettingsSuite(int, char**)
         // fixture capability file into it.
         revia::runtime::ReviaSession session;
         CheckDialog(expect, session);
+        CheckStoreNotice(expect);
         CheckEnterKey(expect, session);
         CheckCapabilityPanel(expect, session);
         CheckProfilePanel(expect, session);

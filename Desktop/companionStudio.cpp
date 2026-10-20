@@ -542,5 +542,6 @@ void ReviaWindow::RebuildSessionPanels()
     }
     if (settingsDialog)
         settingsDialog->SetCompanionName(DisplayName());
+    capabilityPanel->SetCompanionName(DisplayName());
     ApplyResponsiveLayout();
 }

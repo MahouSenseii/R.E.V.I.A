@@ -22,7 +22,11 @@ that every boolean preference and every owner-settings key has a row.
   apply" once you have changed the switch), "Partly applies now" for a startup setting that part
   of Revia already follows while it runs (the rest takes effect at the next start, so a change also
   reads "Restart to apply"), "All companions" for values shared by every companion, "Privacy",
-  "Risky" and "Autonomy". Badges always pair a word with their colour.
+  "Risky" and "Autonomy". Badges always pair a word with their colour. When every switch in a group
+  shares "All companions" or the same restart badge, the group says it once in a line under its
+  title ("All companions · Applies after restart") and its rows show only what tells them apart; a
+  row's restart badge comes back as "Restart to apply" once it waits for one. Risky rows sit under
+  the group's red "Risky" heading instead of carrying a badge each.
 - **Confirmation.** Turning on a risky switch, or turning off one whose off state is the risky one
   (marked "asks when turned off" below), opens a question of its own, such as "Let *{name}* see
   your screen?", "Let *{name}* control the mouse?" or "Stop requiring the wake word?", with the
@@ -36,19 +40,33 @@ that every boolean preference and every owner-settings key has a row.
 - **Restart banner.** "Restart Revia to apply N changes" counts the switches whose saved value
   differs from the one in effect. "Restart now" restarts Revia; "Later" hides the banner until the
   count changes.
-- **Settings inside another.** Turning off "Let *{name}* see my screen", "Local API for other
+- **Turned off at once.** "Notice which app I'm using" (and keeping track of the screen with it),
+  "Local API for other apps", "Trust the local API as me", "Self-improvement reviews" and "Build and
+  test suggested improvements" stop as soon as they are turned off, like the microphone: an API that
+  stays on listens again as a shared guest, and reviews that stay on go on without building
+  anything. Turning one of them on still waits for a restart.
+- **Settings inside another.** Turning off "Notice which app I'm using" or "Let *{name}* see my screen", "Local API for other
   apps", "Connect *server*", "Allow the cloud model", "Self-improvement reviews" or "Picture
   generation" also puts "Keep track of my screen", "Trust the local API as me", that server's "Ask
   before each tool call", Hard questions (back to "Only when I ask"), "Build and test suggested
   improvements" and "Let picture generation use the internet" back in their safe position. The
-  permissions keep the same rule: turning off "Interactive browser" withdraws "Click and fill in
+  permissions keep the same rule: turning off "Internet lookups" withdraws "Search in a visible
+  browser" and "Research without being asked", turning off "Interactive browser" withdraws "Click and fill in
   forms", "Let tasks use the browser" and "Allow local test sites", and turning off "Run approved
   programs" withdraws "Allow shells and scripts" and "Let tasks run programs" (which cannot be
   turned on while it is off). Turning the outer switch on again never brings an inner one back
   without its own question.
 - **Dependencies.** A switch whose requirement is off is disabled and greyed with its row, and the
-  row says which switch to turn on first (or why else it cannot be used, such as no system tray). Requirements are judged on saved values, so a restart-only parent still
-  counts once you have changed it. "Works best with ..." is only a hint.
+  row says which switch to turn on first (or why else it cannot be used, such as no system tray),
+  in the permission cards too. Requirements are judged on saved values, so a restart-only parent
+  still counts once you have changed it. "Works best with ..." is only a hint.
+- **Files that cannot be read.** When `Config/settings.json` cannot be read, one orange notice above
+  the sections says so, and the switches kept in it show as off and greyed (the reason is in their
+  tooltip) rather than as made-up defaults. When the owner overlay exists but cannot be used (cut
+  short, not JSON, or far larger than Settings writes), Revia holds every privacy or risky owner
+  setting on its safe side (screen vision, app awareness, the cloud model, the trusted local API and
+  building suggested code off, every tool server asking first) and the same notice says so; the next
+  change moves the damaged file aside and starts a new one from that safe side.
 - **Inverted rows.** "Let picture generation use the internet" shows the opposite of the stored
   `image.offline` value, so the switch can ask the positive question.
 - **Reset.** Right-click a Preference or owner-overlay row for "Reset to default", which removes
@@ -142,7 +160,7 @@ Settings rows whose row frame is named after the switch plus `Row`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Screen | Let *{name}* see my screen | When you ask, *{name}* can take a screenshot and look at it on this PC. **Warning:** A screenshot shows everything on your screens, including private messages and anything you are typing. | `vision.enabled` (`sw_vision_enabled`), default off | Owner overlay (all companions) | Live | Privacy, asks when turned on |  |
 | Screen | Keep track of my screen | *{name}* keeps a short private summary of what is on screen, updated when windows change. Nothing is clicked or typed from it. **Warning:** *{name}* takes screenshots of your screens whenever windows change, without being asked, and keeps a summary of what is on them. | `vision.continuousAwareness` (`sw_vision_continuousAwareness`), default off | Owner overlay (all companions) | Live | Privacy, asks when turned on | Let *{name}* see my screen, Notice which app I'm using |
-| App awareness | Notice which app I'm using | *{name}* notes which app and window title you are using. Kept in memory only, with exclusions. | `perception.enabled` (`sw_perception_enabled`), default on | Owner overlay (all companions) | After restart | Privacy |  |
+| App awareness | Notice which app I'm using | *{name}* notes which app and window title you are using. Kept in memory only, with exclusions. | `perception.enabled` (`sw_perception_enabled`), default on | Owner overlay (all companions) | Off live, on after restart | Privacy |  |
 | App awareness | Pause app awareness for now | Stop noticing apps and the screen until you resume it or Revia restarts. | `perception.paused` (`sw_perception_paused`), default off | Session only | Live | Privacy | Notice which app I'm using |
 | Pictures | Understand pictures I attach | Load the main model's vision part so *{name}* can look at images and screenshots. Uses more graphics memory. | `llm.visionEnabled` (`sw_llm_visionEnabled`), default off | Owner overlay (all companions) | After restart |  |  |
 
@@ -218,8 +236,8 @@ Settings rows whose row frame is named after the switch plus `Row`.
 | Avatar and streaming | Discord, stream and game connections | Accept chat messages from local Discord, stream and game connectors. Replies there are public. | `presence.externalAdaptersEnabled` (`externalAdaptersCheck`), default off | Preference | Live | Privacy | Avatar and streaming features |
 | Avatar and streaming | Only reply to viewers who address *{name}* | Stream viewers get a reply only when they address *{name}* by name. | `presence.requireAddressedStreamMessages` (`sw_presence_requireAddressedStreamMessages`), default on | Preference | Live |  | Discord, stream and game connections |
 | Avatar and streaming | Speak stream replies | Read answers to stream chat out loud. | `presence.speakStreamReplies` (`sw_presence_speakStreamReplies`), default off | Preference | Live |  | Discord, stream and game connections |
-| Local API | Local API for other apps | Let other programs on this PC talk to Revia with the install token. They are treated as a shared guest by default. | `localApi.enabled` (`sw_localApi_enabled`), default off | Owner overlay (all companions) | After restart | Privacy |  |
-| Local API | Trust the local API as me | Treat every API request as if you typed it, with your memories, tools and approvals. **Warning:** Any program on this PC with the install token speaks as you. | `localApi.trustedPrivate` (`sw_localApi_trustedPrivate`), default off | Owner overlay (all companions) | After restart | Risky, asks when turned on | Local API for other apps |
+| Local API | Local API for other apps | Let other programs on this PC talk to Revia with the install token. They are treated as a shared guest by default. | `localApi.enabled` (`sw_localApi_enabled`), default off | Owner overlay (all companions) | Off live, on after restart | Privacy |  |
+| Local API | Trust the local API as me | Treat every API request as if you typed it, with your memories, tools and approvals. **Warning:** Any program on this PC with the install token speaks as you. | `localApi.trustedPrivate` (`sw_localApi_trustedPrivate`), default off | Owner overlay (all companions) | Off live, on after restart | Risky, asks when turned on | Local API for other apps |
 | Tool server: *server* | Connect *server* | Start this tool server and offer its allowed tools to *{name}*. **Warning:** The server's allowed tools become available to *{name}*, and the server runs with your account's access. | `mcp.servers[*].enabled` (`sw_mcp_*_enabled`), default off | Owner overlay (all companions) | Live | Risky, asks when turned on |  |
 | Tool server: *server* | Ask before each tool call | *{name}* asks you before every call to this server. Off lets its allowed tools run on their own. **Warning:** This server's allowed tools will run without asking you first. | `mcp.servers[*].requireConfirmation` (`sw_mcp_*_requireConfirmation`), default on | Owner overlay (all companions) | Live | Risky, asks when turned off | Connect *server* |
 
@@ -227,9 +245,9 @@ Settings rows whose row frame is named after the switch plus `Row`.
 
 | Group | Switch | What it does | Key | Stored in | Applies | Risk | Needs |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Self-improvement reviews | Self-improvement reviews | While you are away, *{name}* reviews Revia's code and writes suggested fixes. Your installed code is never changed. | `improvement.enabled` (`sw_improvement_enabled`), default on | Owner overlay (all companions) | After restart |  |  |
+| Self-improvement reviews | Self-improvement reviews | While you are away, *{name}* reviews Revia's code and writes suggested fixes. Your installed code is never changed. | `improvement.enabled` (`sw_improvement_enabled`), default on | Owner overlay (all companions) | Off live, on after restart |  |  |
 | Self-improvement reviews | Look for improvements without being asked | Review parts of Revia every couple of hours, not only after a problem was recorded. | `improvement.explore` (`sw_improvement_explore`), default on | Owner overlay (all companions) | After restart |  | Self-improvement reviews |
-| Self-improvement reviews | Build and test suggested improvements | Compile and test each suggestion in a separate copy. Uses a lot of CPU. **Warning:** Model-written code is compiled and run on this PC. | `improvement.verify` (`sw_improvement_verify`), default on | Owner overlay (all companions) | After restart | Risky, asks when turned on | Self-improvement reviews |
+| Self-improvement reviews | Build and test suggested improvements | Compile and test each suggestion in a separate copy. Uses a lot of CPU. **Warning:** Model-written code is compiled and run on this PC. | `improvement.verify` (`sw_improvement_verify`), default on | Owner overlay (all companions) | Off live, on after restart | Risky, asks when turned on | Self-improvement reviews |
 | Performance and hardware | Automatic model tuning | Fit the main model's memory use to your hardware automatically. Off uses the manual numbers in settings.json. | `llm.autoTune` (`sw_llm_autoTune`), default on | Owner overlay (all companions) | After restart |  |  |
 | Performance and hardware | Automatic reply length | Choose a reply length for each turn, up to the maximum. Ignored while a profile sets its own reply limit. | `llm.autoMaxTokens` (`sw_llm_autoMaxTokens`), default on | Owner overlay (all companions) | After restart |  |  |
 | Performance and hardware | Start the chat model server automatically | Revia starts and stops its own chat model server. Off connects to a server you run yourself, and chat stops working if none is running. | `llm.autoStartServer` (`sw_llm_autoStartServer`), default on | Owner overlay (all companions) | After restart |  |  |
