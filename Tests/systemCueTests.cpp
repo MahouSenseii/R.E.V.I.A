@@ -14,6 +14,7 @@
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <random>
 #include <set>
 #include <thread>
 
@@ -158,13 +159,21 @@ class Backend
                     nlohmann::json{{"succeeded", false}, {"message", Sentinel}, {"device_name", Sentinel}}.dump(), "application/json");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(4); };
-        // The design service lives at port + 32, which another process on a busy runner may already hold. Each attempt
-        // keeps the previous socket bound, so the next ephemeral port is a different one.
+        // The design service lives at port + 32, which may be taken: Windows hands out ephemeral ports in sequence and
+        // Hyper-V reserves whole blocks of the dynamic range. Try scattered pairs below that range. A failed bind
+        // decommissions an httplib server until stop() clears it, and a failed attempt's socket simply stays bound.
+        std::mt19937 random(std::random_device{}());
+        std::uniform_int_distribution<int> base(20000, 45000);
         bool paired = false;
-        for (int attempt = 0; attempt < 20 && !paired; ++attempt)
+        for (int attempt = 0; attempt < 64 && !paired; ++attempt)
         {
-            port = server.bind_to_any_port("127.0.0.1");
-            paired = port > 0 && port <= 65503 && design.bind_to_port("127.0.0.1", port + 32);
+            port = base(random);
+            paired = server.bind_to_port("127.0.0.1", port) && design.bind_to_port("127.0.0.1", port + 32);
+            if (!paired)
+            {
+                server.stop();
+                design.stop();
+            }
         }
         Check(paired, "Could not bind cue fixture pair.");
         thread = std::jthread([&] { server.listen_after_bind(); });
