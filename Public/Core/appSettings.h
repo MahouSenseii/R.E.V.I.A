@@ -9,6 +9,8 @@
 #include "Intelligence/intelligenceSettings.h"
 #include "LLM/endpointSettings.h"
 #include "Mcp/mcpSettings.h"
+#include "Memory/memoryReranker.h"
+#include "Memory/memoryNliWorker.h"
 #include "Perception/perceptionSettings.h"
 #include "Performance/performanceSettings.h"
 #include "Presence/localApiSettings.h"
@@ -28,6 +30,8 @@ struct appSettings
     llmSettings llm;
     intelligenceSettings intelligence;
     embeddingSettings embedding;
+    revia::memory::RerankerSettings memoryReranker;
+    revia::memory::MemoryNliSettings memoryNli;
     speechSettings speech;
     speechRecognitionSettings speechRecognition;
     performanceSettings performance;

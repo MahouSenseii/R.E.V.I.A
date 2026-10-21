@@ -20,6 +20,7 @@
 #include "Memory/conversationArchive.h"
 #include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
+#include "Audit/contentDigest.h"
 #include "Policy/desktopAuthorization.h"
 #include "reviaSessionTestAccess.h"
 #include "Core/runtimePath.h"
@@ -1543,6 +1544,119 @@ struct ReviaWindowStopTests
         }
     }
 
+    static void RunMemoryCorrectionProposalUi(ReviaWindow& window, int& failures)
+    {
+        using revia::runtime::ReviaSessionTestAccess;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition) { std::cerr << "FAIL: " << message << '\n'; ++failures; }
+        };
+        const auto wait = [&](const auto& done)
+        {
+            QElapsedTimer timer;
+            timer.start();
+            while (!done() && timer.elapsed() < 3000)
+            {
+                QCoreApplication::processEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            return done();
+        };
+        std::string error;
+        const auto previousAudience = window.Session().Audience();
+        const bool wasStarted = window.Session().IsStarted();
+        ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        struct RestoreStarted
+        {
+            revia::runtime::ReviaSession& session;
+            bool started;
+            ~RestoreStarted() { ReviaSessionTestAccess::MarkStudioStarted(session, started); }
+        } restoreStarted{window.Session(), wasStarted};
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Private, "proposal-ui", 0, {}}, error),
+            "proposal UI requires private audience fixture");
+        ReviaSessionTestAccess::DisableQualityFixtureEmbedding(window.Session());
+        expect(!ReviaSessionTestAccess::IntroduceTaskSpeaker(window.Session(), "ProposalUiOwner").empty(),
+            "proposal UI requires explicit participant");
+        (void)ReviaSessionTestAccess::StudioInput(window.Session(), revia::agents::InputSource::Typed);
+        const auto scope = ReviaSessionTestAccess::CorrectionScope(window.Session());
+        longTermMemory store(window.Session().Paths().Resolve("Memory/revia_memory.db").string());
+        const auto makeProposal = [&](const std::string& suffix)
+        {
+            memoryDecision old;
+            old.bSuccess = old.bShouldRemember = true;
+            old.category = "preference";
+            old.summary = "The user prefers tea in the " + suffix + " fixture.";
+            old.subject = revia::memory::ParticipantSubject(scope);
+            auto corrected = old;
+            corrected.summary = "The user prefers coffee in the " + suffix + " fixture.";
+            bool added = false;
+            std::string oldId, newId;
+            expect(store.Save(old, added, &oldId) && store.Save(corrected, added, &newId), "proposal UI saved pair fixture");
+            memoryEntry original;
+            for (const auto& row : store.Load()) if (row.id == oldId) original = row;
+            return revia::memory::MemoryCorrectionProposal{"ui-proposal-" + suffix, original,
+                revia::audit::ContentDigest(original.summary), newId, corrected, "Actually I now prefer coffee.", scope, 17};
+        };
+        const auto rejected = makeProposal("rejected");
+        const auto accepted = makeProposal("accepted");
+        const auto beforeCount = store.Load().size();
+        const auto beforeReceipts = store.RevisionHistory().size();
+        ReviaSessionTestAccess::QueueMemoryCorrections(window.Session(), {rejected, accepted});
+        window.ConfigureMemoryRevisionControls();
+        window.memoryPanel->Refresh();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        auto* selector = window.findChild<QComboBox*>("memoryCorrectionSelector");
+        auto* review = window.findChild<QPushButton*>("memoryCorrectionReview");
+        auto* reject = window.findChild<QPushButton*>("memoryCorrectionReject");
+        expect(selector && review && reject && selector->count() == 2, "pending exact correction selector must show both proposals");
+        if (!selector || !review || !reject) return;
+        selector->setCurrentIndex(selector->findData(QString::fromStdString(rejected.id)));
+        reject->click();
+        expect(wait([&] { return !window.studioOperationRunning.load(); }), "proposal rejection must complete through studio owner");
+        expect(store.Load().size() == beforeCount && store.RevisionHistory().size() == beforeReceipts && selector->count() == 1,
+            "reject must remove only the pending proposal, with both saved facts intact");
+        selector->setCurrentIndex(selector->findData(QString::fromStdString(accepted.id)));
+        review->click();
+        auto* original = window.findChild<QPlainTextEdit*>("memoryRevisionOriginal");
+        auto* corrected = window.findChild<QPlainTextEdit*>("memoryRevisionCorrected");
+        auto* record = window.findChild<QPushButton*>("memoryRevisionRecord");
+        expect(original && corrected && record && original->isReadOnly() && corrected->isReadOnly() &&
+            original->toPlainText().toStdString() == accepted.original.summary &&
+            corrected->toPlainText().toStdString() == accepted.corrected.summary,
+            "review must display the selected exact old and new saved text read-only");
+        expect(store.RevisionHistory().size() == beforeReceipts, "opening review must not grant owner revision authority");
+        if (corrected && record)
+        {
+            const auto renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
+            if (!renderDirectory.isEmpty())
+            {
+                SettleLayouts();
+                expect(corrected->window()->grab().save(QDir(renderDirectory).filePath("memory-correction-proposal.png")),
+                    "proposal review must have a fresh Qt capture");
+            }
+            // Even a programmatic widget change cannot change the pair submitted:
+            // the UI sends only its selected proposal ID to the session owner.
+            corrected->setPlainText("UI tamper sentinel must never become a saved fact");
+            record->click();
+            expect(wait([&] { return !window.studioOperationRunning.load(); }), "proposal acceptance must complete through studio owner");
+            const auto receipts = store.RevisionHistory();
+            expect(receipts.size() == beforeReceipts + 1 && receipts.back().originalId == accepted.original.id &&
+                receipts.back().revisedId == accepted.proposedMemoryId && !receipts.back().wasAdded &&
+                store.Load().size() == beforeCount && selector->count() == 0,
+                "accept must bind the selected pair through one receipt and reuse the exact saved replacement");
+        }
+        const auto expired = makeProposal("scope-expired");
+        ReviaSessionTestAccess::QueueMemoryCorrections(window.Session(), {expired});
+        window.memoryPanel->Refresh();
+        review->click();
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Public, "proposal-public", 0, {}}, error),
+            "proposal scope-expiry fixture");
+        expect(wait([&] { return selector->count() == 0; }), "scope change must remove private pending proposals from the panel");
+        expect(!window.findChild<QPlainTextEdit*>("memoryRevisionCorrected"), "scope expiry must close the private proposal snapshot");
+        expect(window.Session().SetAudience(previousAudience, error), "restore previous fixture audience");
+    }
+
     static void RunConfirmationAudienceUi(ReviaWindow& window, int& failures)
     {
         using namespace revia::actions;
@@ -2289,6 +2403,7 @@ int RunPolicySuite(int, char**)
         ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
         ReviaWindowStopTests::RunConversationQualityUi(window, failures);
         ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
+        ReviaWindowStopTests::RunMemoryCorrectionProposalUi(window, failures);
         ReviaWindowStopTests::RunShellUi(window, failures);
         ReviaWindowStopTests::RunSettingsReadBackUi(window, failures);
         ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);

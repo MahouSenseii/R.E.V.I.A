@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Evaluation/campaignManifest.h"
+#include "localModelCredentials.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -18,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace revia::quality
@@ -25,12 +27,26 @@ namespace revia::quality
 class ObservedLocalModel
 {
   public:
-    explicit ObservedLocalModel(const int upstreamPort)
+    explicit ObservedLocalModel(const int upstreamPort, std::string explicitApiKey = {}) : apiKey(std::move(explicitApiKey))
     {
         if (upstreamPort <= 0 || upstreamPort > 65535)
         {
             throw std::runtime_error("The observation proxy needs a valid loopback upstream port.");
         }
+        if (!apiKey.empty())
+            LocalModelCredentialSource::Validate(apiKey);
+        server.set_pre_routing_handler([this](const auto& request, auto& response)
+        {
+            // An authenticated upstream must never become an unauthenticated local
+            // bridge. No caller-provided header is forwarded to a different endpoint.
+            if (!apiKey.empty() && request.get_header_value("Authorization") != "Bearer " + apiKey)
+            {
+                response.status = 401;
+                response.set_content(R"({"error":"Evaluation proxy authentication required."})", "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
         server.Get(".*",
             [this, upstreamPort](const auto& request, auto& response)
             {
@@ -47,7 +63,7 @@ class ObservedLocalModel
                     return;
                 }
                 response.status = received->status;
-                response.set_content(received->body, received->get_header_value("Content-Type"));
+                response.set_content(SanitizedBody(received->body), received->get_header_value("Content-Type"));
             });
         for (const auto* path : {"/apply-template", "/tokenize"})
         {
@@ -63,7 +79,7 @@ class ObservedLocalModel
                         return;
                     }
                     response.status = received->status;
-                    response.set_content(received->body, received->get_header_value("Content-Type"));
+                    response.set_content(SanitizedBody(received->body), received->get_header_value("Content-Type"));
                 });
         }
         server.Post("/v1/chat/completions",
@@ -108,7 +124,7 @@ class ObservedLocalModel
                     responses.push_back({{"requestIndex", index}, {"status", received->status}, {"body", received->body}});
                 }
                 response.status = received->status;
-                response.set_content(received->body, received->get_header_value("Content-Type"));
+                response.set_content(SanitizedBody(received->body), received->get_header_value("Content-Type"));
             });
         server.set_read_timeout(5, 0);
         server.set_write_timeout(5, 0);
@@ -172,7 +188,7 @@ class ObservedLocalModel
     [[nodiscard]] std::vector<nlohmann::json> Requests() const
     {
         const std::lock_guard lock(mutex);
-        return requests;
+        return Redacted(requests);
     }
 
     void SetCompletionSeed(std::optional<std::uint64_t> seed)
@@ -184,13 +200,13 @@ class ObservedLocalModel
     [[nodiscard]] std::vector<nlohmann::json> RawRequests() const
     {
         const std::lock_guard lock(mutex);
-        return rawRequests;
+        return Redacted(rawRequests);
     }
 
     [[nodiscard]] std::vector<nlohmann::json> Responses() const
     {
         const std::lock_guard lock(mutex);
-        return responses;
+        return Redacted(responses);
     }
 
     void SaveTraffic(const std::filesystem::path& reportPath) const
@@ -323,12 +339,64 @@ class ObservedLocalModel
         }
         // Short readiness waits allow Windows shutdown to interrupt the original read budget.
         auto client = std::make_shared<CancellableClient>(upstreamPort, closing);
+        if (!apiKey.empty())
+            client->set_default_headers({{"Authorization", "Bearer " + apiKey}});
         client->set_connection_timeout(5, 0);
         client->set_read_timeout(180, 0);
         client->set_write_timeout(180, 0);
         std::erase_if(activeClients, [](const auto& prior) { return prior.expired(); });
         activeClients.push_back(client);
         return client;
+    }
+
+    [[nodiscard]] nlohmann::json Redact(nlohmann::json value) const
+    {
+        if (apiKey.empty())
+            return value;
+        const auto clean = [this](std::string text)
+        {
+            constexpr std::string_view replacement = "[REDACTED_EVALUATION_CREDENTIAL]";
+            std::size_t at = 0;
+            while ((at = text.find(apiKey, at)) != std::string::npos)
+            {
+                text.replace(at, apiKey.size(), replacement);
+                at += replacement.size();
+            }
+            return text;
+        };
+        if (value.is_string())
+            return clean(value.get<std::string>());
+        if (value.is_object())
+        {
+            nlohmann::json object = nlohmann::json::object();
+            for (const auto& [key, item] : value.items())
+                object[clean(key)] = Redact(item);
+            return object;
+        }
+        if (value.is_array())
+            for (auto& item : value)
+                item = Redact(std::move(item));
+        return value;
+    }
+
+    [[nodiscard]] std::vector<nlohmann::json> Redacted(std::vector<nlohmann::json> values) const
+    {
+        for (auto& value : values)
+            value = Redact(std::move(value));
+        return values;
+    }
+
+    [[nodiscard]] std::string SanitizedBody(const std::string& body) const
+    {
+        if (apiKey.empty())
+            return body;
+        const auto parsed = nlohmann::json::parse(body, nullptr, false);
+        if (parsed.is_discarded())
+            return Redact(body).get<std::string>();
+        const auto clean = Redact(parsed);
+        // Preserve normal wire bytes. Only a reflected credential changes content,
+        // before it can enter the runtime's reply artifacts or diagnostic logs.
+        return clean == parsed ? body : clean.dump();
     }
 
     static void SaveJson(const std::filesystem::path& path, const nlohmann::json& value, bool immutable = false)
@@ -351,6 +419,7 @@ class ObservedLocalModel
     }
 
     mutable std::mutex mutex;
+    const std::string apiKey;
     std::atomic<bool> closing{false};
     std::optional<std::uint64_t> completionSeed;
     std::vector<nlohmann::json> requests;

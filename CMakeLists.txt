@@ -493,6 +493,13 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaAnswerQualityTests Tests/answerQualityTests.cpp RunAnswerQualityTests)
     revia_add_studio_check(ReviaQualityFeedbackTests Tests/qualityFeedbackTests.cpp RunQualityFeedbackTests)
     revia_add_studio_check(ReviaMemoryRevisionTests Tests/memoryRevisionTests.cpp RunMemoryRevisionTests)
+    revia_add_studio_check(ReviaMemoryCorrectionTests Tests/memoryCorrectionTests.cpp RunMemoryCorrectionTests)
+    revia_add_studio_check(ReviaMemoryCorrectionAgentTests Tests/memoryCorrectionAgentTests.cpp RunMemoryCorrectionAgentTests)
+    revia_add_studio_check(ReviaMemoryCorrectionRuntimeTests Tests/memoryCorrectionRuntimeTests.cpp RunMemoryCorrectionRuntimeTests)
+    revia_add_studio_check(ReviaSemanticDuplicateTests Tests/semanticDuplicateTests.cpp RunSemanticDuplicateTests)
+    revia_add_studio_check(ReviaSemanticDuplicateAgentTests Tests/semanticDuplicateAgentTests.cpp RunSemanticDuplicateAgentTests)
+    revia_add_studio_check(ReviaConversationArchiveHybridTests Tests/conversationArchiveHybridTests.cpp RunConversationArchiveHybridTests)
+    revia_add_studio_check(ReviaArchiveEmbeddingBackfillTests Tests/archiveEmbeddingBackfillTests.cpp RunArchiveEmbeddingBackfillTests)
     revia_add_studio_check(ReviaQualityFeedbackRuntimeTests Tests/qualityFeedbackRuntimeTests.cpp RunQualityFeedbackRuntimeTests)
     revia_add_studio_check(ReviaImprovementAgentTests Tests/improvementAgentTests.cpp RunImprovementAgentTests)
     revia_add_studio_check(ReviaContextFittingTests Tests/contextFittingTests.cpp RunContextFittingTests)
@@ -637,6 +644,7 @@ if(BUILD_TESTING)
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(sessionIdentityTests|companionRuntimeTests)\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/studioPanelTests\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/observedLocalModelTests\\.cpp$")
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(memoryRerankerTests|memoryRetrievalPipelineTests|memoryNliWorkerTests)\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(taskContractTests|taskContractIntegrationTests|taskContractSessionTests|evaluationCampaignTests|evidenceJournalTests|cognitionEvaluationTests)\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/developmentStudioLiveTests\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(drawingRequestPolicyTests|imageArtifactTests|imageGeneratorTests|imageActionTests|imageGeneration\\.live)\\.cpp$")
@@ -679,6 +687,7 @@ if(BUILD_TESTING)
         add_executable(ReviaArchiveWriterTests
                 Tests/Fixture/archiveWriterTests.cpp
                 Private/Memory/conversationArchive.cpp
+                Private/Memory/hybridRanking.cpp
                 Private/Memory/memoryScope.cpp
                 Private/Memory/sensitiveContent.cpp
                 Private/Memory/temporalQuery.cpp)
@@ -798,10 +807,39 @@ if(BUILD_TESTING)
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_executable(ReviaMemoryRerankerTests Tests/memoryRerankerTests.cpp)
+        revia_link_foundation(ReviaMemoryRerankerTests)
+        add_test(NAME Revia.MemoryReranker COMMAND ReviaMemoryRerankerTests
+            "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/memoryRerankerFixture.py")
+        set_tests_properties(Revia.MemoryReranker PROPERTIES TIMEOUT 45)
+        add_executable(ReviaMemoryNliWorkerTests Tests/memoryNliWorkerTests.cpp)
+        revia_link_foundation(ReviaMemoryNliWorkerTests)
+        add_test(NAME Revia.MemoryNliWorker COMMAND ReviaMemoryNliWorkerTests
+            "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/memoryNliFixture.py")
+        set_tests_properties(Revia.MemoryNliWorker PROPERTIES TIMEOUT 45)
+        add_executable(ReviaMemoryRetrievalPipelineTests Tests/memoryRetrievalPipelineTests.cpp)
+        revia_link_foundation(ReviaMemoryRetrievalPipelineTests)
+        add_test(NAME Revia.MemoryRetrievalPipeline COMMAND ReviaMemoryRetrievalPipelineTests
+            "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Tests/Fixture/memoryRerankerFixture.py")
+        set_tests_properties(Revia.MemoryRetrievalPipeline PROPERTIES TIMEOUT 60)
+        add_test(NAME Revia.MemoryRerankerWorker COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Workers" -p test_memory_reranker.py)
+        add_test(NAME Revia.MemoryNliPythonWorker COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Workers" -p test_memory_nli.py)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+            RESULT_VARIABLE REVIA_RETRIEVAL_NUMPY OUTPUT_QUIET ERROR_QUIET TIMEOUT 10)
+        if(REVIA_RETRIEVAL_NUMPY EQUAL 0)
+            add_test(NAME Revia.RetrievalBenchmarkContracts COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Quality/retrievalBenchmarkTests.py")
+        endif()
         add_test(NAME Revia.GuestPreparation COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/guestSandbox.test.py")
         add_test(NAME Revia.ContextBenchmarkContract COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/contextBenchmark.test.py")
+        add_test(NAME Revia.AnswerGateSessionContract COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Quality/answerGateSessionTests.py")
+        add_test(NAME Revia.NliDedupBenchmarkContract COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/nliDedupBenchmark.test.py")
         add_test(
                 NAME Revia.QwenTtsServicePolicy
                 COMMAND "${Python3_EXECUTABLE}"

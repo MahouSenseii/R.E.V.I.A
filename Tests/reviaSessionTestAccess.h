@@ -46,6 +46,13 @@ struct ReviaSessionTestAccess
         embedding.modelName.clear();
         session.router.ApplyLLMSettings(session.settings.llm, embedding, session.profile);
     }
+    static memory::MemoryScope CorrectionScope(const ReviaSession& session)
+    { return session.CapturePrivateMemoryScope(); }
+    static void QueueMemoryCorrections(ReviaSession& session, const std::vector<memory::MemoryCorrectionProposal>& proposals)
+    { session.QueueMemoryCorrectionProposals(proposals, session.Stamp()); }
+    static void QueueMemoryCorrectionsFromOrigin(ReviaSession& session,
+        const std::vector<memory::MemoryCorrectionProposal>& proposals, const RuntimeStamp& origin)
+    { session.QueueMemoryCorrectionProposals(proposals, origin); }
     static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
     static attachments::AttachmentLibrary& Attachments(ReviaSession& session) { return session.Attachments(); }
     // Main with or without its vision projector, and no embedding server, so document
@@ -121,6 +128,13 @@ struct ReviaSessionTestAccess
         tests::Check(session.conversationArchive.BeginSession(sessionId, error), error);
         std::lock_guard idLock(session.conversationIdMutex);
         session.conversationSessionId = sessionId;
+    }
+    static std::string RecallArchivedConversation(ReviaSession& session, const memory::RecallRequest& request,
+        const std::string& currentInput, const memory::MemoryScope& scope)
+    {
+        std::lock_guard lock(session.operationMutex);
+        (void)session.BeginOperation();
+        return session.RecallConversation(request, currentInput, scope);
     }
     static std::vector<conversationMessage> WorkingContext(ReviaSession& session)
     {

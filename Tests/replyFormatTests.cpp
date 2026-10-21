@@ -10,6 +10,42 @@ void RunReplyContractTests()
 {
     using namespace revia::agents;
     using revia::tests::Check;
+    const auto sourceCatalog = RequestedReplyContract(
+        R"(Use this JSON Schema: {"type":"object","properties":{"source":{"type":"string","enum":["D1","D2"]}},"required":["source"],"additionalProperties":false}. Return only JSON.)");
+    Check(sourceCatalog.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"source":"D1"})", sourceCatalog) && MatchesReplyContract(R"({"source":"D2"})", sourceCatalog),
+        "A declared source catalog was dropped instead of preserving both available source IDs.");
+    for (const std::string payload : {R"({"source":2})", R"({"source":"Source D2"})", R"({"source":"D3"})",
+             R"({"source":"D2 "})", R"({"source":"D1","source":"D2"})"})
+        Check(!MatchesReplyContract(payload, sourceCatalog), "A malformed source identifier was normalized or accepted.");
+    for (const std::string invalidEnum : {"[]", R"(["D2","D2"])", R"(["D2",2])", R"([{"nested":true}])", R"("D2")"})
+    {
+        const auto invalid = RequestedReplyContract(
+            R"(Use this JSON Schema: {"type":"object","properties":{"source":{"type":"string","enum":)" + invalidEnum +
+            R"(}},"required":["source"],"additionalProperties":false})");
+        Check(invalid.extractionStatus == ReplyContractStatus::Unsupported,
+            "A malformed, untyped or duplicate enum bypassed bounded schema admission.");
+    }
+    const auto scalarCatalog = RequestedReplyContract(
+        R"(Use this JSON Schema: {"type":"object","properties":{"count":{"type":"integer","enum":[1,2]},"ratio":{"type":"number","enum":[1,2.5]},"ready":{"type":"boolean","enum":[true]},"absent":{"type":"null","enum":[null]}},"required":["count","ratio","ready","absent"],"additionalProperties":false})");
+    Check(scalarCatalog.extractionStatus == ReplyContractStatus::ExplicitShape &&
+              MatchesReplyContract(R"({"count":2,"ratio":2.5,"ready":true,"absent":null})", scalarCatalog) &&
+              !MatchesReplyContract(R"({"count":2.0,"ratio":2.5,"ready":true,"absent":null})", scalarCatalog) &&
+              !MatchesReplyContract(R"({"count":2,"ratio":2.5,"ready":false,"absent":null})", scalarCatalog),
+        "Typed scalar enum validation coerced values or ignored a permitted-value constraint.");
+    nlohmann::json boundedEnum = nlohmann::json::array();
+    for (std::size_t index = 0; index <= MaximumReplySchemaKeys; ++index)
+    {
+        boundedEnum.push_back("ID" + std::to_string(index));
+        if (boundedEnum.size() >= MaximumReplySchemaKeys)
+        {
+            const auto contract = RequestedReplyContract(
+                R"(Use this JSON Schema: {"type":"array","items":{"type":"string","enum":)" + boundedEnum.dump() + "}}");
+            Check(contract.extractionStatus == (boundedEnum.size() == MaximumReplySchemaKeys ?
+                    ReplyContractStatus::ExplicitShape : ReplyContractStatus::Unsupported),
+                "The scalar enum size admission bound was not enforced.");
+        }
+    }
     const std::string introducedSchema =
         R"({"type":"object","properties":{"thermalRatio":{"type":"number"},"enabledFlag":{"type":"boolean"}},"required":["thermalRatio","enabledFlag"],"additionalProperties":false})";
     for (const std::string lead : {"Follow this JSON Schema: ", "Use this JSON Schema: "})

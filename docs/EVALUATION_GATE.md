@@ -9,9 +9,14 @@ It sits beside the existing tools rather than replacing them. `/eval` and
 `ReviaAnswerQualityLive` still check the conversation contract. The cognition campaign still
 owns frozen, provenance-bound structured answers ([FOUNDATION_EVALUATION.md](FOUNDATION_EVALUATION.md)).
 The gate reuses `ConversationEvaluator::Run` to collect replies, the observed loopback proxy
-to keep exact request and response sidecars, and `ConversationRuntime::EvaluateTurn` as the
+to keep request and response sidecars, and `ConversationRuntime::EvaluateTurn` as the default
 reply path. An evaluation turn therefore never enters dialogue history or memory and never
 speaks.
+
+The live gate explicitly disables private memory and embeddings. Its baseline is an
+answer/prompt guardrail, not a retrieval benchmark. Use the separate
+[memory retrieval evaluation](MEMORY_RETRIEVAL.md) for archive and curated-memory changes;
+retrieval Hit@6 gains do not establish end-to-end answer gains.
 
 ## What is verified and what is not
 
@@ -147,12 +152,22 @@ cmake --preset release
 cmake --build --preset release --target ReviaAnswerGateLive
 ```
 
-Start Revia (or a bare llama-server) so a model answers on loopback, then run from the
-source root:
+Use an explicitly configured evaluation llama-server on loopback, then run from the source
+root. The runner never starts a model process or discovers a normal Revia session's private
+key. Supply the evaluation endpoint's credential through an explicitly selected file or
+environment variable. Keep application authentication enabled.
 
 ```powershell
 .\build\release\ReviaAnswerGateLive.exe Config\Profiles\revia.json Config\Evaluation\golden-set.jsonl 8080
 ```
+
+For a keyed endpoint, append `--api-key-env REVIA_EVAL_API_KEY` or
+`--api-key-file <operator-selected-file>`; do not put the token itself in the command line.
+The proxy requires the same credential from its caller and forwards only the configured
+credential upstream. Model discovery must succeed and identify exactly one model before
+the corpus runs. `--expected-model <id>` additionally binds the selected model identity.
+Secret values and headers are not saved; a credential reflected into captured bodies is
+redacted. Sidecars otherwise preserve the original and forwarded request bytes.
 
 Useful options:
 
@@ -160,6 +175,7 @@ Useful options:
 | --- | --- | --- |
 | `--output-dir <dir>` | `RuntimeData/Evaluation` | Where results and history go. |
 | `--baseline <file>` | `Config/Evaluation/golden-baseline.json` when present | The baseline to compare with. |
+| `--ignore-baseline` | off | Independent scoring with no pairwise baseline; exclusive with `--baseline`. |
 | `--max-drop <points>` | 3 | Allowed drop in the overall pass rate. |
 | `--max-unavailable <pct>` | 5 | Unjudged cases allowed before the run counts as incomplete. |
 | `--min-judge-coverage <pct>` | 90 | Judge verdicts required, as a share of answered cases. |
@@ -168,8 +184,74 @@ Useful options:
 | `--category <name>` | all | Run one category (repeatable). Only the shared cases are compared. |
 | `--write-baseline <file>` | none | Also write this run as a baseline. |
 | `--commit <id>` | empty | The source revision recorded in the results. |
+| `--api-key-file`, `--api-key-env` | none | One explicit candidate credential source. |
+| `--judge-api-key-file`, `--judge-api-key-env` | candidate source only when the judge uses the same port | One explicit judge credential source. |
+| `--judge-expert-api-key-file`, `--judge-expert-api-key-env` | none | One explicit Expert judge credential source. |
+| `--expected-model <id>` | none | Refuse a different candidate model identity. |
+| `--seed <integer>` | no override | Inject the recorded seed into candidate and judge completions. |
+| `--context-size <tokens>`, `--max-tokens <tokens>` | 8192, 512 | Client budgets; these do not change the server context or cache settings. |
+| `--omit-system-prompt`, `--omit-state-packet`, `--omit-style-guidance` | all blocks present | Per-run measurement controls described below. |
 
 A full run makes 212 conversation calls (22 cases have several turns) and up to 181 judge calls.
+
+`Tools/Quality/answerGateSession.py` can own a bounded evaluation session when explicitly
+invoked. Set `$ModelPath` to the chosen existing GGUF, then run:
+
+```powershell
+python Tools/Quality/answerGateSession.py --server ThirdParty/llama.cpp/llama-server.exe --model $ModelPath `
+  --gate build/release/ReviaAnswerGateLive.exe --profile Config/Profiles/revia.json `
+  --corpus Config/Evaluation/golden-set.jsonl --output RuntimeData/Evaluation/first-control `
+  --seeds 0 1 --context 8192 --max-tokens 512 --record-baseline --commit (git rev-parse HEAD)
+```
+
+The destination must be new. This harness starts one owned offline server on a random
+loopback port with a random model alias and temporary API-key file outside the evidence
+directory. Readiness checks prove wrong-key rejection, the exact alias, one slot, and the
+requested context. A dedicated environment variable passes the credential to the gate;
+the value is excluded from commands and evidence. Logs redact reflected credentials.
+The default total deadline is 10,800 seconds; one to four distinct seeds are allowed.
+Cleanup stops only the child gate/server and removes only the credential it created.
+The candidate also judges itself, so this is a repeatable local baseline, not an independent
+model-quality oracle. Every judged repeat requires all selected answers and judgments.
+
+The wrapper defaults to independent scoring without a pairwise baseline; supply
+`--baseline <file>` for a deliberate comparison. It records hashes of the model, server,
+gate, profile, corpus, and harnesses, validates unchanged inputs, and retains per-seed
+coverage and exit codes. `--record-baseline` saves the first seed as a candidate artifact
+only; review both complete repetitions before accepting it. It never commits files.
+`--experiment omit-state-packet` (or the other named block), `--category`, and `--no-judge`
+support later experiments; partial or unjudged runs cannot record a baseline. A custom
+corpus still follows the existing maximum of 12 turns per case. A 12-turn, unjudged case
+can measure observed backend cache reuse with real preceding evaluation replies.
+
+### Measuring prompt blocks
+
+First retain a complete, judged, full-prompt control at fixed model, profile, corpus,
+context, output budget, judge configuration, and seed. Repeat the control with a second
+declared seed before interpreting small differences. Run each single-block omission with
+the same settings and seeds, and compare paired case IDs, category scores, unavailable
+counts, exact-format failures, and persona/continuity/safety failures. Keep per-seed
+results separate. If several controls are changed together, label the result a combined
+experiment; it does not identify one block's contribution.
+
+`--omit-system-prompt` clears the authored prompt in the candidate's local profile copy.
+`--omit-state-packet` and `--omit-style-guidance` use the per-call
+`EvaluateTurnForExperiment` seam. The judge keeps the full authored profile. All three
+blocks remain enabled by default; no profile file, application setting, identity state,
+or subsequent ordinary turn is changed. Answer-obligation guidance, arithmetic grounding,
+runtime truth, response validation, and typed action policy remain in force. These
+experiments measure the named prompt blocks, not an instruction-free model.
+
+Run the original full-prompt control before a pipeline change and the same control after
+the change, before comparing ablations. A frozen-pipeline adapter can be compiled with
+`REVIA_EVAL_BASELINE_ONLY`; it rejects omissions and calls only the original `EvaluateTurn`
+entry point. Its provenance must identify the copied original libraries and compatible
+headers separately from the new authentication scaffold. Stable binary hashes do not prove
+the original archive's compiler inputs. No such adapter result is a fresh full-source build.
+
+Context/cache/Expert comparisons use the separate bounded `contextBenchmark.py` harness.
+Do not infer answer-quality gains from throughput or retrieval scores. Use the same
+answer gate corpus to validate a configuration before changing product defaults.
 
 ### Results
 
@@ -180,9 +262,10 @@ Each run writes, under the output directory:
   reply, repair flag and check failures, plus the judge verdict.
 - `<timestamp>.summary.json`: per-category pass rates and mean judge scores, pairwise
   preferences, the gate decision, and provenance. Provenance covers the commit, model,
-  judge, corpus digest, profile digest, ports, options and elapsed time.
+  judge, corpus digest, profile digest, prompt-block controls, seed, credential-source kinds,
+  context/output budgets, ports, options and elapsed time.
 - `history.jsonl`: one summary line appended per run, for trends.
-- `<timestamp>.jsonl.requests.json` / `.responses.json`: the exact candidate traffic.
+- `<timestamp>.jsonl.requests.json` / `.responses.json`: candidate traffic, with configured secrets redacted.
   `<timestamp>.judge.*.json` holds the judge traffic.
 - `<timestamp>.runtime/`: disposable runtime state and the exact golden-set bytes used.
 
@@ -216,7 +299,11 @@ of a lucky night.
    .\build\release\ReviaAnswerGateLive.exe Config\Profiles\revia.json Config\Evaluation\golden-set.jsonl 8080 `
        --commit (git rev-parse HEAD) --write-baseline Config\Evaluation\golden-baseline.json
    ```
-   An incomplete run is refused as a baseline.
+   Every case must have an available answer and judge verdict. Subsets, deterministic-only
+   runs, prompt ablations, incomplete runs, and an existing output file are refused.
+   When replacing an accepted baseline, write a new candidate path and review its diff
+   before deliberately replacing the checked-in file. The baseline retains provenance
+   and a link to its complete result artifact.
 5. Commit `Config/Evaluation/golden-baseline.json` in its own pull request. In the
    description, give the model, the judge, and the old and new pass rates per category.
    The file stores every case's final reply, so the diff shows exactly what changed.

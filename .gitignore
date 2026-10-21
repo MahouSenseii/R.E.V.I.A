@@ -16,6 +16,8 @@ aqtinstall.log
 /Models/*.gguf
 /Models/*.bin
 /Models/Live2D/
+/Models/MemoryReranker/
+/Models/MemoryNli/
 /ThirdParty/
 /RuntimeData/
 __pycache__/

@@ -22,6 +22,7 @@ public:
     promptBuilder();
     explicit promptBuilder(std::string memoryDatabasePath);
     ~promptBuilder();
+    void SetMemoryReranker(std::shared_ptr<revia::memory::MemoryReranker> value) { reranker = std::move(value); }
 
     // Bounded admitted topic evidence disambiguates follow-ups; embedding and lexical recall share it.
     [[nodiscard]] static std::string BuildRetrievalQuery(const std::vector<conversationMessage>& context);
@@ -53,7 +54,8 @@ public:
         // When the newest message is the user's, send posture and memories at its start
         // instead of in the system message, so the system message is identical between
         // turns and the backend can reuse its cached prompt.
-        bool stablePrefix = false
+        bool stablePrefix = false,
+        std::stop_token stopToken = {}
     ) const;
     std::string BuildMemoryBlock(const std::string& query = "") const;
     // The saved memories closest to `query`, for a caller deciding whether something is
@@ -64,4 +66,5 @@ public:
   private:
 
     longTermMemory memory;
+    std::shared_ptr<revia::memory::MemoryReranker> reranker;
 };

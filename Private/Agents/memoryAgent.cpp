@@ -19,7 +19,7 @@ namespace
     // is a separate Critical failure event that this never touches.
     bool IsCoalescableBackfillSuccess(const MemoryAgentEvent& event)
     {
-        return event.operation == "memory_backfill" && event.decision.bSuccess &&
+        return (event.operation == "memory_backfill" || event.operation == "archive_backfill") && event.decision.bSuccess &&
             event.saveSucceeded;
     }
 }
@@ -37,6 +37,62 @@ MemoryAgent::MemoryAgent(std::string memoryDatabasePath)
 MemoryAgent::~MemoryAgent()
 {
     Stop();
+}
+
+void MemoryAgent::ConfigureSemanticDuplicates(memory::SemanticDuplicateSettings settings,
+    std::shared_ptr<memory::SemanticDuplicateScorer> scorer, memory::MemoryScope scope,
+    std::function<bool()> contextAdmission)
+{
+    std::optional<DuplicateConfiguration> retired;
+    {
+        std::lock_guard lock(mutex);
+        retired = std::move(duplicates);
+        duplicates.reset();
+        if (scorer && memory::ValidSemanticDuplicateSettings(settings) && memory::IsAttributedPrivateScope(scope))
+            duplicates = DuplicateConfiguration{std::move(settings), std::move(scorer), std::move(scope),
+                std::move(contextAdmission), {}};
+    }
+    if (retired) retired->cancellation.request_stop();
+}
+
+void MemoryAgent::DisableSemanticDuplicates()
+{
+    ConfigureSemanticDuplicates({}, {}, {});
+}
+
+std::size_t MemoryAgent::MarkSemanticDuplicates(const std::string& id, const std::string& model,
+    const Task& task, std::stop_token ownerToken)
+{
+    std::optional<DuplicateConfiguration> configuration;
+    {
+        std::lock_guard lock(mutex);
+        configuration = duplicates;
+    }
+    if (!configuration || task.archive || id.empty() || model.empty()) return 0;
+    // Only curated scans have no captured conversational scope. An explicitly
+    // non-private task cannot borrow a formerly private configuration.
+    const bool hasCapturedScope = !task.scope.participantId.empty() || !task.scope.companionId.empty() ||
+        !task.scope.audience.audienceId.empty() || task.scope.audience.kind != identity::AudienceKind::Unknown;
+    if (hasCapturedScope && !memory::IsAttributedPrivateScope(task.scope)) return 0;
+    // A captured private task may not borrow a different participant's later scope.
+    if (memory::IsAttributedPrivateScope(task.scope) &&
+        (task.scope.participantId != configuration->scope.participantId ||
+         task.scope.companionId != configuration->scope.companionId ||
+         task.scope.audience.audienceId != configuration->scope.audience.audienceId ||
+         task.scope.audience.revision != configuration->scope.audience.revision ||
+         task.scope.audience.recipientEntityIds != configuration->scope.audience.recipientEntityIds ||
+         task.scope.participantSource != configuration->scope.participantSource ||
+         task.scope.consentRevision != configuration->scope.consentRevision)) return 0;
+    std::stop_source cancellation;
+    std::stop_callback ownerStopped(ownerToken, [&] { cancellation.request_stop(); });
+    std::stop_callback configurationStopped(configuration->cancellation.get_token(), [&] { cancellation.request_stop(); });
+    const auto admission = [&] { return !cancellation.stop_requested() && Admitted(task.admission) && Admitted(configuration->admission); };
+    try
+    {
+        return memory.CheckSemanticDuplicates(id, model, configuration->scope, configuration->settings,
+            configuration->scorer.get(), cancellation.get_token(), admission).marked;
+    }
+    catch (...) { return 0; } // Optional advisory work never changes save disposition.
 }
 
 std::string ToString(const MemoryTaskClass value)
@@ -153,7 +209,7 @@ MemoryAgent::QueueDepths MemoryAgent::Depths() const
 
 MemoryEventPriority MemoryAgent::ClassifyEventPriority(const MemoryAgentEvent& event)
 {
-    if (event.operation == "memory_backfill")
+    if (event.operation == "memory_backfill" || event.operation == "archive_backfill")
     {
         // A failed embedding or a failed write to a memory that already exists is the
         // only way backfill loses ground; a success just means the next scan will not
@@ -181,7 +237,7 @@ MemoryEventPriority MemoryAgent::ClassifyEventPriority(const MemoryAgentEvent& e
         // would otherwise never see.
         return MemoryEventPriority::Critical;
     }
-    if (event.decision.bShouldRemember && event.wasAdded)
+    if ((event.decision.bShouldRemember && event.wasAdded) || !event.correctionProposals.empty())
     {
         return MemoryEventPriority::Important;
     }
@@ -210,8 +266,8 @@ std::size_t MemoryAgent::CriticalEventsEvicted() const
 
 std::string MemoryAgent::AdmitEventLocked(MemoryAgentEvent value, std::function<bool()> guard)
 {
-    if (!Admitted(guard))
-        return {};
+    // Retired guards are filtered when events leave the queue. Invoking a scope
+    // callback here would invert the session's scope -> queue lock order.
     PendingEvent event;
     static_cast<MemoryAgentEvent&>(event) = std::move(value);
     event.admission = std::move(guard);
@@ -294,11 +350,14 @@ void MemoryAgent::Report(const std::string& line) const
 
 bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
 {
+    // Admission can acquire session scope locks. Never invoke it under the queue
+    // mutex; the worker and durable writes revalidate after dequeue as well.
+    if (!Admitted(task.admission)) return false;
     std::string report;
     bool admitted = true;
     {
         std::lock_guard lock(mutex);
-        if (worker.get_stop_token().stop_requested() || !Admitted(task.admission)) return false;
+        if (worker.get_stop_token().stop_requested()) return false;
         switch (taskClass)
         {
             case MemoryTaskClass::InteractiveTurn:
@@ -328,15 +387,16 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
                         std::to_string(learningTasks.size());
                     break;
                 }
-                if (!pendingEmbeddingIds.emplace(task.embeddingModel, task.memoryId).second)
+                if (!pendingEmbeddingIds.insert(EmbeddingKey(task)).second)
                     return false;
                 learningTasks.push_back(std::move(task));
                 break;
             }
             case MemoryTaskClass::EmbeddingBackfill:
             {
-                if (task.scheduledBackfill && (!backfill ||
-                    task.backfillStop != backfill->cancellation.get_token() ||
+                const auto& subscription = task.archive ? archiveBackfill : backfill;
+                if (task.scheduledBackfill && (!subscription ||
+                    task.backfillStop != subscription->cancellation.get_token() ||
                     task.backfillStop.stop_requested())) return false;
                 if (backfillTasks.size() >= limits.maximumBackfill)
                 {
@@ -345,7 +405,7 @@ bool MemoryAgent::Enqueue(const MemoryTaskClass taskClass, Task task)
                         "type=backfill | depth=" + std::to_string(backfillTasks.size());
                     break;
                 }
-                if (!pendingEmbeddingIds.emplace(task.embeddingModel, task.memoryId).second)
+                if (!pendingEmbeddingIds.insert(EmbeddingKey(task)).second)
                     return false;
                 backfillTasks.push_back(std::move(task));
                 break;
@@ -468,7 +528,8 @@ LearnedFindingResult MemoryAgent::SubmitLearnedFinding(const messageRouter& rout
 }
 
 LearnedFindingResult MemoryAgent::SubmitOwnerMemoryRevision(const messageRouter& router, const memory::MemoryRevisionRequest& request,
-    memory::MemoryRevisionReceipt& receipt, std::string& error, const std::stop_token stopToken)
+    memory::MemoryRevisionReceipt& receipt, std::string& error, const std::stop_token stopToken,
+    memory::MemoryRevisionScopeAdmission acquireReviewScope)
 {
     receipt = {};
     const auto guard = [this, origin = CaptureAdmission(), stopToken]
@@ -478,7 +539,7 @@ LearnedFindingResult MemoryAgent::SubmitOwnerMemoryRevision(const messageRouter&
         error = "Owner memory revision belongs to an inactive memory worker.";
         return LearnedFindingResult::Failed;
     }
-    if (!memory.SaveOwnerRevision(request, receipt, error, guard))
+    if (!memory.SaveOwnerRevision(request, receipt, error, guard, std::move(acquireReviewScope)))
         return LearnedFindingResult::Failed;
     // The semantic revision and its receipt already committed. Backfill on the
     // existing worker recovers any optional vector work after queue pressure or Stop.
@@ -522,20 +583,24 @@ void MemoryAgent::SubmitEmbeddingBackfill(const messageRouter& router, const std
 void MemoryAgent::StartEmbeddingBackfill(const messageRouter& router, const std::string& model)
 {
     if (model.empty()) { StopEmbeddingBackfill(); return; }
+    const auto admitted = CaptureAdmission();
+    if (!Admitted(admitted)) return;
     std::optional<std::stop_source> previous;
     {
         std::lock_guard lock(mutex);
         if (worker.get_stop_token().stop_requested()) return;
         if (backfill && backfill->router == &router && backfill->model == model) return;
         if (backfill) previous = backfill->cancellation;
-        for (const auto& task : backfillTasks)
-            pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
-        backfillTasks.clear();
+        std::erase_if(backfillTasks, [&](const Task& task)
+        {
+            if (task.archive) return false;
+            pendingEmbeddingIds.erase(EmbeddingKey(task));
+            return true;
+        });
         // Assigned rather than emplaced: clang cannot default-construct a nested type
         // with member initializers until the enclosing class is complete.
         backfill = BackfillSubscription{};
-        backfill->admission = admissionGuard;
-        if (!Admitted(backfill->admission)) { backfill.reset(); return; }
+        backfill->admission = admitted;
         backfill->router = &router;
         backfill->model = model;
         backfill->nextScan = std::chrono::steady_clock::now();
@@ -544,18 +609,98 @@ void MemoryAgent::StartEmbeddingBackfill(const messageRouter& router, const std:
     taskAvailable.notify_all();
 }
 
-void MemoryAgent::StopEmbeddingBackfill()
+void MemoryAgent::StartArchiveEmbeddingBackfill(const messageRouter& router, memory::ConversationArchive& archive,
+    const std::string& model, const memory::MemoryScope& scope, std::function<bool()> contextAdmission)
+{
+    if (model.empty() || !memory::IsAttributedPrivateScope(scope))
+    {
+        StopArchiveEmbeddingBackfill();
+        return;
+    }
+    std::optional<BackfillSubscription> observed;
+    {
+        std::lock_guard lock(mutex);
+        observed = archiveBackfill;
+    }
+    const bool observedAdmitted = observed && Admitted(observed->admission);
+    const auto guard = [sessionAdmission = CaptureAdmission(), contextAdmission = std::move(contextAdmission)]
+    {
+        return Admitted(sessionAdmission) && Admitted(contextAdmission);
+    };
+    const bool mayStart = Admitted(guard);
+    std::optional<std::stop_source> previous;
+    {
+        std::lock_guard lock(mutex);
+        if (worker.get_stop_token().stop_requested()) return;
+        if (mayStart && observedAdmitted && archiveBackfill && observed &&
+            archiveBackfill->cancellation.get_token() == observed->cancellation.get_token() &&
+            archiveBackfill->router == &router && archiveBackfill->archive == &archive &&
+            archiveBackfill->model == model && archiveBackfill->scope.participantId == scope.participantId &&
+            archiveBackfill->scope.audience.kind == scope.audience.kind &&
+            archiveBackfill->scope.audience.audienceId == scope.audience.audienceId &&
+            archiveBackfill->scope.audience.revision == scope.audience.revision &&
+            archiveBackfill->scope.participantSource == scope.participantSource &&
+            archiveBackfill->scope.consentRevision == scope.consentRevision &&
+            archiveBackfill->scope.companionId == scope.companionId)
+            return;
+        if (archiveBackfill) previous = archiveBackfill->cancellation;
+        std::erase_if(backfillTasks, [&](const Task& task)
+        {
+            if (!task.archive) return false;
+            pendingEmbeddingIds.erase(EmbeddingKey(task));
+            return true;
+        });
+        archiveBackfill = BackfillSubscription{};
+        archiveBackfill->admission = guard;
+        if (!mayStart)
+            archiveBackfill.reset();
+        else
+        {
+            archiveBackfill->router = &router;
+            archiveBackfill->archive = &archive;
+            archiveBackfill->scope = scope;
+            archiveBackfill->model = model;
+            archiveBackfill->nextScan = std::chrono::steady_clock::now();
+        }
+    }
+    if (previous) previous->request_stop();
+    taskAvailable.notify_all();
+}
+
+void MemoryAgent::StopArchiveEmbeddingBackfill()
 {
     std::optional<std::stop_source> previous;
     {
         std::lock_guard lock(mutex);
+        if (archiveBackfill) previous = archiveBackfill->cancellation;
+        archiveBackfill.reset();
+        std::erase_if(backfillTasks, [&](const Task& task)
+        {
+            if (!task.archive) return false;
+            pendingEmbeddingIds.erase(EmbeddingKey(task));
+            return true;
+        });
+    }
+    if (previous) previous->request_stop();
+    taskAvailable.notify_all();
+}
+
+void MemoryAgent::StopEmbeddingBackfill()
+{
+    std::optional<std::stop_source> previous;
+    std::optional<std::stop_source> previousArchive;
+    {
+        std::lock_guard lock(mutex);
         if (backfill) previous = backfill->cancellation;
+        if (archiveBackfill) previousArchive = archiveBackfill->cancellation;
         backfill.reset();
+        archiveBackfill.reset();
         for (const auto& task : backfillTasks)
-            pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
+            pendingEmbeddingIds.erase(EmbeddingKey(task));
         backfillTasks.clear();
     }
     if (previous) previous->request_stop();
+    if (previousArchive) previousArchive->request_stop();
     taskAvailable.notify_all();
 }
 
@@ -593,8 +738,9 @@ bool MemoryAgent::InteractiveDueLocked(
 
 bool MemoryAgent::BackfillDueLocked() const
 {
-    return backfill && backfill->pending == 0 &&
-        std::chrono::steady_clock::now() >= backfill->nextScan;
+    const auto now = std::chrono::steady_clock::now();
+    return (backfill && backfill->pending == 0 && now >= backfill->nextScan) ||
+        (archiveBackfill && archiveBackfill->pending == 0 && now >= archiveBackfill->nextScan);
 }
 
 std::chrono::milliseconds MemoryAgent::BackfillRetryDelay(int failures) const
@@ -610,16 +756,64 @@ void MemoryAgent::ScanBackfill(std::stop_token stopToken)
     {
         std::lock_guard lock(mutex);
         if (!BackfillDueLocked()) return;
-        scan = *backfill;
+        const auto now = std::chrono::steady_clock::now();
+        const bool curatedDue = backfill && backfill->pending == 0 && now >= backfill->nextScan;
+        const bool archiveDue = archiveBackfill && archiveBackfill->pending == 0 && now >= archiveBackfill->nextScan;
+        const bool useArchive = archiveDue && (!curatedDue || preferArchiveScan);
+        scan = useArchive ? *archiveBackfill : *backfill;
+        preferArchiveScan = !useArchive;
         batchSize = std::min<std::size_t>(25, limits.maximumBackfill);
     }
     auto cancellation = scan.cancellation;
     std::stop_callback ownerStopped(stopToken, [&cancellation] { cancellation.request_stop(); });
     const auto token = cancellation.get_token();
     if (token.stop_requested() || !Admitted(scan.admission)) return;
-    const auto page = memory.ScanMissingEmbeddings(scan.model, scan.afterRowId, batchSize);
-    std::string error = page.error;
-    if (error.empty() && !page.entries.empty())
+    std::vector<Task> missing;
+    std::string error;
+    std::int64_t nextRowId = scan.afterRowId;
+    bool hasMore = false;
+    const auto makeTask = [&]()
+    {
+        Task task;
+        task.admission = scan.admission;
+        task.router = scan.router;
+        task.archive = scan.archive;
+        task.scope = scan.scope;
+        task.embeddingModel = scan.model;
+        task.backfillStop = token;
+        task.scheduledBackfill = true;
+        return task;
+    };
+    if (scan.archive)
+    {
+        const auto page = scan.archive->ScanMissingEmbeddings(scan.model, scan.afterRowId, batchSize, &scan.scope);
+        error = page.error;
+        nextRowId = page.nextRowId;
+        hasMore = page.hasMore;
+        for (const auto& entry : page.entries)
+        {
+            auto task = makeTask();
+            task.input = memory::ArchiveEmbeddingText(entry);
+            task.memoryId = entry.id;
+            task.archivedTurn = entry;
+            missing.push_back(std::move(task));
+        }
+    }
+    else
+    {
+        const auto page = memory.ScanMissingEmbeddings(scan.model, scan.afterRowId, batchSize);
+        error = page.error;
+        nextRowId = page.nextRowId;
+        hasMore = page.hasMore;
+        for (const auto& entry : page.entries)
+        {
+            auto task = makeTask();
+            task.input = entry.summary;
+            task.memoryId = entry.id;
+            missing.push_back(std::move(task));
+        }
+    }
+    if (error.empty() && !missing.empty())
     {
         const auto health = scan.router->CheckEmbeddingHealth(token);
         if (!health.bIsAvailable) error = health.reason.empty() ? health.message : health.reason;
@@ -628,14 +822,15 @@ void MemoryAgent::ScanBackfill(std::stop_token stopToken)
     if (!error.empty())
     {
         MemoryAgentEvent event;
-        event.operation = "memory_backfill";
+        event.operation = scan.archive ? "archive_backfill" : "memory_backfill";
         event.decision.reason = error;
         std::string pressure;
         {
             std::lock_guard lock(mutex);
-            if (!backfill || backfill->cancellation.get_token() != token) return;
-            backfill->failures = std::min(backfill->failures + 1, 5);
-            backfill->nextScan = std::chrono::steady_clock::now() + BackfillRetryDelay(backfill->failures);
+            auto& subscription = scan.archive ? archiveBackfill : backfill;
+            if (!subscription || subscription->cancellation.get_token() != token) return;
+            subscription->failures = std::min(subscription->failures + 1, 5);
+            subscription->nextScan = std::chrono::steady_clock::now() + BackfillRetryDelay(subscription->failures);
             pressure = AdmitEventLocked(std::move(event), scan.admission);
         }
         Report("[MemoryAgent] backfill_scan | result=failed | retry=delayed");
@@ -643,71 +838,96 @@ void MemoryAgent::ScanBackfill(std::stop_token stopToken)
         return;
     }
     std::size_t admitted = 0;
-    for (const auto& entry : page.entries)
+    for (auto& task : missing)
     {
-        Task task;
-        task.admission = scan.admission;
-        task.router = scan.router;
-        task.input = entry.summary;
-        task.memoryId = entry.id;
-        task.embeddingModel = scan.model;
-        task.backfillStop = token;
-        task.scheduledBackfill = true;
         if (Enqueue(MemoryTaskClass::EmbeddingBackfill, std::move(task))) ++admitted;
     }
     {
         std::lock_guard lock(mutex);
-        if (!backfill || backfill->cancellation.get_token() != token) return;
-        backfill->afterRowId = page.nextRowId;
-        backfill->atEnd = !page.hasMore;
-        backfill->batchFailed = false;
-        backfill->pending = admitted;
+        auto& subscription = scan.archive ? archiveBackfill : backfill;
+        if (!subscription || subscription->cancellation.get_token() != token) return;
+        subscription->afterRowId = nextRowId;
+        subscription->atEnd = !hasMore;
+        subscription->batchFailed = false;
+        subscription->pending = admitted;
         if (admitted == 0)
         {
-            if (backfill->atEnd) backfill->afterRowId = 0;
-            backfill->nextScan = std::chrono::steady_clock::now() +
-                (backfill->atEnd ? backfillIdleInterval : backfillBatchInterval);
+            if (subscription->atEnd) subscription->afterRowId = 0;
+            subscription->nextScan = std::chrono::steady_clock::now() +
+                (subscription->atEnd ? backfillIdleInterval : backfillBatchInterval);
         }
-        else backfill->nextScan = std::chrono::steady_clock::time_point::max();
+        else subscription->nextScan = std::chrono::steady_clock::time_point::max();
     }
-    if (!page.entries.empty())
-        Report("[MemoryAgent] backfill_scan | rows=" + std::to_string(page.entries.size()) +
+    if (!missing.empty())
+        Report("[MemoryAgent] backfill_scan | store=" + std::string(scan.archive ? "archive" : "curated") +
+            " | rows=" + std::to_string(missing.size()) +
             " | queued=" + std::to_string(admitted));
+}
+
+std::tuple<const memory::ConversationArchive*, std::string, std::string> MemoryAgent::EmbeddingKey(const Task& task)
+{
+    return {task.archive, task.embeddingModel, task.memoryId};
 }
 
 void MemoryAgent::FinishEmbeddingTask(const Task& task, bool failed)
 {
     std::lock_guard lock(mutex);
-    pendingEmbeddingIds.erase({task.embeddingModel, task.memoryId});
-    if (!task.scheduledBackfill || !backfill ||
-        backfill->cancellation.get_token() != task.backfillStop) return;
-    backfill->batchFailed = backfill->batchFailed || failed;
-    if (backfill->pending > 0) --backfill->pending;
-    if (backfill->pending != 0) return;
-    backfill->failures = backfill->batchFailed ? std::min(backfill->failures + 1, 5) : 0;
-    auto delay = backfill->atEnd ? backfillIdleInterval : backfillBatchInterval;
-    if (backfill->batchFailed)
-        delay = std::max(delay, BackfillRetryDelay(backfill->failures));
-    if (backfill->atEnd)
-        backfill->afterRowId = 0;
-    backfill->nextScan = std::chrono::steady_clock::now() + delay;
+    pendingEmbeddingIds.erase(EmbeddingKey(task));
+    auto& subscription = task.archive ? archiveBackfill : backfill;
+    if (!task.scheduledBackfill || !subscription ||
+        subscription->cancellation.get_token() != task.backfillStop) return;
+    subscription->batchFailed = subscription->batchFailed || failed;
+    if (subscription->pending > 0) --subscription->pending;
+    if (subscription->pending != 0) return;
+    subscription->failures = subscription->batchFailed ? std::min(subscription->failures + 1, 5) : 0;
+    auto delay = subscription->atEnd ? backfillIdleInterval : backfillBatchInterval;
+    if (subscription->batchFailed)
+        delay = std::max(delay, BackfillRetryDelay(subscription->failures));
+    if (subscription->atEnd)
+        subscription->afterRowId = 0;
+    subscription->nextScan = std::chrono::steady_clock::now() + delay;
 }
 
 std::vector<MemoryAgentEvent> MemoryAgent::DrainEvents()
 {
-    std::lock_guard lock(mutex);
+    std::vector<PendingEvent> pending;
+    {
+        std::lock_guard lock(mutex);
+        pending.swap(events);
+    }
     std::vector<MemoryAgentEvent> drained;
-    for (auto& event : events)
+    for (auto& event : pending)
     {
         if (Admitted(event.admission))
             drained.push_back(std::move(static_cast<MemoryAgentEvent&>(event)));
     }
-    events.clear();
     return drained;
+}
+
+void MemoryAgent::RetireUnadmittedSubscriptions()
+{
+    std::optional<BackfillSubscription> curated, archived;
+    {
+        std::lock_guard lock(mutex);
+        curated = backfill;
+        archived = archiveBackfill;
+    }
+    const bool retireCurated = curated && !Admitted(curated->admission);
+    const bool retireArchive = archived && !Admitted(archived->admission);
+    {
+        std::lock_guard lock(mutex);
+        // A concurrent refresh may have installed a newer guard. Retire only the
+        // generation checked outside this lock, never its replacement.
+        if (retireCurated && backfill && backfill->cancellation.get_token() == curated->cancellation.get_token()) backfill.reset();
+        if (retireArchive && archiveBackfill && archiveBackfill->cancellation.get_token() == archived->cancellation.get_token()) archiveBackfill.reset();
+    }
+    if (retireCurated) curated->cancellation.request_stop();
+    if (retireArchive) archived->cancellation.request_stop();
 }
 
 void MemoryAgent::Stop()
 {
+    DisableSemanticDuplicates();
     if (!worker.joinable())
     {
         return;
@@ -722,21 +942,18 @@ void MemoryAgent::Stop()
     backfillTasks.clear();
     pendingEmbeddingIds.clear();
     backfill.reset();
+    archiveBackfill.reset();
 }
 
 void MemoryAgent::Run(const std::stop_token stopToken)
 {
     while (!stopToken.stop_requested())
     {
+        RetireUnadmittedSubscriptions();
         Task task;
         bool scanDue = false;
         {
             std::unique_lock lock(mutex);
-            if (backfill && !Admitted(backfill->admission))
-            {
-                backfill->cancellation.request_stop();
-                backfill.reset();
-            }
             // A held-back turn has its own wake time. A newly queued turn changes it, so
             // the wait also ends when the interactive queue changes and is recomputed.
             const auto now = std::chrono::steady_clock::now();
@@ -750,7 +967,8 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             };
             // A profile change can replace the subscription while the wait releases the
             // mutex; its deadline must remain a local value.
-            const auto deadline = std::min(backfill ? backfill->nextScan : std::chrono::steady_clock::time_point::max(), interactiveWake);
+            const auto deadline = std::min({backfill ? backfill->nextScan : std::chrono::steady_clock::time_point::max(),
+                archiveBackfill ? archiveBackfill->nextScan : std::chrono::steady_clock::time_point::max(), interactiveWake});
             if (deadline != std::chrono::steady_clock::time_point::max())
                 taskAvailable.wait_until(lock, stopToken, deadline, ready);
             else
@@ -813,8 +1031,13 @@ void MemoryAgent::Run(const std::stop_token stopToken)
 
         if (!task.memoryId.empty() && !task.hasLearnedDecision)
         {
+            const auto needsEmbedding = [&]()
+            {
+                return task.archive ? task.archive->NeedsEmbedding(task.memoryId, task.embeddingModel) :
+                    memory.NeedsEmbedding(task.memoryId, task.embeddingModel);
+            };
             if (requestToken.stop_requested() ||
-                !memory.NeedsEmbedding(task.memoryId, task.embeddingModel))
+                !needsEmbedding())
             {
                 FinishEmbeddingTask(task, false);
                 continue;
@@ -827,7 +1050,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 continue;
             }
             MemoryAgentEvent event;
-            event.operation = "memory_backfill";
+            event.operation = task.archive ? "archive_backfill" : "memory_backfill";
             event.decision.bSuccess = embedding.bSuccess && embedding.model == task.embeddingModel;
             event.decision.reason = embedding.bSuccess && !event.decision.bSuccess
                 ? "The embedding model changed while backfill was pending." : embedding.reason;
@@ -835,20 +1058,23 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 "memory_document_embedding",
                 embedding.elapsedMilliseconds});
             if (event.decision.bSuccess &&
-                memory.NeedsEmbedding(task.memoryId, task.embeddingModel) &&
+                needsEmbedding() &&
                 !requestToken.stop_requested() && Admitted(task.admission))
             {
                 const auto saveStarted = std::chrono::steady_clock::now();
-                event.saveSucceeded = memory.SaveEmbedding(
-                    task.memoryId,
-                    embedding.model,
-                    embedding.values);
+                event.saveSucceeded = task.archive ?
+                    task.archive->SaveEmbedding(task.archivedTurn, embedding.model, embedding.values,
+                        [&]() { return !requestToken.stop_requested() && Admitted(task.admission); }) :
+                    memory.SaveEmbedding(task.memoryId, embedding.model, embedding.values);
                 event.decision.timings.push_back({
                     "memory_db_save",
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - saveStarted).count()});
             }
             FinishEmbeddingTask(task, !event.decision.bSuccess || !event.saveSucceeded);
+            if (!task.archive && event.decision.bSuccess && event.saveSucceeded)
+                event.semanticDuplicateMarks = MarkSemanticDuplicates(task.memoryId, task.embeddingModel, task, requestToken);
+            if (!Admitted(task.admission)) continue;
             std::string pressureReport;
             {
                 std::lock_guard lock(mutex);
@@ -887,6 +1113,8 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 }
             }
             FinishEmbeddingTask(task, !event.embeddingError.empty());
+            if (event.embeddingError.empty())
+                event.semanticDuplicateMarks = MarkSemanticDuplicates(task.memoryId, task.embeddingModel, task, requestToken);
         }
         else
         {
@@ -942,13 +1170,20 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                                              : memory::MemorySubject{};
             const auto saveStarted = std::chrono::steady_clock::now();
             if (!Admitted(task.admission)) continue;
-            event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded, nullptr, task.admission);
+            std::string savedId;
+            event.saveSucceeded = memory.SaveAutomaticMemory(event.decision, event.wasAdded, &savedId, task.admission);
             event.decision.timings.push_back({
                 "memory_db_save",
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - saveStarted).count()});
+            if (event.saveSucceeded && event.wasAdded)
+                event.semanticDuplicateMarks = MarkSemanticDuplicates(savedId, event.decision.embeddingModel, task, requestToken);
+            if (event.saveSucceeded && task.provenance == ResponseProvenance::NormalGeneration)
+                event.correctionProposals = memory.ProposeCorrections(savedId, event.decision, task.input,
+                    task.scope, task.turnId, task.admission, requestToken);
         }
 
+        if (!Admitted(task.admission)) continue;
         std::string pressureReport;
         {
             std::lock_guard lock(mutex);

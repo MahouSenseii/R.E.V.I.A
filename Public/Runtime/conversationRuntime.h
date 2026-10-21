@@ -60,6 +60,15 @@ struct RoutingInputs
 [[nodiscard]] intelligence::RoutingContext BuildRoutingContext(const RoutingInputs& inputs);
 [[nodiscard]] std::optional<intelligence::IntelligenceTier> DeliveredResponseTier(const responseOutput& output);
 
+// Per-call measurement controls only. Live conversation paths never read these, and
+// every block is present by default. Authority, filtering, and answer obligation are
+// intentionally outside this experiment.
+struct EvaluationPromptBlocks
+{
+    bool statePacket = true;
+    bool styleGuidance = true;
+};
+
 // Owns admitted conversational turns; lifecycle and permissions stay with the session.
 class ConversationRuntime
 {
@@ -217,6 +226,9 @@ public:
     // prompts would be measuring a runtime it had already changed.
     [[nodiscard]] evaluation::EvaluationReply EvaluateTurn(const std::string& input, const std::vector<conversationMessage>& priorTurns,
         const aiProfile& profile, bool llmAvailable, std::stop_token stopToken = {});
+    [[nodiscard]] evaluation::EvaluationReply EvaluateTurnForExperiment(const std::string& input,
+        const std::vector<conversationMessage>& priorTurns, const aiProfile& profile, bool llmAvailable,
+        EvaluationPromptBlocks blocks, std::stop_token stopToken = {});
 
     [[nodiscard]] agents::ConversationQualitySnapshot QualitySnapshot() const;
 
@@ -228,6 +240,7 @@ private:
         bool allowInternetLookup = true;
         bool allowSelfInquiry = true;
         bool includePrivateHistory = true;
+        EvaluationPromptBlocks evaluationBlocks;
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
         std::function<bool()> deliveryAdmission;

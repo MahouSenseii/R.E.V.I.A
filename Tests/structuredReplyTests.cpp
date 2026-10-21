@@ -216,6 +216,8 @@ void TestProviderContractAndDataPreservation()
         "The provider changed literal JSON data or emitted a different structured reply.");
     Check(request.at("response_format").at("json_schema").at("schema").at("type") == "object",
         "JSON object format did not reach the actual completion request.");
+    Check(request.at("response_format").at("json_schema").value("strict", false),
+        "An explicit structured reply did not request strict backend schema enforcement.");
     Check(request.at("temperature") == 0.75F && request.at("messages").at(0).at("content").get<std::string>().starts_with("You are Revia."),
         "Structured response handling changed the authored profile or temperature.");
     Check(request.at("stop").empty() && !request.contains("dry_multiplier"),
@@ -266,6 +268,21 @@ void TestExplicitShapeWireAndValidation()
     ReplyBackend backend;
     llamaCppService service((directory.root / "shape-wire.db").string());
     Configure(service, backend.port);
+    const std::string sourceInput =
+        R"(Return JSON using this schema: {"type":"object","properties":{"source":{"type":"string","enum":["D1","D2"]}},"required":["source"],"additionalProperties":false})";
+    backend.Reply(R"({"source":"D1"})");
+    Check(service.GenerateResponse({{"user", sourceInput}}).bSuccess &&
+              backend.Request().at("response_format").at("json_schema").at("schema").at("properties").at("source").at("enum") ==
+                  nlohmann::json::array({"D1", "D2"}),
+        "The explicit source catalog did not reach the model or forced the latest answer.");
+    for (const std::string payload : {R"({"source":2})", R"({"source":"Source D2"})", R"({"source":"D3"})"})
+    {
+        backend.Reply(payload);
+        std::string delivered;
+        const auto invalid = service.GenerateResponse({{"user", sourceInput}}, {}, [&](const auto& text) { delivered += text; });
+        Check(!invalid.bSuccess && !invalid.bShouldRemember && delivered.empty(),
+            "A backend source catalog violation was delivered or normalized into a successful reply.");
+    }
     const std::string input = R"(Return JSON with exactly keys "camelCase" and count.)";
     backend.Reply(R"({"camelCase":null,"count":"literal"})");
     Check(service.GenerateResponse({{"user", input}}).bSuccess, "Explicit untyped keys refused literal value types.");
@@ -642,6 +659,28 @@ void TestPunctuationLedTokensKeepTheirSpace()
         Check(streamed.bSuccess && streamed.response == raw && released == raw,
             "The streamed reply did not keep the model's own spacing. Released: " + released + " Final: " + streamed.response);
     }
+
+    const std::string input = "How does static linking work?";
+    backend.Reply("The linker copies the required code into the executable.");
+    Check(runtime.EvaluateTurn(input, {}, profile, true).succeeded, "Default evaluation must answer.");
+    const auto control = backend.Request().at("messages");
+    Check(runtime.EvaluateTurnForExperiment(input, {}, profile, true, {}).succeeded, "Explicit control must answer.");
+    Check(backend.Request().at("messages") == control, "All-enabled experiment must preserve the default prompt exactly.");
+    Check(runtime.EvaluateTurnForExperiment(input, {}, profile, true, {false, true}).succeeded, "State ablation must answer.");
+    const auto noState = backend.Request().at("messages").dump();
+    Check(noState.find("Your current response posture is ") == std::string::npos &&
+              noState.find("Turn-local conversation guidance:") != std::string::npos &&
+              noState.find("Answer posture: balanced.") != std::string::npos &&
+              noState.find(profile.systemPrompt) != std::string::npos,
+        "State ablation must omit only the rendered state packet, retaining identity, style, and answer obligation.");
+    Check(runtime.EvaluateTurnForExperiment(input, {}, profile, true, {true, false}).succeeded, "Style ablation must answer.");
+    const auto noStyle = backend.Request().at("messages").dump();
+    Check(noStyle.find("Your current response posture is ") != std::string::npos &&
+              noStyle.find("Turn-local conversation guidance:") == std::string::npos &&
+              noStyle.find("Answer posture: balanced.") != std::string::npos,
+        "Style ablation must retain state and answer obligation.");
+    Check(runtime.EvaluateTurn(input, {}, profile, true).succeeded && backend.Request().at("messages") == control,
+        "Experimental flags must not persist into the next ordinary evaluation.");
 }
 }
 

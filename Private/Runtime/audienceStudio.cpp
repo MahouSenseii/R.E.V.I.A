@@ -9,6 +9,11 @@ namespace revia::runtime
 memory::MemoryScope ReviaSession::CapturePrivateMemoryScope() const
 {
     const std::scoped_lock lock(speakerMutex, audienceMutex);
+    return CapturePrivateMemoryScopeLocked();
+}
+
+memory::MemoryScope ReviaSession::CapturePrivateMemoryScopeLocked() const
+{
     memory::MemoryScope scope;
     scope.participantId = lastInputParticipant;
     scope.audience = configuredAudience;

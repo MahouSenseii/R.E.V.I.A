@@ -22,6 +22,7 @@ public:
     llmService();
     explicit llmService(std::string memoryDatabasePath);
     ~llmService();
+    void SetMemoryReranker(std::shared_ptr<revia::memory::MemoryReranker> value) { llamaCpp.SetMemoryReranker(std::move(value)); }
 
     void ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile);
     void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
@@ -66,6 +67,8 @@ public:
         revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
+    embeddingOutput EmbedMemoryQuery(const std::string& query, std::stop_token stopToken = {}) const
+    { return llamaCpp.EmbedMemoryQuery(query, stopToken); }
 private:
     responseOutput GeneratePlaceholderResponse(const std::vector<conversationMessage>& context) const;
     llmBackendType backendType = llmBackendType::None;

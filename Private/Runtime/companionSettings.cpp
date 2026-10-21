@@ -50,6 +50,12 @@ void BindCompanionSettings(appSettings& settings, const CompanionPaths& paths)
         settings.llm.bAllowPromptCache = false;
     settings.embedding.serverExecutable = SharedPath(settings.embedding.serverExecutable, paths, true);
     settings.embedding.modelPath = SharedPath(settings.embedding.modelPath, paths);
+    settings.memoryReranker.pythonExecutable = SharedPath(settings.memoryReranker.pythonExecutable.string(), paths, true);
+    settings.memoryReranker.workerScript = SharedPath(settings.memoryReranker.workerScript.string(), paths);
+    settings.memoryReranker.modelDirectory = SharedPath(settings.memoryReranker.modelDirectory.string(), paths);
+    settings.memoryNli.pythonExecutable = SharedPath(settings.memoryNli.pythonExecutable.string(), paths, true);
+    settings.memoryNli.workerScript = SharedPath(settings.memoryNli.workerScript.string(), paths);
+    settings.memoryNli.modelDirectory = SharedPath(settings.memoryNli.modelDirectory.string(), paths);
     for (modelTierSettings* tier : {&settings.intelligence.fast, &settings.intelligence.expert})
     {
         tier->modelPath = SharedPath(tier->modelPath, paths);

@@ -28,6 +28,14 @@ public:
     messageRouter();
     explicit messageRouter(std::string memoryDatabasePath);
     ~messageRouter();
+    embeddingOutput EmbedMemoryQuery(const std::string& query, std::stop_token stopToken = {}) const
+    { return llm.EmbedMemoryQuery(query, stopToken); }
+    void SetMemoryReranker(const std::shared_ptr<revia::memory::MemoryReranker>& value)
+    {
+        llm.SetMemoryReranker(value);
+        fastLlm.SetMemoryReranker(value);
+        expertLlm.SetMemoryReranker(value);
+    }
 
     using DeltaHandler = std::function<void(const std::string&)>;
     // `tools` offers this turn's tool definitions and replays its earlier tool steps. While

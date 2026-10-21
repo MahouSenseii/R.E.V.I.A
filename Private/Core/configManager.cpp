@@ -345,6 +345,57 @@ bool ReadSettings(json& data, appSettings& outSettings)
             }
         }
 
+        // A missing optional block disables this worker on reload as well as first startup.
+        outSettings.memoryReranker = {};
+        if (data.contains("memoryReranker"))
+        {
+            const json& reranker = data["memoryReranker"];
+            const auto validInteger = [&](const char* field, int maximum)
+            {
+                const auto value = reranker.find(field);
+                return value == reranker.end() ||
+                       (value->is_number_integer() && *value >= 1 && *value <= maximum);
+            };
+            // Validate before conversion: JSON numbers can otherwise truncate or wrap into range.
+            if (!validInteger("cpuThreads", 16) || !validInteger("timeoutMs", 10000) ||
+                !validInteger("startupTimeoutMs", 120000))
+                return false;
+            outSettings.memoryReranker.enabled = reranker.value("enabled", false);
+            outSettings.memoryReranker.pythonExecutable = reranker.value("pythonExecutable", "ThirdParty/MemoryReranker/.venv/Scripts/python.exe");
+            outSettings.memoryReranker.workerScript = reranker.value("workerScript", "Tools/Workers/memory_reranker.py");
+            outSettings.memoryReranker.modelDirectory = reranker.value("modelDirectory", "Models/MemoryReranker/ms-marco-MiniLM-L6-v2");
+            outSettings.memoryReranker.cpuThreads = reranker.value("cpuThreads", 4);
+            outSettings.memoryReranker.timeoutMs = reranker.value("timeoutMs", 1000);
+            outSettings.memoryReranker.startupTimeoutMs = reranker.value("startupTimeoutMs", 30000);
+        }
+
+        outSettings.memoryNli = {};
+        if (data.contains("memoryNli"))
+        {
+            const json& nli = data["memoryNli"];
+            if (!nli.is_object())
+                return false;
+            const auto validInteger = [&](const char* field, int maximum)
+            {
+                const auto value = nli.find(field);
+                return value == nli.end() ||
+                       (value->is_number_integer() && *value >= 1 && *value <= maximum);
+            };
+            if (!validInteger("cpuThreads", 8) || !validInteger("timeoutMs", 10000) ||
+                !validInteger("startupTimeoutMs", 120000))
+                return false;
+            outSettings.memoryNli.enabled = nli.value("enabled", false);
+            outSettings.memoryNli.pythonExecutable = nli.value("pythonExecutable", "ThirdParty/MemoryReranker/.venv/Scripts/python.exe");
+            outSettings.memoryNli.workerScript = nli.value("workerScript", "Tools/Workers/memory_nli.py");
+            outSettings.memoryNli.modelDirectory = nli.value("modelDirectory", "Models/MemoryNli/nli-deberta-v3-small");
+            outSettings.memoryNli.cpuThreads = nli.value("cpuThreads", 2);
+            outSettings.memoryNli.timeoutMs = nli.value("timeoutMs", 2000);
+            outSettings.memoryNli.startupTimeoutMs = nli.value("startupTimeoutMs", 30000);
+            if (outSettings.memoryNli.enabled && (outSettings.memoryNli.pythonExecutable.empty() ||
+                outSettings.memoryNli.workerScript.empty() || outSettings.memoryNli.modelDirectory.empty()))
+                return false;
+        }
+
         if (data.contains("speech"))
         {
             const json& speechData = data["speech"];
@@ -1394,6 +1445,12 @@ bool ReadSettings(json& data, appSettings& outSettings)
             (!IsValidModelTier(outSettings.intelligence.fast) ||
              !IsValidModelTier(outSettings.intelligence.expert) ||
              intelligencePortsConflict)) ||
+        (outSettings.memoryReranker.enabled &&
+            (outSettings.memoryReranker.pythonExecutable.empty() || outSettings.memoryReranker.workerScript.empty() ||
+                outSettings.memoryReranker.modelDirectory.empty() || outSettings.memoryReranker.cpuThreads < 1 ||
+                outSettings.memoryReranker.cpuThreads > 16 || outSettings.memoryReranker.timeoutMs < 1 ||
+                outSettings.memoryReranker.timeoutMs > 10000 || outSettings.memoryReranker.startupTimeoutMs < 1 ||
+                outSettings.memoryReranker.startupTimeoutMs > 120000)) ||
         (outSettings.embedding.bEnabled &&
             (outSettings.embedding.host.empty() || outSettings.embedding.modelName.empty() ||
                 outSettings.embedding.port < 1 || outSettings.embedding.port > 65535 ||

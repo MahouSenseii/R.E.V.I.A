@@ -339,12 +339,20 @@ std::string Trim(const std::string& text)
     return first == std::string::npos ? "" : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
 }
 
+bool MatchesSchemaType(const Json& value, const std::string& type)
+{
+    return (type == "object" && value.is_object()) || (type == "array" && value.is_array()) ||
+        (type == "string" && value.is_string()) || (type == "boolean" && value.is_boolean()) ||
+        (type == "integer" && value.is_number_integer()) || (type == "number" && value.is_number()) ||
+        (type == "null" && value.is_null());
+}
+
 bool AdmittedSchema(const Json& schema, std::size_t depth, std::size_t& keyCount)
 {
     if (!schema.is_object() || depth > MaximumReplySchemaDepth)
         return false;
     static const std::set<std::string> allowed = {
-        "type", "properties", "required", "additionalProperties", "items", "minItems", "maxItems"};
+        "type", "properties", "required", "additionalProperties", "items", "minItems", "maxItems", "enum"};
     for (const auto& [key, value] : schema.items())
         if (!allowed.contains(key))
             return false;
@@ -356,6 +364,15 @@ bool AdmittedSchema(const Json& schema, std::size_t depth, std::size_t& keyCount
     if (type != "object" && type != "array" && type != "string" && type != "boolean" && type != "integer" && type != "number" &&
         type != "null")
         return false;
+    if (schema.contains("enum"))
+    {
+        const auto& values = schema["enum"];
+        if (type == "object" || type == "array" || !values.is_array() || values.empty() || values.size() > MaximumReplySchemaKeys)
+            return false;
+        for (auto entry = values.begin(); entry != values.end(); ++entry)
+            if (!MatchesSchemaType(*entry, type) || std::find(values.begin(), entry, *entry) != entry)
+                return false;
+    }
     for (const char* key : {"properties", "required", "additionalProperties"})
         if (schema.contains(key) && type != "object")
             return false;
@@ -401,9 +418,9 @@ bool SchemaMatches(const Json& value, const Json& schema)
     if (schema.empty())
         return true;
     const auto type = schema.at("type").get<std::string>();
-    if ((type == "object" && !value.is_object()) || (type == "array" && !value.is_array()) || (type == "string" && !value.is_string()) ||
-        (type == "boolean" && !value.is_boolean()) || (type == "integer" && !value.is_number_integer()) ||
-        (type == "number" && !value.is_number()) || (type == "null" && !value.is_null()))
+    if (!MatchesSchemaType(value, type))
+        return false;
+    if (schema.contains("enum") && std::find(schema["enum"].begin(), schema["enum"].end(), value) == schema["enum"].end())
         return false;
     if (value.is_object())
     {

@@ -4,10 +4,22 @@
 #include "Runtime/runtimeStamp.h"
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 
 namespace revia::memory
 {
+// The host may retain current audience/subject locks for one owner transaction.
+// Acquired only after the store lock; released before that lock and before any
+// optional backfill. It grants no authority beyond the request's existing checks.
+class MemoryRevisionScopeLease
+{
+public:
+    virtual ~MemoryRevisionScopeLease() = default;
+};
+using MemoryRevisionScopeAdmission = std::function<std::unique_ptr<MemoryRevisionScopeLease>()>;
+
 // Only an explicit owner request identifies the original; classification and
 // similarity cannot supply a revision target or reuse an earlier authorization.
 struct MemoryRevisionRequest
@@ -22,6 +34,9 @@ struct MemoryRevisionRequest
     std::string reason;
     std::string evidence;
     MemorySubject expectedSubject{};
+    // Reviewed conversational proposals may only link this already-saved exact
+    // replacement. Empty preserves manual correction and legacy replay behavior.
+    std::string expectedReplacementId;
 };
 
 struct MemoryRevisionReceipt

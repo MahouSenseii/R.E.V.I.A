@@ -1,0 +1,822 @@
+{
+  "version": 1,
+  "purpose": "Offline NLI advisory-mark validation. Labels are manually authored expectations, not measured accuracy. Original 24 similarity pairs remain unchanged in aiPipelineLive. Fixed development and heldout groups must be reported separately; uncertain pairs must not mark. Do not enable from this fixture alone.",
+  "cases": [
+    {
+      "id": "legacy-paraphrases-01",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user prefers dark themes.",
+      "right": "The user likes dark mode.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-01",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-02",
+      "split": "development",
+      "label": "uncertain",
+      "category": "legacy-assay",
+      "left": "The user prefers dark themes.",
+      "right": "The user generally chooses dark interfaces.",
+      "note": "Generally chooses a UI adds frequency and changes preference into behavior.",
+      "legacy": {
+        "id": "paraphrases-02",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-03",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user prefers concise answers.",
+      "right": "The user likes short replies.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-03",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-04",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user prefers concise answers.",
+      "right": "The user wants answers kept brief.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-04",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-05",
+      "split": "development",
+      "label": "uncertain",
+      "category": "legacy-assay",
+      "left": "The user works at night.",
+      "right": "The user is a night owl.",
+      "note": "Night owl describes a broader habit and does not imply employment at night.",
+      "legacy": {
+        "id": "paraphrases-05",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-06",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user builds Revia in C++.",
+      "right": "The user is writing Revia in C++.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-06",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-07",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user dislikes small talk.",
+      "right": "The user has no patience for chit-chat.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-07",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-08",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user drinks coffee every morning.",
+      "right": "The user has coffee each morning.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-08",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-09",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user prefers MinGW over MSVC.",
+      "right": "The user would rather use MinGW than MSVC.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-09",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-10",
+      "split": "development",
+      "label": "uncertain",
+      "category": "legacy-assay",
+      "left": "The user keeps a long-term astronomy project.",
+      "right": "The user has an ongoing astronomy project.",
+      "note": "Ongoing does not establish the same long-term duration.",
+      "legacy": {
+        "id": "paraphrases-10",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-11",
+      "split": "development",
+      "label": "equivalent",
+      "category": "legacy-assay",
+      "left": "The user finds meetings draining.",
+      "right": "The user is worn out by meetings.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "paraphrases-11",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-paraphrases-12",
+      "split": "development",
+      "label": "uncertain",
+      "category": "legacy-assay",
+      "left": "The user reads science fiction.",
+      "right": "The user enjoys sci-fi novels.",
+      "note": "Reading a genre does not entail enjoying it or restricting it to novels.",
+      "legacy": {
+        "id": "paraphrases-12",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "paraphrase"
+      }
+    },
+    {
+      "id": "legacy-distinct-01",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user prefers dark themes.",
+      "right": "The user prefers large fonts.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-01",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-02",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user prefers dark themes.",
+      "right": "The user prefers tabs over spaces.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-02",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-03",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user prefers concise answers.",
+      "right": "The user prefers detailed answers.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-03",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-04",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user works at night.",
+      "right": "The user works on weekends.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-04",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-05",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user builds Revia in C++.",
+      "right": "The user builds Revia in Rust.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-05",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-06",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user drinks coffee every morning.",
+      "right": "The user drinks tea every morning.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-06",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-07",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user reads science fiction.",
+      "right": "The user reads history.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-07",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-08",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user prefers MinGW over MSVC.",
+      "right": "The user prefers CMake over Make.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-08",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-09",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user dislikes small talk.",
+      "right": "The user dislikes video calls.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-09",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-10",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user keeps a long-term astronomy project.",
+      "right": "The user keeps a long-term music project.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-10",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-11",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user finds meetings draining.",
+      "right": "The user finds email draining.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-11",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "legacy-distinct-12",
+      "split": "development",
+      "label": "distinct",
+      "category": "legacy-assay",
+      "left": "The user likes dark mode.",
+      "right": "The user likes light mode.",
+      "note": "Original live similarity assay retained; semantic-equivalence annotation is separate from similarity.",
+      "legacy": {
+        "id": "distinct-12",
+        "source": "Tests/aiPipelineLive.cpp::RunReconciliationLive",
+        "originalLabel": "distinct"
+      }
+    },
+    {
+      "id": "development-025",
+      "split": "development",
+      "label": "distinct",
+      "category": "opposing-preference",
+      "left": "The user prefers hot drinks.",
+      "right": "The user prefers cold drinks.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-026",
+      "split": "development",
+      "label": "distinct",
+      "category": "negation",
+      "left": "The user likes coffee.",
+      "right": "The user does not like coffee.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-027",
+      "split": "development",
+      "label": "distinct",
+      "category": "negation",
+      "left": "The user avoids peanuts.",
+      "right": "The user eats peanuts.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-028",
+      "split": "development",
+      "label": "distinct",
+      "category": "subject-swap",
+      "left": "The user lends books to the assistant.",
+      "right": "The assistant lends books to the user.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-029",
+      "split": "development",
+      "label": "distinct",
+      "category": "subject-swap",
+      "left": "The user likes music.",
+      "right": "The user's mother likes music.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-030",
+      "split": "development",
+      "label": "distinct",
+      "category": "time",
+      "left": "The user works in the morning.",
+      "right": "The user works in the evening.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-031",
+      "split": "development",
+      "label": "distinct",
+      "category": "time",
+      "left": "The user runs daily.",
+      "right": "The user runs weekly.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-032",
+      "split": "development",
+      "label": "distinct",
+      "category": "numbers",
+      "left": "The user takes 5 tablets.",
+      "right": "The user takes 50 tablets.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-033",
+      "split": "development",
+      "label": "distinct",
+      "category": "units",
+      "left": "The user carries 5 grams.",
+      "right": "The user carries 5 kilograms.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-034",
+      "split": "development",
+      "label": "distinct",
+      "category": "broader-narrower",
+      "left": "The user enjoys tea.",
+      "right": "The user enjoys tea only at night.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-035",
+      "split": "development",
+      "label": "distinct",
+      "category": "broader-narrower",
+      "left": "The user reads books.",
+      "right": "The user reads science books.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-036",
+      "split": "development",
+      "label": "distinct",
+      "category": "uncertainty",
+      "left": "The user thinks the server is down.",
+      "right": "The server is down.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-037",
+      "split": "development",
+      "label": "distinct",
+      "category": "attribution",
+      "left": "The user says the assistant likes tea.",
+      "right": "The assistant likes tea.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-038",
+      "split": "development",
+      "label": "distinct",
+      "category": "condition",
+      "left": "The user prefers brief replies when busy.",
+      "right": "The user prefers brief replies.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-039",
+      "split": "development",
+      "label": "distinct",
+      "category": "correction",
+      "left": "The user previously lived in Paris.",
+      "right": "The user lives in Paris.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "development-040",
+      "split": "development",
+      "label": "distinct",
+      "category": "sequence",
+      "left": "The user prefers tea over coffee.",
+      "right": "The user prefers coffee over tea.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-041",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "opposing-preference",
+      "left": "The user wants the light theme.",
+      "right": "The user wants the dark theme.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-042",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "negation",
+      "left": "The user can swim.",
+      "right": "The user cannot swim.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-043",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "negation",
+      "left": "The user never drives.",
+      "right": "The user drives.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-044",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "subject-swap",
+      "left": "The user teaches the assistant.",
+      "right": "The assistant teaches the user.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-045",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "subject-swap",
+      "left": "The user plays chess.",
+      "right": "The user's father plays chess.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-046",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "time",
+      "left": "The user travels today.",
+      "right": "The user travels tomorrow.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-047",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "time",
+      "left": "The user exercises once weekly.",
+      "right": "The user exercises twice weekly.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-048",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "numbers",
+      "left": "The user owns 3 bikes.",
+      "right": "The user owns 4 bikes.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-049",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "units",
+      "left": "The user walks 2 miles.",
+      "right": "The user walks 2 kilometers.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-050",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "broader-narrower",
+      "left": "The user plays games.",
+      "right": "The user plays games only on weekends.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-051",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "broader-narrower",
+      "left": "The user likes dogs.",
+      "right": "The user likes small dogs.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-052",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "uncertainty",
+      "left": "The user may visit Rome.",
+      "right": "The user will visit Rome.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-053",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "attribution",
+      "left": "The user heard the assistant plays guitar.",
+      "right": "The assistant plays guitar.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-054",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "condition",
+      "left": "The user drinks coffee if tired.",
+      "right": "The user drinks coffee.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-055",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "correction",
+      "left": "The user stopped cycling.",
+      "right": "The user cycles.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-056",
+      "split": "heldout",
+      "label": "distinct",
+      "category": "sequence",
+      "left": "The user visits Rome before Paris.",
+      "right": "The user visits Paris before Rome.",
+      "precheckMustReject": true,
+      "note": "Different claim; retain both facts."
+    },
+    {
+      "id": "heldout-057",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user likes quiet rooms.",
+      "right": "The user enjoys quiet spaces.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-058",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user prefers brief replies.",
+      "right": "The user favors concise responses.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-059",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user enjoys cycling.",
+      "right": "The user likes riding a bicycle.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-060",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user drinks tea every morning.",
+      "right": "The user has tea each morning.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-061",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user dislikes loud music.",
+      "right": "The user does not like loud music.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-062",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user writes software in Python.",
+      "right": "The user programs in Python.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-063",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user finds long meetings tiring.",
+      "right": "The user gets tired by long meetings.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-064",
+      "split": "heldout",
+      "label": "equivalent",
+      "category": "paraphrase",
+      "left": "The user prefers working locally.",
+      "right": "The user favors doing work locally.",
+      "precheckMustReject": false,
+      "note": "Candidate equivalence label; conservative prechecks may decline it. This is not measured NLI accuracy."
+    },
+    {
+      "id": "heldout-065",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user reads novels.",
+      "right": "The user enjoys novels.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-066",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user owns a violin.",
+      "right": "The user plays the violin.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-067",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user often visits cafes.",
+      "right": "The user prefers cafes.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-068",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user is an early bird.",
+      "right": "The user works early shifts.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-069",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user studies medicine.",
+      "right": "The user is a doctor.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-070",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user has a garden.",
+      "right": "The user enjoys gardening.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-071",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user keeps an ongoing project.",
+      "right": "The user keeps a long-term project.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    },
+    {
+      "id": "heldout-072",
+      "split": "heldout",
+      "label": "uncertain",
+      "category": "ambiguous-inference",
+      "left": "The user chooses quiet venues.",
+      "right": "The user always prefers quiet venues.",
+      "precheckMustReject": false,
+      "note": "Related concepts do not establish bidirectional equivalence without additional evidence; retain both."
+    }
+  ]
+}

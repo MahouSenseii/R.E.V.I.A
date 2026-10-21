@@ -5,6 +5,7 @@
 #include <QAbstractItemView>
 #include <QDateTime>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -16,8 +17,10 @@
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QUuid>
+#include <algorithm>
 
 namespace
 {
@@ -74,6 +77,24 @@ MemoryPanel::MemoryPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     statusLabel->setObjectName("memoryStatus");
     statusLabel->setWordWrap(true);
     layout->addWidget(statusLabel);
+
+    correctionStatus = new QLabel(this);
+    correctionStatus->setObjectName("memoryCorrectionStatus");
+    correctionStatus->setWordWrap(true);
+    layout->addWidget(correctionStatus);
+    auto* correctionRow = new QHBoxLayout();
+    correctionSelector = new QComboBox(this);
+    correctionSelector->setObjectName("memoryCorrectionSelector");
+    correctionSelector->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    correctionSelector->setMinimumContentsLength(16);
+    correctionRow->addWidget(correctionSelector, 1);
+    reviewCorrectionButton = new QPushButton("Review correction", this);
+    reviewCorrectionButton->setObjectName("memoryCorrectionReview");
+    correctionRow->addWidget(reviewCorrectionButton);
+    rejectCorrectionButton = new QPushButton("Reject", this);
+    rejectCorrectionButton->setObjectName("memoryCorrectionReject");
+    correctionRow->addWidget(rejectCorrectionButton);
+    layout->addLayout(correctionRow);
 
     auto* controls = new QHBoxLayout();
     searchInput = new QLineEdit(this);
@@ -152,7 +173,20 @@ MemoryPanel::MemoryPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
     connect(refreshButton, &QPushButton::clicked, this, [this]() { Refresh(); });
     connect(table, &QTableWidget::itemSelectionChanged, this, [this]() { UpdateSelectedRevision(); });
     connect(reviseButton, &QPushButton::clicked, this, [this]() { ReviseSelectedMemory(); });
+    connect(reviewCorrectionButton, &QPushButton::clicked, this, [this]() { ReviewSelectedCorrection(); });
+    connect(rejectCorrectionButton, &QPushButton::clicked, this,
+        [this]() { SubmitCorrectionProposal(correctionSelector->currentData().toString().toStdString(), false); });
     connect(revisionProvenance, &QLabel::linkActivated, this, [this](const QString& link) { SelectLinkedMemory(link); });
+
+    // A reviewed private snapshot must disappear when attribution changes, even
+    // when the audience operation does not publish a Memory event.
+    auto* scopeTimer = new QTimer(this);
+    scopeTimer->setInterval(500);
+    connect(scopeTimer, &QTimer::timeout, this, [this]()
+    {
+        if (!correctionProposals.empty()) RefreshCorrectionProposals();
+    });
+    scopeTimer->start();
 
     // Populated immediately rather than waiting for the runtime to finish starting. An
     // empty table with no status line is indistinguishable from a broken panel, and the
@@ -163,7 +197,66 @@ MemoryPanel::MemoryPanel(revia::runtime::ReviaSession& inputSession, QWidget* pa
 void MemoryPanel::Refresh()
 {
     statusLabel->setText(QString::fromStdString(session.MemoryStatus()));
+    RefreshCorrectionProposals();
     ApplyFilter();
+}
+
+void MemoryPanel::RefreshCorrectionProposals()
+{
+    const auto selected = correctionSelector->currentData().toString();
+    correctionProposals = session.PendingMemoryCorrections();
+    const QSignalBlocker block(correctionSelector);
+    correctionSelector->clear();
+    for (const auto& proposal : correctionProposals)
+    {
+        const auto label = QString::fromStdString(proposal.original.summary).left(64) + QStringLiteral(" → ") +
+            QString::fromStdString(proposal.corrected.summary).left(64);
+        correctionSelector->addItem(label, QString::fromStdString(proposal.id));
+    }
+    const int previous = correctionSelector->findData(selected);
+    if (previous >= 0) correctionSelector->setCurrentIndex(previous);
+    const bool available = !correctionProposals.empty();
+    correctionStatus->setText(QString("%1 possible correction(s) await review. Accept keeps the replacement current and the old fact in history. Reject leaves both unchanged.")
+        .arg(correctionProposals.size()));
+    correctionStatus->setVisible(available);
+    correctionSelector->setVisible(available);
+    reviewCorrectionButton->setVisible(available);
+    rejectCorrectionButton->setVisible(available);
+    const bool enabled = available && !revisionBusy && static_cast<bool>(submitCorrectionProposal);
+    correctionSelector->setEnabled(enabled);
+    reviewCorrectionButton->setEnabled(enabled);
+    rejectCorrectionButton->setEnabled(enabled);
+    if (revisionDialog && !activeCorrectionProposalId.empty() &&
+        correctionSelector->findData(QString::fromStdString(activeCorrectionProposalId)) < 0)
+        revisionDialog->close();
+}
+
+void MemoryPanel::SetCorrectionProposalSubmitter(std::function<bool(const std::string&, bool)> submitter)
+{
+    submitCorrectionProposal = std::move(submitter);
+    RefreshCorrectionProposals();
+}
+
+void MemoryPanel::ReviewSelectedCorrection()
+{
+    if (revisionBusy || !submitCorrectionProposal) return;
+    const auto id = correctionSelector->currentData().toString().toStdString();
+    const auto found = std::find_if(correctionProposals.begin(), correctionProposals.end(),
+        [&](const auto& proposal) { return proposal.id == id; });
+    if (found == correctionProposals.end()) return;
+    revia::memory::MemoryRevisionRequest view;
+    view.expectedReplacementId = found->proposedMemoryId;
+    view.corrected = found->corrected;
+    view.reason = "Accept this exact saved replacement for the selected original.";
+    view.evidence = found->evidence;
+    ShowRevisionDialog(found->original, std::move(view), id);
+}
+
+void MemoryPanel::SubmitCorrectionProposal(const std::string& id, const bool accept)
+{
+    if (revisionBusy || id.empty() || !submitCorrectionProposal) return;
+    if (!submitCorrectionProposal(id, accept))
+        SetRevisionOutcome(false, "Another companion operation is active. Review the correction after it finishes.");
 }
 
 void MemoryPanel::ApplyFilter()
@@ -252,7 +345,10 @@ void MemoryPanel::SetRevisionBusy(const bool busy)
     {
         if (auto* button = revisionDialog->findChild<QPushButton*>("memoryRevisionRecord"))
             button->setEnabled(!busy);
+        if (auto* button = revisionDialog->findChild<QPushButton*>("memoryRevisionReject"))
+            button->setEnabled(!busy);
     }
+    RefreshCorrectionProposals();
     UpdateSelectedRevision();
 }
 
@@ -268,6 +364,7 @@ void MemoryPanel::SetRevisionOutcome(const bool success, const std::string& mess
         {
             if (auto* button = revisionDialog->findChild<QPushButton*>("memoryRevisionRecord"))
                 button->setEnabled(false);
+            if (!activeCorrectionProposalId.empty()) revisionDialog->close();
         }
     }
 }
@@ -346,36 +443,68 @@ void MemoryPanel::ReviseSelectedMemory()
     request.corrected.category = entry.category;
     request.corrected.source = "owner_revision";
     request.corrected.subject = entry.subject;
+    ShowRevisionDialog(entry, std::move(request));
+}
+
+void MemoryPanel::ShowRevisionDialog(const memoryEntry& entry, revia::memory::MemoryRevisionRequest request,
+    const std::string& proposalId)
+{
+    if (revisionDialog)
+    {
+        revisionDialog->raise();
+        return;
+    }
+    activeCorrectionProposalId = proposalId;
+    const bool proposalReview = !proposalId.empty();
     revisionDialog = new QDialog(this);
     revisionDialog->setObjectName("memoryRevisionDialog");
-    revisionDialog->setWindowTitle("Correct selected memory");
+    revisionDialog->setWindowTitle(proposalReview ? "Review exact memory correction" : "Correct selected memory");
     revisionDialog->setAttribute(Qt::WA_DeleteOnClose);
     revisionDialog->resize(540, 480);
     auto* layout = new QVBoxLayout(revisionDialog);
     auto* explanation =
-        new QLabel("Request a correction to this exact current record. Its original text remains in history.", revisionDialog);
+        new QLabel(proposalReview ? "Accept marks the old fact as out of date and keeps the replacement current. "
+                                   "Both remain in memory history. Reject leaves both facts unchanged."
+                                  : "Request a correction to this exact current record. Its original text remains in history.", revisionDialog);
     explanation->setWordWrap(true);
     layout->addWidget(explanation);
+    auto* originalId = new QLabel("Original record: " + QString::fromStdString(entry.id), revisionDialog);
+    originalId->setTextFormat(Qt::PlainText);
+    originalId->setWordWrap(true);
+    layout->addWidget(originalId);
     auto* original = new QPlainTextEdit(revisionDialog);
     original->setObjectName("memoryRevisionOriginal");
     original->setReadOnly(true);
     original->setPlainText(QString::fromStdString(entry.summary));
     original->setMaximumHeight(80);
     layout->addWidget(original);
+    if (proposalReview)
+    {
+        auto* replacementId = new QLabel("Saved replacement: " + QString::fromStdString(request.expectedReplacementId), revisionDialog);
+        replacementId->setTextFormat(Qt::PlainText);
+        replacementId->setWordWrap(true);
+        layout->addWidget(replacementId);
+    }
     auto* corrected = new QPlainTextEdit(revisionDialog);
     corrected->setObjectName("memoryRevisionCorrected");
     corrected->setPlaceholderText("Write the corrected fact");
     corrected->setMaximumHeight(110);
+    corrected->setReadOnly(proposalReview);
+    corrected->setPlainText(QString::fromStdString(request.corrected.summary));
     layout->addWidget(corrected);
     auto* reason = new QLineEdit(revisionDialog);
     reason->setObjectName("memoryRevisionReason");
     reason->setMaxLength(1024);
     reason->setPlaceholderText("Why should this exact record be corrected?");
+    reason->setText(QString::fromStdString(request.reason));
+    reason->setReadOnly(proposalReview);
     layout->addWidget(reason);
     auto* evidence = new QPlainTextEdit(revisionDialog);
     evidence->setObjectName("memoryRevisionEvidence");
     evidence->setPlaceholderText("Your explicit correction evidence");
     evidence->setMaximumHeight(90);
+    evidence->setPlainText(QString::fromStdString(request.evidence));
+    evidence->setReadOnly(proposalReview);
     layout->addWidget(evidence);
     auto* result = new QLabel(revisionDialog);
     result->setObjectName("memoryRevisionDialogOutcome");
@@ -384,13 +513,24 @@ void MemoryPanel::ReviseSelectedMemory()
     result->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     layout->addWidget(result);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, revisionDialog);
-    auto* record = buttons->addButton("Request exact correction", QDialogButtonBox::ActionRole);
+    auto* record = buttons->addButton(proposalReview ? "Accept exact correction" : "Request exact correction", QDialogButtonBox::ActionRole);
     record->setObjectName("memoryRevisionRecord");
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, revisionDialog, &QDialog::close);
+    if (proposalReview)
+    {
+        auto* reject = buttons->addButton("Reject", QDialogButtonBox::ActionRole);
+        reject->setObjectName("memoryRevisionReject");
+        connect(reject, &QPushButton::clicked, this, [this, proposalId]() { SubmitCorrectionProposal(proposalId, false); });
+    }
     connect(record, &QPushButton::clicked, this,
-        [this, request, corrected, reason, evidence]() mutable
+        [this, request, corrected, reason, evidence, proposalId]() mutable
         {
+            if (!proposalId.empty())
+            {
+                SubmitCorrectionProposal(proposalId, true);
+                return;
+            }
             request.corrected.summary = corrected->toPlainText().trimmed().toStdString();
             request.reason = reason->text().trimmed().toStdString();
             request.evidence = evidence->toPlainText().trimmed().toStdString();

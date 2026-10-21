@@ -1963,6 +1963,8 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
     }
     if (event.kind == revia::runtime::RuntimeEventKind::ComponentStatus)
     {
+        if (event.component == "Memory" && (event.phase == "Review available" || event.phase == "Revised") && memoryPanel)
+            memoryPanel->Refresh();
         if (event.component == "Voice")
         {
             const QString phase = QString::fromStdString(event.phase);
@@ -2352,6 +2354,38 @@ void ReviaWindow::ResetConversationPresentation()
 void ReviaWindow::ConfigureMemoryRevisionControls()
 {
     const QPointer<MemoryPanel> panel = memoryPanel;
+    memoryPanel->SetCorrectionProposalSubmitter(
+        [this, panel](const std::string& proposalId, const bool accept)
+        {
+            if (switchingCompanion || shuttingDown.load() || studioOperationRunning.load())
+                return false;
+            if (panel) panel->SetRevisionBusy(true);
+            RunStudioOperation(
+                [proposalId, accept](revia::runtime::ReviaSession& current, const std::stop_token stopToken, std::string& message)
+                {
+                    if (!accept)
+                    {
+                        if (!current.RejectMemoryCorrectionProposal(proposalId, message, stopToken)) return false;
+                        message = "Proposal rejected. Both saved facts remain unchanged.";
+                        return true;
+                    }
+                    revia::memory::MemoryRevisionReceipt receipt;
+                    if (!current.AcceptMemoryCorrectionProposal(proposalId, receipt, message, stopToken)) return false;
+                    message = "Correction accepted. The old fact is now historical and the saved replacement is current. "
+                              "Both remain in memory history.";
+                    return true;
+                },
+                [panel](const bool success, const std::string& message)
+                {
+                    if (panel)
+                    {
+                        panel->SetRevisionBusy(false);
+                        panel->SetRevisionOutcome(success, message);
+                        panel->Refresh();
+                    }
+                });
+            return true;
+        });
     memoryPanel->SetRevisionSubmitter(
         [this, panel](const revia::memory::MemoryRevisionRequest& request)
         {

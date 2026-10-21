@@ -34,6 +34,24 @@
                               "timeoutSeconds":  60
                           }
             },
+    "memoryReranker": {
+        "enabled": true,
+        "pythonExecutable": "ThirdParty/MemoryReranker/.venv/Scripts/python.exe",
+        "workerScript": "Tools/Workers/memory_reranker.py",
+        "modelDirectory": "Models/MemoryReranker/ms-marco-MiniLM-L6-v2",
+        "cpuThreads": 4,
+        "timeoutMs": 1000,
+        "startupTimeoutMs": 30000
+    },
+    "memoryNli": {
+        "enabled": false,
+        "pythonExecutable": "ThirdParty/MemoryReranker/.venv/Scripts/python.exe",
+        "workerScript": "Tools/Workers/memory_nli.py",
+        "modelDirectory": "Models/MemoryNli/nli-deberta-v3-small",
+        "cpuThreads": 2,
+        "timeoutMs": 2000,
+        "startupTimeoutMs": 30000
+    },
     "intelligence":  {
                          "enabled":  true,
                          "fast":  {

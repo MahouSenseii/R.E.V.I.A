@@ -722,6 +722,10 @@ bool ReviaSession::Start()
     if (!sessionIdentity.IsCurrent(sessionIdentity.Stamp()))
     {
         sessionIdentity.BeginSession();
+        {
+            std::lock_guard correctionLock(memoryCorrectionMutex);
+            memoryCorrections.clear();
+        }
         const RuntimeStamp origin = sessionIdentity.Stamp();
         (void)companionAuthority->RegisterSession(origin);
         actionRuntime.BindAuthority(companionAuthority, origin);
@@ -1418,13 +1422,32 @@ bool ReviaSession::Start()
     stageStarted = std::chrono::steady_clock::now();
     const bool embeddingAvailable = EnsureEmbeddingAvailable(stopToken);
     startupTimings.push_back({"embedding_health_or_start", ElapsedMilliseconds(stageStarted)});
+    const auto embeddingStartupMilliseconds = startupTimings.back().milliseconds;
+    router.SetMemoryReranker(memoryReranker);
+    if (settings.memoryReranker.enabled && profile.bMemoryEnabled && settings.llm.backend == "LLamaCpp")
+    {
+        const auto rerankerStarted = std::chrono::steady_clock::now();
+        const bool available = memoryReranker->Start(settings.memoryReranker, stopToken);
+        startupTimings.push_back({"memory_reranker_start", ElapsedMilliseconds(rerankerStarted)});
+        PublishComponent("Memory reranker", available ? "Ready" : "Fallback",
+            available ? "Local CPU memory reranking is ready." : memoryReranker->LastError());
+    }
+    if (settings.memoryNli.enabled && settings.embedding.bEnabled && profile.bMemoryEnabled &&
+        settings.llm.backend == "LLamaCpp")
+    {
+        const auto nliStarted = std::chrono::steady_clock::now();
+        const bool available = memoryNli->Start(settings.memoryNli, stopToken);
+        startupTimings.push_back({"memory_nli_start", ElapsedMilliseconds(nliStarted)});
+        PublishComponent("Duplicate memory checks", available ? "Ready" : "Unavailable",
+            available ? "Local advisory duplicate marking is ready." : memoryNli->LastError());
+    }
     PublishComponent("Embeddings",
         embeddingAvailable            ? "Ready"
         : settings.embedding.bEnabled ? "Fallback"
                                       : "Disabled",
         embeddingAvailable ? "Dedicated semantic retrieval is ready on its own server."
                            : "Memory retrieval is using SQLite lexical search.",
-        startupTimings.back().milliseconds, 0, 0, resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice);
+        embeddingStartupMilliseconds, 0, 0, resourcePlan.embeddingDevice == "none" ? "CPU" : resourcePlan.embeddingDevice);
     startupTimings.push_back({"startup_total", ElapsedMilliseconds(startupStarted), true});
     appLogger.Log("Loaded profile: " + profile.displayName);
     (void)affectController.Reset();
@@ -1438,6 +1461,9 @@ bool ReviaSession::Start()
         // The voice load is running by now and outlives this scope on its own thread.
         // A startup that never completed must not leave a model loading behind it.
         StopVoiceWarmup();
+        memoryReranker->Stop();
+        turnCoordinator.Memory().DisableSemanticDuplicates();
+        memoryNli->Stop();
         SetState(RuntimeState::Offline, "Startup was stopped.");
         return false;
     }
@@ -3378,16 +3404,23 @@ void ReviaSession::ArchiveTurn(
 {
     if (!sessionIdentity.IsCurrent(sessionIdentity.Stamp()))
         return;
+    // Curated duplicate checks do not depend on the optional raw-turn archive.
+    RefreshSemanticDuplicateScope(scope, admission);
     if (conversationSessionId.empty() || !ConversationSnapshot().bArchiveEnabled)
     {
         return;
     }
     std::string reason;
-    if (!conversationArchive.Record(conversationSessionId, role, content, reason, scope, std::move(admission)))
+    if (!conversationArchive.Record(conversationSessionId, role, content, reason, scope, admission))
     {
         // Only the refusal is logged, never the turn. Recording why a secret was withheld
         // by writing the secret to the log would defeat the whole point of withholding it.
         appLogger.Log("A turn was not archived: " + reason);
+    }
+    else if (settings.embedding.bEnabled && profile.bMemoryEnabled && settings.llm.backend == "LLamaCpp" &&
+             memory::IsAttributedPrivateScope(scope))
+    {
+        turnCoordinator.Memory().StartArchiveEmbeddingBackfill(router, conversationArchive, settings.embedding.modelName, scope, admission);
     }
 }
 
@@ -3449,39 +3482,50 @@ std::string ReviaSession::RecallConversation(
     }
 
     const std::int64_t now = memory::CurrentEpoch();
-    std::vector<memory::ArchivedTurn> turns;
-    switch (request.kind)
+    const auto stopToken = CurrentOperationToken();
+    const bool ranked = !request.terms.empty() &&
+        (request.kind == memory::RecallKind::Topic || request.kind == memory::RecallKind::Window);
+    std::string query;
+    for (const auto& term : request.terms)
     {
-    case memory::RecallKind::Window:
-        if (!request.terms.empty())
-        {
-            turns = conversationArchive.SearchRange(request.terms, request.window.startEpoch, request.window.endEpoch, 12, &scope);
-        }
-        if (turns.empty())
-        {
-            // A named stretch with no usable subject, or a subject that matched
-            // nothing inside it. Either way the stretch itself is what was asked for.
-            turns = conversationArchive.LoadRange(request.window.startEpoch, request.window.endEpoch, 40, &scope);
-        }
-        break;
-    case memory::RecallKind::Topic:
-        // No window: the whole archive up to now, which the created_at index still
-        // bounds because the range is closed at both ends.
-        turns = conversationArchive.SearchRange(request.terms, 0, now + 60, 12, &scope);
-        break;
-    case memory::RecallKind::Earliest:
-        turns = conversationArchive.SearchEarliest(request.terms, 4, &scope);
-        break;
-    case memory::RecallKind::None:
-        return {};
+        if (!query.empty()) query += ' ';
+        query += term;
     }
+    embeddingOutput embedding;
+    if (ranked && settings.embedding.bEnabled && !stopToken.stop_requested())
+        embedding = router.EmbedMemoryQuery(query, stopToken);
+    if (stopToken.stop_requested() || Audience().revision != scope.audience.revision)
+        return {};
+    const bool rerank = ranked && memoryReranker->IsAvailable();
+    std::size_t limit = request.kind == memory::RecallKind::Earliest ? 4 : ranked ? 12 : 40;
+    auto turns = conversationArchive.SearchHybrid(request, rerank ? 30 : limit, scope,
+        embedding.bSuccess ? embedding.values : std::vector<float>{}, embedding.bSuccess ? embedding.model : "", now);
 
     // The question being answered was archived moments ago, before generation started.
     // Handing it back as evidence of what was said would be circular and would waste the
     // block on a turn the model already has.
     std::erase_if(turns, [&](const memory::ArchivedTurn& turn) { return turn.role == "user" && turn.content == currentInput; });
 
-    if (Audience().revision != scope.audience.revision)
+    if (rerank && !turns.empty())
+    {
+        std::vector<std::string> documents;
+        for (const auto& turn : turns)
+            documents.push_back(memory::ArchiveEmbeddingText(turn));
+        const auto order = memory::RerankOrder(memoryReranker->Rerank(query, documents, stopToken), turns.size());
+        std::vector<memory::ArchivedTurn> reordered;
+        for (const auto index : order)
+            reordered.push_back(std::move(turns[index]));
+        turns = std::move(reordered);
+    }
+    if (turns.empty() && request.kind == memory::RecallKind::Window)
+    {
+        turns = conversationArchive.LoadRange(request.window.startEpoch, request.window.endEpoch, 40, &scope);
+        std::erase_if(turns, [&](const memory::ArchivedTurn& turn) { return turn.role == "user" && turn.content == currentInput; });
+        limit = 40;
+    }
+    if (turns.size() > limit)
+        turns.resize(limit);
+    if (stopToken.stop_requested() || Audience().revision != scope.audience.revision || Audience().kind != scope.audience.kind)
         return {};
     return memory::RenderRecallBlock(request, turns, DisplayName(), now);
 }
@@ -3626,7 +3670,7 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     {
         result.message += " Part of it applies now; all of it takes effect the next time Revia starts.";
     }
-    return live;
+    return live || archiveOff;
 }
 
 void ReviaSession::ApplyPreference(const std::string& lowered)
@@ -3710,6 +3754,10 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
         {
             StartCuriosityLoop();
         }
+    }
+    else if (lowered == "conversation.archiveenabled")
+    {
+        RefreshMemoryBackfill();
     }
     else if (lowered == "resources.usagesampleseconds")
     {
@@ -4642,11 +4690,15 @@ void ReviaSession::PollBackgroundEvents()
 
     (void)selfAssessment.Assess();
 
+    const RuntimeStamp memoryEventOrigin = Stamp();
     const std::vector<agents::MemoryAgentEvent> memoryEvents = turnCoordinator.DrainMemoryEvents();
     for (const agents::MemoryAgentEvent& event : memoryEvents)
     {
+        if (event.saveSucceeded && event.decision.bSuccess && !event.correctionProposals.empty())
+            QueueMemoryCorrectionProposals(event.correctionProposals, memoryEventOrigin);
+        const bool embeddingBackfill = event.operation == "memory_backfill" || event.operation == "archive_backfill";
         const std::string timingScope =
-            event.operation == "memory_backfill" ? "memory backfill" : "memory turn #" + std::to_string(event.turnId);
+            embeddingBackfill ? event.operation : "memory turn #" + std::to_string(event.turnId);
         appLogger.Timing(timingScope, event.decision.timings);
 
         if (!event.embeddingError.empty())
@@ -4656,17 +4708,17 @@ void ReviaSession::PollBackgroundEvents()
         }
 
         const std::string phase = !event.decision.bSuccess || !event.saveSucceeded ? "Error"
-                                  : event.operation == "memory_backfill"           ? "Backfilled"
+                                  : embeddingBackfill                             ? "Backfilled"
                                   : event.wasAdded                                 ? "Saved"
                                                                                    : "Idle";
-        PublishComponent(event.operation == "memory_backfill" ? "Embeddings" : "Memory", phase,
+        PublishComponent(embeddingBackfill ? "Embeddings" : "Memory", phase,
             !event.decision.reason.empty() ? event.decision.reason
             : phase == "Saved"             ? "A durable memory was saved."
             : phase == "Backfilled"        ? "A missing memory vector was backfilled."
                                            : "No durable memory was needed.",
             AggregateMilliseconds(event.decision.timings), 0, event.turnId);
 
-        if (event.operation == "memory_backfill")
+        if (embeddingBackfill)
         {
             if (!event.decision.bSuccess)
             {
@@ -4770,6 +4822,10 @@ void ReviaSession::Stop()
     CancelSpeakerEnrollment();
     const RuntimeStamp retiring = sessionIdentity.Stamp();
     sessionIdentity.Invalidate();
+    {
+        std::lock_guard correctionLock(memoryCorrectionMutex);
+        memoryCorrections.clear();
+    }
     companionAuthority->EndSession(retiring);
     agentWorkflow.RequestCancel();
     agentWorkflow.Join();
@@ -4816,6 +4872,9 @@ void ReviaSession::Stop()
     // Start also holds operationMutex: join here so startup cannot create a
     // save worker after shutdown has already tried to stop it.
     StopStateMaintenance();
+    turnCoordinator.Memory().DisableSemanticDuplicates();
+    memoryNli->Stop();
+    memoryReranker->Stop();
     if (!started.load() && !llamaServerProcess.WasStartedByRevia() && !embeddingServerProcess.WasStartedByRevia())
     {
         speechService.Shutdown();
@@ -7737,10 +7796,41 @@ void ReviaSession::ApplyProfileLocked(const std::string& profileId, aiProfile lo
 
 void ReviaSession::RefreshMemoryBackfill()
 {
+    const auto scope = CapturePrivateMemoryScope();
+    const auto admission = [this, scope]
+    {
+        const auto current = CapturePrivateMemoryScope();
+        return memory::IsAttributedPrivateScope(current) && current.participantId == scope.participantId &&
+            current.companionId == scope.companionId && current.audience.kind == scope.audience.kind &&
+            current.audience.audienceId == scope.audience.audienceId && current.audience.revision == scope.audience.revision &&
+            current.participantSource == scope.participantSource && current.consentRevision == scope.consentRevision;
+    };
+    RefreshSemanticDuplicateScope(scope, admission);
     if (started.load() && settings.embedding.bEnabled && profile.bMemoryEnabled && settings.llm.backend == "LLamaCpp")
+    {
         turnCoordinator.BackfillMemoryEmbeddings(router, settings.embedding.modelName);
+        if (ConversationSnapshot().bArchiveEnabled && memory::IsAttributedPrivateScope(scope))
+            turnCoordinator.Memory().StartArchiveEmbeddingBackfill(router, conversationArchive, settings.embedding.modelName, scope, admission);
+        else
+            turnCoordinator.Memory().StopArchiveEmbeddingBackfill();
+    }
     else
         turnCoordinator.Memory().StopEmbeddingBackfill();
+}
+
+void ReviaSession::RefreshSemanticDuplicateScope(const memory::MemoryScope& scope, std::function<bool()> admission)
+{
+    if (started.load() && settings.memoryNli.enabled && settings.embedding.bEnabled && profile.bMemoryEnabled &&
+        settings.llm.backend == "LLamaCpp" && memory::IsAttributedPrivateScope(scope) && memoryNli->IsAvailable() &&
+        admission && admission())
+    {
+        memory::SemanticDuplicateSettings policy;
+        policy.enabled = true;
+        policy.modelIdentity = memory::MemoryNliModelIdentity;
+        turnCoordinator.Memory().ConfigureSemanticDuplicates(policy, memoryNli, scope, std::move(admission));
+    }
+    else
+        turnCoordinator.Memory().DisableSemanticDuplicates();
 }
 
 void ReviaSession::PrepareBrain(const intelligence::IntelligenceTier tier, const std::stop_token stopToken, const bool enabled)

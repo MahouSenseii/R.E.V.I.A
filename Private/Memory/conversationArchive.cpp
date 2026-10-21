@@ -1,6 +1,8 @@
 #include "Core/utf8.h"
 #include "Memory/conversationArchive.h"
 
+#include "Memory/conversationRecall.h"
+#include "Memory/hybridRanking.h"
 #include "Memory/sensitiveContent.h"
 #include "Memory/temporalQuery.h"
 
@@ -10,10 +12,12 @@
 #include <chrono>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <sqlite3.h>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace revia::memory
@@ -265,6 +269,22 @@ Database OpenDatabase(const std::string& archivePath)
         "  AFTER DELETE ON conversation_turns BEGIN "
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
+        "END;"
+        "CREATE TABLE IF NOT EXISTS conversation_embeddings ("
+        "  turn_id TEXT PRIMARY KEY,"
+        "  model TEXT NOT NULL,"
+        "  dimensions INTEGER NOT NULL CHECK(dimensions > 0),"
+        "  embedding BLOB NOT NULL,"
+        "  updated_at TEXT NOT NULL"
+        ");"
+        "CREATE INDEX IF NOT EXISTS conversation_embeddings_model ON conversation_embeddings(model);"
+        "CREATE TRIGGER IF NOT EXISTS conversation_embeddings_after_delete "
+        "  AFTER DELETE ON conversation_turns BEGIN "
+        "  DELETE FROM conversation_embeddings WHERE turn_id = old.id;"
+        "END;"
+        "CREATE TRIGGER IF NOT EXISTS conversation_embeddings_after_update "
+        "  AFTER UPDATE OF id, role, content ON conversation_turns BEGIN "
+        "  DELETE FROM conversation_embeddings WHERE turn_id = old.id;"
         "END;";
     if (!Execute(database.get(), Schema) || !MigrateScope(database.get()) || !MigrateSessionTitle(database.get()))
     {
@@ -312,6 +332,9 @@ ArchivedTurn ReadTurn(sqlite3_stmt* statement)
 
 constexpr const char* TurnColumns = "id, session_id, turn_index, role, content, created_at, participant_id, audience_kind, audience_id, "
                                     "audience_revision, speaker_source, consent_revision, companion_id";
+constexpr const char* QualifiedTurnColumns =
+    "t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, t.participant_id, t.audience_kind, t.audience_id, "
+    "t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id";
 
 // Terms matched individually and OR'd, each as a prefix, so "emotion system" finds a turn
 // that said either word. Distinct from QuoteForFts, which builds one exact phrase: a
@@ -336,6 +359,11 @@ std::string BuildTermMatch(const std::vector<std::string>& terms)
 }
 
 } // namespace
+
+std::string ArchiveEmbeddingText(const ArchivedTurn& turn)
+{
+    return turn.role + ": " + turn.content;
+}
 
 struct ConversationArchive::Connection
 {
@@ -903,6 +931,257 @@ std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
         turns.push_back(ReadTurn(statement.get()));
     }
     return turns;
+}
+
+std::vector<ArchivedTurn> ConversationArchive::SearchHybrid(const RecallRequest& request, const std::size_t maxTurns,
+    const MemoryScope& scope, const std::vector<float>& queryEmbedding, const std::string& embeddingModel,
+    const std::int64_t nowEpoch) const
+{
+    if (!request.Wanted() || !IsAttributedPrivateScope(scope) || maxTurns == 0)
+        return {};
+    const auto now = nowEpoch == 0 ? CurrentEpoch() : nowEpoch;
+    const auto end = request.kind == RecallKind::Window ? request.window.endEpoch :
+        (now > std::numeric_limits<std::int64_t>::max() - 60 ? now : now + 60);
+    const auto start = request.kind == RecallKind::Window ? request.window.startEpoch : 0;
+    if (end <= start)
+        return {};
+    const auto resultLimit = std::min<std::size_t>(maxTurns, 100);
+    const std::string match = BuildTermMatch(request.terms);
+    if (match.empty())
+        return request.kind == RecallKind::Window ? LoadRange(start, end, resultLimit, &scope) : std::vector<ArchivedTurn>{};
+
+    sqlite3* const database = Acquire();
+    if (!database)
+        return {};
+    std::lock_guard readLock(connectionMutex);
+    // Cap internal work even when an external caller asks for an excessive prompt.
+    const auto candidateLimit = std::max<std::size_t>(20, resultLimit * 4);
+    const bool earliest = request.kind == RecallKind::Earliest;
+    std::vector<ArchivedTurn> lexical;
+    {
+        const std::string sql = std::string("SELECT ") + QualifiedTurnColumns +
+            " FROM conversation_search s JOIN conversation_turns t ON t.rowid = s.rowid "
+            "WHERE conversation_search MATCH ?1 AND CAST(t.created_at AS INTEGER) >= ?2 "
+            "AND CAST(t.created_at AS INTEGER) < ?3 " + ScopePredicate(&scope, "t.") +
+            (earliest ? "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC, t.id ASC LIMIT ?4;" :
+                        "ORDER BY bm25(conversation_search) ASC, CAST(t.created_at AS INTEGER) DESC, t.id ASC LIMIT ?4;");
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+            return {};
+        Statement statement(raw);
+        sqlite3_bind_text(statement.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(statement.get(), 2, start);
+        sqlite3_bind_int64(statement.get(), 3, end);
+        sqlite3_bind_int64(statement.get(), 4, static_cast<sqlite3_int64>(earliest ? resultLimit : candidateLimit));
+        BindScope(statement.get(), &scope);
+        while (sqlite3_step(statement.get()) == SQLITE_ROW)
+            lexical.push_back(ReadTurn(statement.get()));
+    }
+    // Semantic similarity cannot establish when a subject was first mentioned.
+    if (earliest)
+        return lexical;
+
+    struct SemanticTurn { ArchivedTurn turn; float similarity; };
+    std::vector<SemanticTurn> semantic;
+    if (!embeddingModel.empty() && IsValidEmbedding(queryEmbedding) && queryEmbedding.size() <= 16384 &&
+        VectorNorm(queryEmbedding) > 0.0)
+    {
+        const std::string sql = std::string("SELECT ") + QualifiedTurnColumns +
+            ", e.embedding, e.dimensions FROM conversation_turns t JOIN conversation_embeddings e ON e.turn_id = t.id "
+            "WHERE e.model = ?1 AND CAST(t.created_at AS INTEGER) >= ?2 AND CAST(t.created_at AS INTEGER) < ?3 "
+            "AND e.dimensions = ?4 " + ScopePredicate(&scope, "t.") + ";";
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) == SQLITE_OK)
+        {
+            Statement statement(raw);
+            sqlite3_bind_text(statement.get(), 1, embeddingModel.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(statement.get(), 2, start);
+            sqlite3_bind_int64(statement.get(), 3, end);
+            sqlite3_bind_int64(statement.get(), 4, static_cast<sqlite3_int64>(queryEmbedding.size()));
+            BindScope(statement.get(), &scope);
+            const double norm = VectorNorm(queryEmbedding);
+            const auto better = [](const SemanticTurn& left, const SemanticTurn& right)
+            {
+                if (left.similarity != right.similarity) return left.similarity > right.similarity;
+                const auto leftTime = ParseEpochSecondsText(left.turn.createdAt);
+                const auto rightTime = ParseEpochSecondsText(right.turn.createdAt);
+                if (leftTime != rightTime) return leftTime > rightTime;
+                return left.turn.id < right.turn.id;
+            };
+            while (sqlite3_step(statement.get()) == SQLITE_ROW)
+            {
+                const auto similarity = CosineSimilarity(queryEmbedding, norm, sqlite3_column_blob(statement.get(), 13),
+                    sqlite3_column_bytes(statement.get(), 13), sqlite3_column_int64(statement.get(), 14));
+                if (!similarity || *similarity < MinimumSemanticSimilarity)
+                    continue;
+                semantic.push_back({ReadTurn(statement.get()), *similarity});
+                // Retain only the best candidates while scanning; the retained text
+                // stays bounded even for an archive at its retention ceiling.
+                if (semantic.size() > candidateLimit)
+                {
+                    const auto worst = std::max_element(semantic.begin(), semantic.end(), better);
+                    semantic.erase(worst);
+                }
+            }
+            std::sort(semantic.begin(), semantic.end(), better);
+        }
+    }
+    std::unordered_map<std::string, ArchivedTurn> candidates;
+    std::vector<std::string> lexicalKeys, semanticKeys;
+    for (auto& turn : lexical)
+    {
+        lexicalKeys.push_back(turn.id);
+        candidates.emplace(turn.id, std::move(turn));
+    }
+    for (auto& candidate : semantic)
+    {
+        semanticKeys.push_back(candidate.turn.id);
+        candidates.emplace(candidate.turn.id, std::move(candidate.turn));
+    }
+    auto fused = FuseReciprocalRanks({{lexicalKeys, 1.0}, {semanticKeys, 1.25}});
+    std::sort(fused.begin(), fused.end(), [&](const FusedRank& left, const FusedRank& right)
+    {
+        if (left.score != right.score) return left.score > right.score;
+        const auto leftTime = ParseEpochSecondsText(candidates.at(left.key).createdAt);
+        const auto rightTime = ParseEpochSecondsText(candidates.at(right.key).createdAt);
+        if (leftTime != rightTime) return leftTime > rightTime;
+        return left.firstSeen < right.firstSeen;
+    });
+    std::vector<ArchivedTurn> result;
+    for (const auto& rank : fused)
+    {
+        if (result.size() >= resultLimit) break;
+        result.push_back(std::move(candidates.at(rank.key)));
+    }
+    return result;
+}
+
+ArchiveEmbeddingBackfillPage ConversationArchive::ScanMissingEmbeddings(const std::string& embeddingModel,
+    const std::int64_t afterRowId, const std::size_t maxEntries, const MemoryScope* scope) const
+{
+    ArchiveEmbeddingBackfillPage page;
+    page.nextRowId = std::max<std::int64_t>(0, afterRowId);
+    if (embeddingModel.empty() || maxEntries == 0 || (scope && !IsAttributedPrivateScope(*scope)))
+        return page;
+    sqlite3* const database = Acquire();
+    if (!database)
+    {
+        page.error = "The conversation archive could not be opened for embedding backfill.";
+        return page;
+    }
+    std::lock_guard readLock(connectionMutex);
+    const std::string sql = std::string("SELECT ") + QualifiedTurnColumns + ", t.rowid "
+        "FROM conversation_turns t WHERE t.rowid > ?1 AND NOT EXISTS "
+        "(SELECT 1 FROM conversation_embeddings e WHERE e.turn_id = t.id AND e.model = ?2 "
+        "AND e.dimensions > 0 AND length(e.embedding) = e.dimensions * 4) " + ScopePredicate(scope, "t.") +
+        "ORDER BY t.rowid ASC LIMIT ?3;";
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+    {
+        page.error = "The conversation archive rejected its embedding backfill query.";
+        return page;
+    }
+    Statement statement(raw);
+    const auto limit = std::min<std::size_t>(maxEntries, 100);
+    sqlite3_bind_int64(statement.get(), 1, page.nextRowId);
+    sqlite3_bind_text(statement.get(), 2, embeddingModel.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 3, static_cast<sqlite3_int64>(limit + 1));
+    BindScope(statement.get(), scope);
+    int status = SQLITE_DONE;
+    while ((status = sqlite3_step(statement.get())) == SQLITE_ROW)
+    {
+        if (page.entries.size() == limit)
+        {
+            page.hasMore = true;
+            break;
+        }
+        page.entries.push_back(ReadTurn(statement.get()));
+        page.nextRowId = sqlite3_column_int64(statement.get(), 13);
+    }
+    if (status != SQLITE_DONE && status != SQLITE_ROW)
+    {
+        page.entries.clear();
+        page.nextRowId = std::max<std::int64_t>(0, afterRowId);
+        page.hasMore = false;
+        page.error = "The conversation archive could not read its embedding backfill page.";
+    }
+    return page;
+}
+
+bool ConversationArchive::NeedsEmbedding(const std::string& turnId, const std::string& embeddingModel) const
+{
+    sqlite3* const database = Acquire();
+    if (!database || turnId.empty() || embeddingModel.empty())
+        return false;
+    std::lock_guard readLock(connectionMutex);
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+        "SELECT 1 FROM conversation_turns t WHERE t.id = ?1 AND NOT EXISTS "
+        "(SELECT 1 FROM conversation_embeddings e WHERE e.turn_id = t.id AND e.model = ?2 "
+        "AND e.dimensions > 0 AND length(e.embedding) = e.dimensions * 4);", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement statement(raw);
+    sqlite3_bind_text(statement.get(), 1, turnId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 2, embeddingModel.c_str(), -1, SQLITE_TRANSIENT);
+    return sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
+bool ConversationArchive::SaveEmbedding(const ArchivedTurn& expectedTurn, const std::string& embeddingModel,
+    const std::vector<float>& embedding, std::function<bool()> admission)
+{
+    if (expectedTurn.id.empty() || embeddingModel.empty() || embedding.size() > 16384 ||
+        !IsValidEmbedding(embedding) || VectorNorm(embedding) <= 0.0)
+        return false;
+    sqlite3* const database = Acquire();
+    if (!database)
+        return false;
+    std::lock_guard writeLock(connectionMutex);
+    const auto admitted = [&]()
+    {
+        try { return !admission || admission(); }
+        catch (...) { return false; }
+    };
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive() || !admitted())
+        return false;
+    {
+        const std::string sql = std::string("SELECT ") + TurnColumns + " FROM conversation_turns WHERE id = ?1;";
+        sqlite3_stmt* raw = nullptr;
+        if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
+            return false;
+        Statement statement(raw);
+        sqlite3_bind_text(statement.get(), 1, expectedTurn.id.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(statement.get()) != SQLITE_ROW)
+            return false;
+        const auto stored = ReadTurn(statement.get());
+        if (stored.content != expectedTurn.content || stored.role != expectedTurn.role ||
+            stored.createdAt != expectedTurn.createdAt || stored.sessionId != expectedTurn.sessionId ||
+            stored.turnIndex != expectedTurn.turnIndex || stored.scope.participantId != expectedTurn.scope.participantId ||
+            stored.scope.audience.kind != expectedTurn.scope.audience.kind ||
+            stored.scope.audience.audienceId != expectedTurn.scope.audience.audienceId ||
+            stored.scope.audience.revision != expectedTurn.scope.audience.revision ||
+            stored.scope.participantSource != expectedTurn.scope.participantSource ||
+            stored.scope.consentRevision != expectedTurn.scope.consentRevision ||
+            stored.scope.companionId != expectedTurn.scope.companionId)
+            return false;
+    }
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+        "INSERT INTO conversation_embeddings(turn_id, model, dimensions, embedding, updated_at) VALUES(?1, ?2, ?3, ?4, ?5) "
+        "ON CONFLICT(turn_id) DO UPDATE SET model=excluded.model, dimensions=excluded.dimensions, "
+        "embedding=excluded.embedding, updated_at=excluded.updated_at;", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement statement(raw);
+    sqlite3_bind_text(statement.get(), 1, expectedTurn.id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 2, embeddingModel.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(statement.get(), 3, static_cast<sqlite3_int64>(embedding.size()));
+    sqlite3_bind_blob(statement.get(), 4, embedding.data(), static_cast<int>(embedding.size() * sizeof(float)), SQLITE_TRANSIENT);
+    const auto now = CurrentEpochSeconds();
+    sqlite3_bind_text(statement.get(), 5, now.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(statement.get()) != SQLITE_DONE)
+        return false;
+    statement.reset();
+    return admitted() && transaction.Commit();
 }
 
 std::size_t ConversationArchive::Forget()

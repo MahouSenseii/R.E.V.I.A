@@ -7,6 +7,7 @@
 #include "Core/profile.h"
 #include "LLM/endpointSettings.h"
 #include "Memory/memoryTypes.h"
+#include "Memory/memoryCorrection.h"
 #include "Runtime/outputChannel.h"
 #include "Runtime/agentProviderMode.h"
 #include "Runtime/companion.h"
@@ -232,6 +233,10 @@ class ReviaSession
         bool ownerRequested = false, std::stop_token stopToken = {});
     bool ReviseMemoryOwnerRequested(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::stop_token stopToken = {});
+    [[nodiscard]] std::vector<memory::MemoryCorrectionProposal> PendingMemoryCorrections();
+    bool AcceptMemoryCorrectionProposal(const std::string& proposalId, memory::MemoryRevisionReceipt& outReceipt,
+        std::string& outError, std::stop_token stopToken = {});
+    bool RejectMemoryCorrectionProposal(const std::string& proposalId, std::string& outError, std::stop_token stopToken = {});
     bool ProposePresentationChange(std::string& outId, std::string& outError, std::stop_token stopToken = {});
     bool ReviewPresentationChange(bool validate, std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;
@@ -654,6 +659,7 @@ class ReviaSession
     void StartVirtualMachine();
     void StopVirtualMachine();
     void RefreshMemoryBackfill();
+    void RefreshSemanticDuplicateScope(const memory::MemoryScope& scope, std::function<bool()> admission);
     // Requires consistent evidence before changing development.
     void RecordDevelopmentEvidence(const identity::TurnObservation& observation);
     // Feeds drives the same confirmed stimulus used by appraisal.
@@ -697,6 +703,20 @@ class ReviaSession
     // conversation rather than starting one that has forgotten yesterday.
     void RestoreConversationContext(const memory::MemoryScope& scope, const std::function<bool()>& admission);
     [[nodiscard]] memory::MemoryScope CapturePrivateMemoryScope() const;
+    // Caller holds speakerMutex and audienceMutex through the dependent operation.
+    [[nodiscard]] memory::MemoryScope CapturePrivateMemoryScopeLocked() const;
+    void QueueMemoryCorrectionProposals(const std::vector<memory::MemoryCorrectionProposal>& proposals, const RuntimeStamp& origin);
+    void PruneMemoryCorrectionsLocked(const memory::MemoryScope& scope, const RuntimeStamp& origin);
+    bool ReviseMemoryOwnerRequestedLocked(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
+        std::string& outError, std::stop_token stopToken, std::optional<memory::MemoryScope> proposalScope = std::nullopt);
+    struct PendingMemoryCorrection
+    {
+        memory::MemoryCorrectionProposal proposal;
+        RuntimeStamp origin;
+    };
+    // Transient review state only. No proposal grants persistence authority.
+    mutable std::mutex memoryCorrectionMutex;
+    std::vector<PendingMemoryCorrection> memoryCorrections;
     std::string privateContextParticipant;
     std::string privateContextAudience;
     // The newest typed or merged exchange as each store holds it, kept so a regenerate
@@ -1013,6 +1033,8 @@ class ReviaSession
 
     evaluation::EvaluationReport lastEvaluation;
     memory::ConversationArchive conversationArchive;
+    std::shared_ptr<memory::MemoryReranker> memoryReranker = std::make_shared<memory::MemoryReranker>();
+    std::shared_ptr<memory::MemoryNliWorker> memoryNli = std::make_shared<memory::MemoryNliWorker>();
     core::PreferenceStore preferenceStore;
     identity::RelationshipRegistry relationships;
     // Set by startup before the save worker runs. Failed loads must never turn

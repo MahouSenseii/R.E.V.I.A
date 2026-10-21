@@ -27,6 +27,7 @@ public:
     llamaCppService();
     explicit llamaCppService(std::string memoryDatabasePath);
     ~llamaCppService();
+    void SetMemoryReranker(std::shared_ptr<revia::memory::MemoryReranker> value) { builder.SetMemoryReranker(std::move(value)); }
 
     void ApplySettings(const llmSettings& settings, const embeddingSettings& embeddingSettings, const aiProfile& profile);
     void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
@@ -94,6 +95,8 @@ public:
     std::string RelatedMemories(
         const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
+    embeddingOutput EmbedMemoryQuery(const std::string& query, std::stop_token stopToken = {}) const
+    { return embeddings.EmbedQuery(query, stopToken); }
 
 private:
     int ResponseTokenLimit() const;

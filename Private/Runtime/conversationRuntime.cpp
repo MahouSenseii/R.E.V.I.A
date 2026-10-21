@@ -658,8 +658,14 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
 
     std::ostringstream postureLine;
     const bool briefSocial = agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput);
-    postureLine << identity::RenderStatePacket(packet, !briefSocial) << "\n\n"
-                << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    if (turnPolicy.evaluationBlocks.statePacket)
+        postureLine << identity::RenderStatePacket(packet, !briefSocial);
+    if (turnPolicy.evaluationBlocks.styleGuidance)
+    {
+        if (turnPolicy.evaluationBlocks.statePacket)
+            postureLine << "\n\n";
+        postureLine << conversationStyle.BuildTurnGuidance(policyInput, promptContext);
+    }
     if (!briefSocial)
     {
         // The profile's answer obligation, alongside the turn guidance rather than
@@ -900,11 +906,20 @@ std::string ConversationRuntime::BuildArithmeticGrounding(const std::string& inp
 evaluation::EvaluationReply ConversationRuntime::EvaluateTurn(const std::string& input, const std::vector<conversationMessage>& priorTurns,
     const aiProfile& profile, const bool llmAvailable, const std::stop_token stopToken)
 {
+    return EvaluateTurnForExperiment(input, priorTurns, profile, llmAvailable, {}, stopToken);
+}
+
+evaluation::EvaluationReply ConversationRuntime::EvaluateTurnForExperiment(const std::string& input,
+    const std::vector<conversationMessage>& priorTurns, const aiProfile& profile, const bool llmAvailable,
+    const EvaluationPromptBlocks blocks, const std::stop_token stopToken)
+{
     // The case supplies its own history rather than reading the live one, so a suite run
     // measures the corpus and not whatever the user happened to say beforehand.
     std::vector<conversationMessage> promptContext = priorTurns;
     promptContext.push_back({"user", input});
-    std::string posture = BuildTurnPosture(input, promptContext, profile, llmAvailable, {});
+    TurnPolicy evaluationPolicy;
+    evaluationPolicy.evaluationBlocks = blocks;
+    std::string posture = BuildTurnPosture(input, promptContext, profile, llmAvailable, evaluationPolicy);
     if (llmAvailable)
     {
         const auto arithmetic = BuildArithmeticGrounding(input, promptContext, stopToken);

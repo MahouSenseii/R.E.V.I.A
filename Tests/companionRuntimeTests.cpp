@@ -1,4 +1,5 @@
 #include "reviaSessionTestAccess.h"
+#include "Core/configManager.h"
 #include "Runtime/companionSettings.h"
 #include "Memory/longTermMemory.h"
 #include "Resources/runtimeLease.h"
@@ -69,12 +70,198 @@ void WaitUntil(ReviaSession& session, const std::function<bool()>& ready)
     }
     Check(ready(), "The bounded runtime fixture did not reach its declared state.");
 }
+
+void TestMemoryRerankerSettingsCompatibility()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto settingsPath = fixture.root / "settings.json";
+    const configManager loader(settingsPath.string(), (fixture.root / "Profiles").string());
+    const auto load = [&](const nlohmann::json& document, appSettings& settings)
+    {
+        // This fixture does not install an embedding server; its independent
+        // auto-start path requirements must not decide a reranker settings check.
+        nlohmann::json configured = {{"embedding", {{"enabled", false}}}};
+        configured.update(document);
+        std::ofstream output(settingsPath, std::ios::trunc);
+        output << configured.dump();
+        output.close();
+        Check(!output.fail(), "Could not write the reranker settings fixture.");
+        return loader.LoadSettings(settings);
+    };
+    const nlohmann::json legacy = nlohmann::json::object();
+    appSettings oldSettings;
+    Check(load(legacy, oldSettings) && !oldSettings.memoryReranker.enabled,
+        "A settings file written before memoryReranker existed no longer loads disabled.");
+    appSettings emptySettings;
+    Check(load({{"memoryReranker", nlohmann::json::object()}}, emptySettings) &&
+              !emptySettings.memoryReranker.enabled,
+        "An empty optional reranker block enabled the worker.");
+
+    const nlohmann::json enabled = {{"memoryReranker", {{"enabled", true}}}};
+    appSettings defaults;
+    Check(load(enabled, defaults) && defaults.memoryReranker.enabled &&
+              defaults.memoryReranker.cpuThreads == 4 && defaults.memoryReranker.timeoutMs == 1000 &&
+              defaults.memoryReranker.startupTimeoutMs == 30000 &&
+              defaults.memoryReranker.pythonExecutable == "ThirdParty/MemoryReranker/.venv/Scripts/python.exe" &&
+              defaults.memoryReranker.workerScript == "Tools/Workers/memory_reranker.py" &&
+              defaults.memoryReranker.modelDirectory == "Models/MemoryReranker/ms-marco-MiniLM-L6-v2",
+        "An enabled reranker block did not keep its documented bounded local defaults.");
+    defaults.activeProfile = "reload-profile-sentinel";
+    Check(load(legacy, defaults) && !defaults.memoryReranker.enabled &&
+              defaults.memoryReranker.pythonExecutable.empty() && defaults.memoryReranker.workerScript.empty() &&
+              defaults.memoryReranker.modelDirectory.empty() && defaults.activeProfile == "reload-profile-sentinel",
+        "Removing the reranker block from reused settings did not disable its previous worker or changed unrelated settings.");
+    for (const int endpoint : {0, 1})
+    {
+        auto document = enabled;
+        document["memoryReranker"]["cpuThreads"] = endpoint ? 16 : 1;
+        document["memoryReranker"]["timeoutMs"] = endpoint ? 10000 : 1;
+        document["memoryReranker"]["startupTimeoutMs"] = endpoint ? 120000 : 1;
+        appSettings loaded;
+        Check(load(document, loaded) && loaded.memoryReranker.cpuThreads == (endpoint ? 16 : 1) &&
+                  loaded.memoryReranker.timeoutMs == (endpoint ? 10000 : 1) &&
+                  loaded.memoryReranker.startupTimeoutMs == (endpoint ? 120000 : 1),
+            "A supported reranker settings boundary was refused or changed.");
+    }
+    std::string invalidAccepted;
+    for (const auto& [field, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+             {"enabled", "yes"}, {"enabled", 1}, {"cpuThreads", "4"}, {"timeoutMs", nullptr},
+             {"startupTimeoutMs", nlohmann::json::array()}, {"pythonExecutable", 1},
+             {"workerScript", false}, {"modelDirectory", nlohmann::json::object()},
+             {"cpuThreads", 0}, {"cpuThreads", 17}, {"timeoutMs", 0}, {"timeoutMs", 10001},
+             {"cpuThreads", 16.5}, {"timeoutMs", 10000.5}, {"startupTimeoutMs", 120000.5},
+             {"cpuThreads", 4294967300ULL}, {"timeoutMs", 4294968296ULL}, {"startupTimeoutMs", 4294997296ULL},
+             {"startupTimeoutMs", 0}, {"startupTimeoutMs", 120001}, {"pythonExecutable", ""},
+             {"workerScript", ""}, {"modelDirectory", ""}})
+    {
+        auto document = enabled;
+        document["memoryReranker"][field] = value;
+        appSettings rejected;
+        if (load(document, rejected))
+            invalidAccepted += " " + field + "=" + value.dump();
+    }
+    Check(invalidAccepted.empty(), "Invalid memoryReranker values passed configuration validation:" + invalidAccepted);
+    for (const auto& block : {nlohmann::json(nullptr), nlohmann::json::array(), nlohmann::json("enabled")})
+    {
+        appSettings rejected;
+        Check(!load({{"memoryReranker", block}}, rejected), "A malformed reranker block passed configuration validation.");
+    }
+}
+
+void TestMemoryNliSettingsCompatibility()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto path = fixture.root / "settings.json";
+    const configManager loader(path.string(), (fixture.root / "Profiles").string());
+    const auto load = [&](nlohmann::json document, appSettings& settings)
+    {
+        document["embedding"] = {{"enabled", false}};
+        std::ofstream output(path, std::ios::trunc);
+        output << document.dump();
+        output.close();
+        return !output.fail() && loader.LoadSettings(settings);
+    };
+    appSettings settings;
+    Check(load(nlohmann::json::object(), settings) && !settings.memoryNli.enabled,
+        "Legacy settings enabled semantic duplicate scoring.");
+    Check(load({{"memoryNli", {{"enabled", true}}}}, settings) && settings.memoryNli.enabled &&
+              settings.memoryNli.cpuThreads == 2 && settings.memoryNli.timeoutMs == 2000 &&
+              settings.memoryNli.workerScript == "Tools/Workers/memory_nli.py",
+        "Explicit NLI configuration lost its bounded defaults.");
+    settings.activeProfile = "nli-reload-sentinel";
+    Check(load(nlohmann::json::object(), settings) && !settings.memoryNli.enabled &&
+              settings.memoryNli.modelDirectory.empty() && settings.activeProfile == "nli-reload-sentinel",
+        "Omitting NLI settings on reload retained its worker or changed the profile.");
+    for (const auto& [key, value] : std::vector<std::pair<std::string, nlohmann::json>>{
+            {"enabled", "true"}, {"cpuThreads", 0}, {"cpuThreads", 9}, {"cpuThreads", 2.5},
+            {"cpuThreads", 4294967298ULL}, {"timeoutMs", 0}, {"timeoutMs", 10001},
+            {"startupTimeoutMs", 120001}, {"workerScript", ""}, {"modelDirectory", ""},
+            {"pythonExecutable", ""}, {"modelDirectory", false}})
+    {
+        nlohmann::json document = {{"memoryNli", {{"enabled", true}}}};
+        document["memoryNli"][key] = value;
+        Check(!load(document, settings), "Invalid NLI setting was admitted: " + key);
+    }
+    for (const auto& block : {nlohmann::json(nullptr), nlohmann::json::array(), nlohmann::json("enabled")})
+        Check(!load({{"memoryNli", block}}, settings), "Malformed optional NLI block was admitted.");
+}
+
+void TestMemoryRerankerArtifactPaths()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto installRoot = fixture.root / "install";
+    const auto buildRoot = installRoot / "build/debug";
+    const std::filesystem::path python = "ThirdParty/MemoryReranker/.venv/Scripts/python.exe";
+    const std::filesystem::path script = "Tools/Workers/memory_reranker.py";
+    const std::filesystem::path model = "Models/MemoryReranker/ms-marco-MiniLM-L6-v2";
+    for (const auto& root : {fixture.root, installRoot})
+    {
+        for (const auto& artifact : {python, script})
+        {
+            std::filesystem::create_directories((root / artifact).parent_path());
+            std::ofstream(root / artifact) << "fixture";
+        }
+        std::filesystem::create_directories(root / model);
+    }
+    std::filesystem::create_directories(buildRoot / "Config");
+    const CompanionPaths paths(buildRoot, {"legacy", "Reranker path fixture", "assistant", true});
+    const auto bind = [&]()
+    {
+        appSettings settings;
+        settings.memoryReranker.pythonExecutable = python;
+        settings.memoryReranker.workerScript = script;
+        settings.memoryReranker.modelDirectory = model;
+        BindCompanionSettings(settings, paths);
+        return settings.memoryReranker;
+    };
+    const auto ancestor = bind();
+    Check(ancestor.pythonExecutable == (installRoot / python).lexically_normal() &&
+              ancestor.workerScript == (installRoot / script).lexically_normal() &&
+              ancestor.modelDirectory == (installRoot / model).lexically_normal(),
+        "Reranker artifacts did not resolve from the nearest installation above a build output.");
+    for (const auto& artifact : {python, script})
+    {
+        std::filesystem::create_directories((buildRoot / artifact).parent_path());
+        std::ofstream(buildRoot / artifact) << "local fixture";
+    }
+    std::filesystem::create_directories(buildRoot / model);
+    const auto local = bind();
+    Check(local.pythonExecutable == (buildRoot / python).lexically_normal() &&
+              local.workerScript == (buildRoot / script).lexically_normal() &&
+              local.modelDirectory == (buildRoot / model).lexically_normal(),
+        "A reranker artifact at the build output lost to an ancestor copy.");
+
+    appSettings explicitPaths;
+    explicitPaths.memoryReranker.pythonExecutable = installRoot / python;
+    explicitPaths.memoryReranker.workerScript = installRoot / script;
+    explicitPaths.memoryReranker.modelDirectory = installRoot / model;
+    BindCompanionSettings(explicitPaths, paths);
+    Check(explicitPaths.memoryReranker.pythonExecutable == ancestor.pythonExecutable &&
+              explicitPaths.memoryReranker.workerScript == ancestor.workerScript &&
+              explicitPaths.memoryReranker.modelDirectory == ancestor.modelDirectory,
+        "Binding rewrote explicitly configured absolute reranker paths.");
+    appSettings missing;
+    missing.memoryReranker.pythonExecutable = "ThirdParty/missing-reranker/python.exe";
+    missing.memoryReranker.workerScript = "Tools/missing-reranker.py";
+    missing.memoryReranker.modelDirectory = "Models/missing-reranker";
+    BindCompanionSettings(missing, paths);
+    Check(missing.memoryReranker.pythonExecutable == (buildRoot / "ThirdParty/missing-reranker/python.exe").lexically_normal() &&
+              missing.memoryReranker.workerScript == (buildRoot / "Tools/missing-reranker.py").lexically_normal() &&
+              missing.memoryReranker.modelDirectory == (buildRoot / "Models/missing-reranker").lexically_normal(),
+        "Absent reranker artifacts were not anchored to the captured installation root for fallback.");
+}
 }
 
 int main()
 {
     try
     {
+        TestMemoryRerankerSettingsCompatibility();
+        std::cout << "PASS optional reranker settings preserve legacy defaults and reject malformed or unbounded values\n";
+        TestMemoryNliSettingsCompatibility();
+        std::cout << "PASS optional NLI settings remain disabled, reset on reload and reject malformed values\n";
+        TestMemoryRerankerArtifactPaths();
+        std::cout << "PASS reranker artifacts resolve from captured build output and installation ancestors\n";
         revia::tests::ScopedTestDirectory fixture;
         std::filesystem::create_directories(fixture.root / "Config/Profiles");
         std::filesystem::create_directories(fixture.root / "Config/CompanionSeeds");

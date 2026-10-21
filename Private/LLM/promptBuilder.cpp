@@ -131,7 +131,7 @@ revia::memory::MemoryScope promptBuilder::CapturedMemoryScope(const std::vector<
 nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std::vector<conversationMessage>& context,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, std::vector<latencySample>* timings,
     const std::string& posture, std::vector<promptSection>* sections, const revia::llm::PrivateMemoryAccess memoryAccess,
-    const std::string& replyNote, const bool stablePrefix) const
+    const std::string& replyNote, const bool stablePrefix, const std::stop_token stopToken) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
@@ -174,7 +174,7 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
     const bool briefSocial = revia::agents::ConversationStylePolicy::IsBriefSocialTurn(latestInput);
     const std::string memoryBlock =
         memoryAccess == revia::llm::PrivateMemoryAccess::ProfileSetting && profile.bMemoryEnabled && !briefSocial
-            ? memory.BuildPromptBlock(retrievalQuery, 6, queryEmbedding, embeddingModel, 0, &scope)
+            ? memory.BuildPromptBlock(retrievalQuery, 6, queryEmbedding, embeddingModel, 0, &scope, reranker.get(), stopToken)
             : std::string{};
     if (timings)
     {

@@ -186,7 +186,7 @@ public:
         embedding.bAutoStartServer = false;
         router.ApplyLLMSettings(llm, embedding, aiProfile{});
     }
-    void ConfigureSession(const std::filesystem::path& root)
+    void ConfigureSession(const std::filesystem::path& root, const bool archiveEnabled = false, const bool embeddingsEnabled = true)
     {
         std::filesystem::create_directories(root / "Config/Profiles");
         const json settings = {
@@ -195,7 +195,7 @@ public:
                 {"modelName", "fixture-main"}, {"autoStartServer", false}, {"visionEnabled", false},
                 {"modelPath", (root / "absent.gguf").string()},
                 {"mediaPath", (root / "RuntimeData/Vision").string()}}},
-            {"embedding", {{"enabled", true}, {"host", "127.0.0.1"}, {"port", port},
+            {"embedding", {{"enabled", embeddingsEnabled}, {"host", "127.0.0.1"}, {"port", port},
                 {"modelName", "fixture-embedding"}, {"autoStartServer", false}}},
             {"intelligence", {{"enabled", false}}},
             {"speech", {{"enabled", false}, {"backend", "WindowsSapi"}, {"speakGreeting", false},
@@ -204,7 +204,7 @@ public:
             {"presence", {{"enabled", false}, {"externalAdaptersEnabled", false}}},
             {"vision", {{"enabled", false}}}, {"perception", {{"enabled", false}}},
             {"initiative", {{"enabled", false}}}, {"bargeIn", {{"enabled", false}}},
-            {"conversation", {{"archiveEnabled", false}}}, {"image", {{"enabled", false}}}
+            {"conversation", {{"archiveEnabled", archiveEnabled}}}, {"image", {{"enabled", false}}}
         };
         std::ofstream(root / "Config/settings.json") << settings.dump(2);
         for (const bool enabled : {true, false})
@@ -407,6 +407,163 @@ void TestCancellationAndInflightDeduplication()
     std::cout << "Backfill Stop during blocked inference: " << elapsed << "ms\n";
 }
 
+void TestArchivePreferenceCancellationAndClearRestartsBackfill()
+{
+    ScopedTestDirectory directory;
+    Backend backend;
+    backend.ConfigureSession(directory.root, true);
+    WorkingDirectory cwd(directory.root);
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    MemoryAgentTestAccess::FastBackfill(Access::Memory(session));
+    Check(session.Start(), "Archive preference fixture session did not start.");
+    const auto participant = Access::IntroduceTaskSpeaker(session, "Archive Fixture");
+    Check(!participant.empty() && participant != "local:user", "Archive preference fixture did not identify its participant.");
+    const auto input = Access::StudioInput(session, revia::agents::InputSource::Typed);
+    const revia::memory::MemoryScope scope{input.participantId, input.audience, input.participantSource,
+        input.consentRevision, input.stamp.companionId};
+    Check(revia::memory::IsAttributedPrivateScope(scope), "Archive preference fixture did not capture private admission.");
+    const auto archivePath = session.Paths().Resolve("Memory/revia_conversations.db").string();
+    const auto memoryPath = session.Paths().Resolve("Memory/revia_memory.db").string();
+    revia::memory::ConversationArchive archive(archivePath);
+    std::string error;
+    Check(archive.BeginSession("preference-archive", error) &&
+        archive.Record("preference-archive", "user", "The first archived preference fixture described a copper lamp.", error, scope),
+        "Archive preference fixture could not record its first turn: " + error);
+    backend.blockEmbedding = true;
+    Check(session.ActivateProfile("fixture").succeeded,
+        "Could not refresh the already-enabled archive through the actual profile owner.");
+    Check(Until([&] { return backend.requests > 0; }), "Archive preference fixture did not enter embedding inference.");
+    Check(session.SetPreference("conversation.archiveEnabled", "off").succeeded,
+        "Could not disable the archive through the actual preference setter.");
+
+    // A real queued evaluation must run while the cancelled HTTP handler is still
+    // held. Merely observing no vector yet would also pass with an uncancelled job.
+    MemoryAgentTestAccess::SetEvaluator(Access::Memory(session), [](const auto&, const auto&)
+    {
+        memoryDecision decision;
+        decision.bSuccess = true;
+        return decision;
+    });
+    Access::SubmitMemoryEvaluation(session, "A fresh turn after disabling archive history.", 991);
+    const bool released = Until([&]
+    {
+        const auto events = Access::Memory(session).DrainEvents();
+        return std::any_of(events.begin(), events.end(), [](const auto& event)
+            { return event.turnId == 991 && event.decision.bSuccess; });
+    }, 2s);
+    backend.blockEmbedding = false;
+    Check(released && archive.NeedsEmbedding("preference-archive:0", "fixture-embedding"),
+        "Disabling archive history failed to cancel inference and release the existing memory worker.");
+    Check(archive.Record("preference-archive", "user", "The second archived fixture waits for history to be restored.", error, scope),
+        "Archive preference fixture could not seed the paused backlog: " + error);
+
+    const int requestsWhileDisabled = backend.requests.load();
+    Seed(memoryPath, "archive-disabled-curated");
+    Check(Until([&] { return Count(memoryPath, "SELECT count(*) FROM memory_embeddings;") == 1; }),
+        "Disabling archive history also stopped independent curated-memory backfill.");
+    std::this_thread::sleep_for(300ms);
+    Check(backend.requests == requestsWhileDisabled + 1 &&
+        archive.ScanMissingEmbeddings("fixture-embedding", 0, 25, &scope).entries.size() == 2,
+        "Disabled archive backfill kept scanning, starting requests, or committing vectors.");
+    Check(session.ConversationTranscript("preference-archive", error).empty() && !error.empty(),
+        "The disabled history preference did not apply to the live archive.");
+
+    // Clearing a stored off override restores the configured true choice, but
+    // the Settings contract requires a restart before history turns back on.
+    Check(session.Submit("/unset conversation.archiveEnabled").succeeded,
+        "Could not clear the archive override through the actual preference reset.");
+    Check(session.ConversationTranscript("preference-archive", error).empty() && !error.empty(),
+        "Clearing an off override turned history on before the required restart.");
+    std::this_thread::sleep_for(300ms);
+    Check(backend.requests == requestsWhileDisabled + 1,
+        "Clearing an off override started archive inference before restart.");
+    revia::core::PreferenceStore preferences(directory.root / "preferences.json");
+    Check(!preferences.Load().contains("conversation.archiveEnabled"),
+        "Clearing the archive preference left its persisted override behind.");
+    session.Stop();
+    Check(session.Start(), "Archive preference fixture did not restart.");
+    Check(!Access::IntroduceTaskSpeaker(session, "Archive Fixture").empty(),
+        "Restarted archive fixture did not restore its participant.");
+    (void)Access::StudioInput(session, revia::agents::InputSource::Typed);
+    Check(session.ActivateProfile("fixture").succeeded,
+        "Could not refresh admitted backfill after restart.");
+    Check(session.ConversationTranscript("preference-archive", error).size() == 2 && error.empty(),
+        "Restart did not restore the configured archive default.");
+    Check(Until([&]
+        { return archive.ScanMissingEmbeddings("fixture-embedding", 0, 25, &scope).entries.empty(); }),
+        "Restart did not recover the admitted archive backlog.");
+    session.Stop();
+}
+
+void TestSessionArchiveRecallFiltersAndFallback()
+{
+    ScopedTestDirectory directory;
+    Backend backend;
+    backend.ConfigureSession(directory.root, true, false);
+    WorkingDirectory cwd(directory.root);
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    Check(session.Start(), "Archive recall fixture session did not start.");
+    Check(!Access::IntroduceTaskSpeaker(session, "Recall Fixture").empty(), "Archive recall fixture did not identify its participant.");
+    const auto input = Access::StudioInput(session, revia::agents::InputSource::Typed);
+    const revia::memory::MemoryScope scope{input.participantId, input.audience, input.participantSource,
+        input.consentRevision, input.stamp.companionId};
+    Check(revia::memory::IsAttributedPrivateScope(scope), "Archive recall fixture did not capture private admission.");
+    const auto path = session.Paths().Resolve("Memory/revia_conversations.db").string();
+    revia::memory::ConversationArchive archive(path);
+    std::string error;
+    const std::string currentInput = "What did I say about pottery?";
+    const std::string evidence = "The pottery cup used a cobalt glaze.";
+    Check(archive.BeginSession("topic-fixture", error) &&
+        archive.Record("topic-fixture", "user", evidence, error, scope) &&
+        archive.Record("topic-fixture", "user", currentInput, error, scope),
+        "Could not seed the current-input recall fixture: " + error);
+    const auto now = revia::memory::CurrentEpoch();
+    const auto topic = revia::memory::ConversationRecallPolicy::Evaluate(currentInput, now);
+    Check(topic.kind == revia::memory::RecallKind::Topic, "Topic fixture did not enter deterministic recall policy.");
+    const auto recalled = Access::RecallArchivedConversation(session, topic, currentInput, scope);
+    Check(recalled.find(evidence) != std::string::npos && recalled.find(currentInput) == std::string::npos,
+        "The session omitted real evidence or returned the archived current question as circular evidence.");
+
+    const auto window = revia::memory::BuildRecallRequest("unobtainium", "yesterday", false, now);
+    Check(window.kind == revia::memory::RecallKind::Window && window.window.IsValid() && !window.terms.empty(),
+        "Window fixture did not build a bounded typed recall request.");
+    const std::string historicUser = "A historic teak desk was repaired.";
+    const std::string historicAssistant = "The repair used brass brackets.";
+    const std::string outside = "Outside-window sentinel about a modern steel bench.";
+    Check(archive.BeginSession("historical-window", error) &&
+        archive.Record("historical-window", "user", historicUser, error, scope) &&
+        archive.Record("historical-window", "assistant", historicAssistant, error, scope) &&
+        archive.Record("topic-fixture", "user", outside, error, scope),
+        "Could not seed the empty-ranked-window fixture: " + error);
+    const auto middle = window.window.startEpoch + (window.window.endEpoch - window.window.startEpoch) / 2;
+    const auto timestampSql = "UPDATE conversation_turns SET created_at='" + std::to_string(middle) +
+        "' WHERE session_id='historical-window';";
+    ExecuteSql(path, timestampSql.c_str());
+    const auto fallback = Access::RecallArchivedConversation(
+        session, window, "What did we discuss about unobtainium yesterday?", scope);
+    const auto userPosition = fallback.find(historicUser);
+    const auto assistantPosition = fallback.find(historicAssistant);
+    Check(userPosition != std::string::npos && assistantPosition != std::string::npos &&
+        userPosition < assistantPosition && fallback.find(outside) == std::string::npos &&
+        fallback.find(evidence) == std::string::npos,
+        "An empty ranked result did not fall back to the named window in conversational order.");
+
+    Check(session.SetAudience({revia::identity::AudienceKind::Public, "public-recall-fixture", 0, {}}, error),
+        "Could not switch the actual session to a public audience: " + error);
+    Check(Access::RecallArchivedConversation(session, topic, currentInput, scope).empty(),
+        "A stale private recall request reached the session's public audience.");
+    const auto publicInput = Access::StudioInput(session, revia::agents::InputSource::Typed);
+    auto refreshedPrivateScope = scope;
+    refreshedPrivateScope.audience.revision = publicInput.audience.revision;
+    Check(Access::RecallArchivedConversation(session, topic, currentInput, refreshedPrivateScope).empty(),
+        "A matching revision bypassed the session's current public-audience gate.");
+    Check(backend.queryRequests == 0 && backend.requests == 0,
+        "The lexical session fixture unexpectedly started optional embedding work.");
+    session.Stop();
+}
+
 void TestBackfillStorageErrorsAreExplicit()
 {
     ScopedTestDirectory directory;
@@ -480,6 +637,8 @@ void RunEmbeddingBackfillTests()
     TestDuplicateLearningEmbedsRetainedSummary();
     TestSessionContinuationRecoveryAndProfileGates();
     TestCancellationAndInflightDeduplication();
+    TestArchivePreferenceCancellationAndClearRestartsBackfill();
+    TestSessionArchiveRecallFiltersAndFallback();
     TestBackfillStorageErrorsAreExplicit();
     TestActualWorkerPriorityAndProgress();
     std::cout << "Continuous embedding backfill owner tests passed.\n";

@@ -2,6 +2,7 @@
 
 #include "Memory/memoryTypes.h"
 #include "Memory/memoryRevision.h"
+#include "Memory/conversationArchive.h"
 #include "Agents/responseProvenance.h"
 #include "Core/memoryManager.h"
 #include "Core/messageRouter.h"
@@ -17,6 +18,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace revia::agents
@@ -58,6 +60,10 @@ struct MemoryAgentEvent
     // Optional vector work failed after the semantic content was committed.
     // Keep that failure separate from saveSucceeded, which describes the memory.
     std::string embeddingError;
+    // Advisory count only; facts, ranking and correction authority are unchanged.
+    std::size_t semanticDuplicateMarks = 0;
+    // Session-only suggestions; a separate exact owner review creates receipts.
+    std::vector<memory::MemoryCorrectionProposal> correctionProposals;
     // Set when this entry stands in for more than one Low-priority occurrence folded
     // together under queue pressure -- see MemoryAgent::AdmitEventLocked. Zero for an
     // ordinary event describing exactly one task.
@@ -144,13 +150,23 @@ public:
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId,
         std::string* outMemoryId, std::function<bool()> contextAdmission = {});
     [[nodiscard]] LearnedFindingResult SubmitOwnerMemoryRevision(const messageRouter& router, const memory::MemoryRevisionRequest& request,
-        memory::MemoryRevisionReceipt& outReceipt, std::string& outError, std::stop_token stopToken = {});
+        memory::MemoryRevisionReceipt& outReceipt, std::string& outError, std::stop_token stopToken = {},
+        memory::MemoryRevisionScopeAdmission acquireReviewScope = {});
     void SubmitEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
     // The session owns this subscription's lifetime; all scans and requests run on
     // the existing worker. The router must remain alive until Stop has joined the
     // worker; StopEmbeddingBackfill cancels its subscription without joining it.
     void StartEmbeddingBackfill(const messageRouter& router, const std::string& embeddingModel);
+    // The archive is session-owned and must outlive Stop(). Captured scope limits
+    // both scanned text and persisted vectors; work shares the existing worker.
+    void StartArchiveEmbeddingBackfill(const messageRouter& router, memory::ConversationArchive& archive,
+        const std::string& embeddingModel, const memory::MemoryScope& scope, std::function<bool()> contextAdmission = {});
+    void StopArchiveEmbeddingBackfill();
     void StopEmbeddingBackfill();
+    void ConfigureSemanticDuplicates(memory::SemanticDuplicateSettings settings,
+        std::shared_ptr<memory::SemanticDuplicateScorer> scorer, memory::MemoryScope scope,
+        std::function<bool()> contextAdmission = {});
+    void DisableSemanticDuplicates();
     std::vector<MemoryAgentEvent> DrainEvents();
     void Stop();
 
@@ -202,6 +218,8 @@ private:
         memory::MemoryScope scope;
         std::string memoryId;
         std::string embeddingModel;
+        memory::ConversationArchive* archive = nullptr;
+        memory::ArchivedTurn archivedTurn;
         std::stop_token backfillStop;
         bool scheduledBackfill = false;
         memoryDecision learnedDecision;
@@ -229,8 +247,12 @@ private:
     static bool Admitted(const std::function<bool()>& guard);
     void Run(std::stop_token stopToken);
     void ScanBackfill(std::stop_token stopToken);
+    void RetireUnadmittedSubscriptions();
     void FinishEmbeddingTask(const Task& task, bool failed);
+    std::size_t MarkSemanticDuplicates(const std::string& memoryId, const std::string& embeddingModel,
+        const Task& task, std::stop_token stopToken);
     bool BackfillDueLocked() const;
+    static std::tuple<const memory::ConversationArchive*, std::string, std::string> EmbeddingKey(const Task& task);
     // Whether the next interactive task may run now; otherwise `wakeAt` says when to ask again.
     bool InteractiveDueLocked(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::time_point& wakeAt) const;
     std::chrono::milliseconds BackfillRetryDelay(int failures) const;
@@ -249,12 +271,15 @@ private:
     std::deque<Task> interactiveTasks;
     std::deque<Task> learningTasks;
     std::deque<Task> backfillTasks;
-    // Includes queued and in-flight learning/backfill, keyed by model and row id.
-    std::set<std::pair<std::string, std::string>> pendingEmbeddingIds;
+    // Includes queued and in-flight work, with the store identity preventing
+    // collisions between a curated memory and an archived turn with the same ID.
+    std::set<std::tuple<const memory::ConversationArchive*, std::string, std::string>> pendingEmbeddingIds;
     struct BackfillSubscription
     {
         std::function<bool()> admission;
         const messageRouter* router = nullptr;
+        memory::ConversationArchive* archive = nullptr;
+        memory::MemoryScope scope;
         std::string model;
         std::int64_t afterRowId = 0;
         std::chrono::steady_clock::time_point nextScan;
@@ -265,6 +290,17 @@ private:
         bool atEnd = false;
     };
     std::optional<BackfillSubscription> backfill;
+    std::optional<BackfillSubscription> archiveBackfill;
+    struct DuplicateConfiguration
+    {
+        memory::SemanticDuplicateSettings settings;
+        std::shared_ptr<memory::SemanticDuplicateScorer> scorer;
+        memory::MemoryScope scope;
+        std::function<bool()> admission;
+        std::stop_source cancellation;
+    };
+    std::optional<DuplicateConfiguration> duplicates;
+    bool preferArchiveScan = false;
     std::chrono::milliseconds backfillBatchInterval{250};
     std::chrono::milliseconds backfillIdleInterval{30000};
     std::chrono::milliseconds backfillRetryInterval{5000};

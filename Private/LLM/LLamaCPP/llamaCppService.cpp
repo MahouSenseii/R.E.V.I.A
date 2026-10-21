@@ -1484,7 +1484,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         &output.promptSections,
         memoryAccess,
         replyNote,
-        bStablePromptPrefix);
+        bStablePromptPrefix,
+        stopToken);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
@@ -1580,7 +1581,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     if (jsonReply)
     {
         requestBody["response_format"] = {
-            {"type", "json_schema"}, {"json_schema", {{"name", "requested_reply"}, {"schema", json::parse(replyContract.schemaJson)}}}};
+            {"type", "json_schema"},
+            {"json_schema", {{"name", "requested_reply"}, {"strict", true}, {"schema", json::parse(replyContract.schemaJson)}}}};
     }
     else
     {

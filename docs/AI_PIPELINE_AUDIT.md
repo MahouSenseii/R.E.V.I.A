@@ -386,8 +386,9 @@ the history is bisectable rather than only green at the end.
 
 The stated goal was that `"The user prefers dark themes."`, `"The user likes dark mode."`
 and `"The user generally chooses dark interfaces."` stop becoming three records. **They do
-not.** What ships recognises a restatement that reaches for no new content word — a vaguer
-repetition of something already held — and nothing beyond that.
+not.** The current save path deduplicates formatting-normalized identical text. Semantic
+paraphrases remain separate; the relation classifier treats similarity as a diagnostic
+hint, not proof that two claims are equivalent.
 
 **Why the threshold is not simply lowered.** Measured against
 `nomic-embed-text-v1.5` over twenty-four hand-labelled pairs:
@@ -424,19 +425,29 @@ an explicit contrast/antonym stage in front of the similarity.
 
 ### ISSUE-REVIA-0080 — a contradiction is kept but not superseded
 
-**Severity:** low. **Status:** CONFIRMED, OPEN.
+**Severity:** low. **Status:** PARTIALLY ADDRESSED; owner-reviewed conversational proposals implemented, final verification pending.
 
-When a correction arrives, both records are kept and neither is marked historical. That is
-deliberate — deleting the older one is the only irreversible option — but it is not the
-temporal truth the task asked for. Recall may surface `"The user likes coffee."` and
-`"The user no longer likes coffee."` side by side, in an order decided by ranking.
+The current store already has append-only owner-authorized revision receipts and
+historical/current prompt labels (`memoryRevision`, `longTermMemory::SaveOwnerRevision`).
+Restart, reversion, exact-target and rollback tests cover that mechanism. The NCM report
+missed this existing path. Recalled facts are now presented oldest-first after relevance
+selection. A second `superseded_by` authority would conflict with receipt-linked reversions;
+it is not added. Automatic contradiction detection still does not authorize a revision.
+
+The owner selected an explicit review workflow on 2026-10-20. An admitted first-person
+correction can now propose an exact old-to-new pair in the Memory panel. Acceptance
+reuses the saved replacement and creates an owner revision receipt; rejection leaves
+both records unchanged. Until acceptance, recall may surface both claims. Suggestions
+are bounded and session-scoped, with exact subject, audience, consent, digest and
+revision checks at acceptance. Automatic semantic supersession is not authorized.
 
 `ClassifyRelation` already returns `Contradiction`, so the signal exists and nothing
 consumes it.
 
-**Required verification to close.** A `superseded_by` column, a migration, and recall and
-prompt rendering that can express "used to, now" — then a restart test showing the
-superseded record is retained, retrievable, and rendered as past rather than present.
+**Required verification to close.** Execute the new proposal, background-worker,
+session and UI regressions, including stale scope, rejection, exact replacement reuse
+and concurrent admission. Live changed-fact answer evaluation remains separate from
+the existing restart-tested receipt projection.
 
 ### ISSUE-REVIA-0086 — reconciliation merged a preference with its opposite
 

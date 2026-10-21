@@ -3,6 +3,7 @@
 
 #include "Identity/promptMarkers.h"
 #include "Memory/hybridRanking.h"
+#include "Memory/memoryReranker.h"
 #include "Memory/sensitiveContent.h"
 #include "Audit/contentDigest.h"
 
@@ -473,6 +474,19 @@ Database OpenDatabase(const std::string& memoryPath)
                                    "  prior_receipt_id TEXT NOT NULL,"
                                    "  receipt_json TEXT NOT NULL,"
                                    "  UNIQUE(chain_id, prior_receipt_id)"
+                                   ");"
+                                   "CREATE INDEX IF NOT EXISTS memory_revisions_original ON memory_revisions(original_id);"
+                                   "CREATE INDEX IF NOT EXISTS memory_revisions_revised ON memory_revisions(revised_id);"
+                                   "CREATE TABLE IF NOT EXISTS memory_duplicate_marks ("
+                                   "  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,"
+                                   "  matched_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,"
+                                   "  memory_digest TEXT NOT NULL, matched_digest TEXT NOT NULL,"
+                                   "  subject_kind INTEGER NOT NULL, subject_id TEXT NOT NULL,"
+                                   "  model_identity TEXT NOT NULL,"
+                                   "  forward_entailment REAL NOT NULL, reverse_entailment REAL NOT NULL,"
+                                   "  created_at TEXT NOT NULL,"
+                                   "  PRIMARY KEY(memory_id, matched_id, model_identity),"
+                                   "  CHECK(memory_id <> matched_id)"
                                    ");";
     if (!Execute(database.get(), Schema) || !MigrateSubjects(database.get()) || !ImportLegacyJsonl(database.get(), path))
     {
@@ -534,6 +548,8 @@ Json RevisionRequestJson(const RevisionRequest& value)
         {"summary", value.corrected.summary}, {"reason", value.reason}, {"evidence", value.evidence}};
     if (value.expectedSubject.kind != revia::memory::MemorySubjectKind::Unattributed)
         result["subject"] = {{"kind", static_cast<int>(value.expectedSubject.kind)}, {"entityId", value.expectedSubject.entityId}};
+    if (!value.expectedReplacementId.empty())
+        result["expectedReplacementId"] = value.expectedReplacementId;
     return result;
 }
 
@@ -545,7 +561,8 @@ bool ValidRevisionRequest(const RevisionRequest& value)
            bounded(value.ownerRequestId, 128) && bounded(value.originalId, 128) && value.expectedSummaryDigest.size() == 64 &&
            std::all_of(value.expectedSummaryDigest.begin(), value.expectedSummaryDigest.end(),
                [](const char character) { return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'); }) &&
-           value.priorReceiptId.size() <= 128 && bounded(value.origin.companionId, 128) && bounded(value.origin.sessionId, 128) &&
+           value.priorReceiptId.size() <= 128 && (value.expectedReplacementId.empty() || bounded(value.expectedReplacementId, 128)) &&
+           bounded(value.origin.companionId, 128) && bounded(value.origin.sessionId, 128) &&
            value.origin.generation != 0 && value.audienceRevision != 0 && value.origin.taskId.size() <= 128 &&
            value.origin.attemptId.size() <= 128 && value.corrected.bSuccess && value.corrected.bShouldRemember &&
            !value.corrected.bPreempted && bounded(value.corrected.summary, 4096) && bounded(value.corrected.category, 64) &&
@@ -870,7 +887,8 @@ bool longTermMemory::Save(
 }
 
 bool longTermMemory::SaveOwnerRevision(
-    const RevisionRequest& request, RevisionReceipt& receipt, std::string& error, std::function<bool()> admission) const
+    const RevisionRequest& request, RevisionReceipt& receipt, std::string& error, std::function<bool()> admission,
+    revia::memory::MemoryRevisionScopeAdmission acquireReviewScope) const
 {
     receipt = {};
     error.clear();
@@ -881,6 +899,17 @@ bool longTermMemory::SaveOwnerRevision(
     }
     const std::lock_guard operationLock(databaseMutex);
     sqlite3* const database = Acquire();
+    std::unique_ptr<revia::memory::MemoryRevisionScopeLease> reviewScope;
+    if (acquireReviewScope)
+    {
+        try { if (database) reviewScope = acquireReviewScope(); }
+        catch (...) { }
+        if (!reviewScope)
+        {
+            error = "Owner revision scope is no longer admitted.";
+            return false;
+        }
+    }
     if (!database || (admission && !admission()) || !Execute(database, "BEGIN IMMEDIATE;"))
     {
         error = "Owner revision storage or origin admission is unavailable.";
@@ -937,12 +966,25 @@ bool longTermMemory::SaveOwnerRevision(
             if (!latest || latest->requestId != request.priorReceiptId)
                 throw std::runtime_error("Revision predecessor is stale.");
         }
+        if (!request.expectedReplacementId.empty())
+        {
+            auto replacement = RequiredStatement(database,
+                "SELECT summary, category, subject_kind, subject_id FROM memories WHERE id = ? AND active = 1;");
+            BindText(replacement.get(), 1, request.expectedReplacementId);
+            if (sqlite3_step(replacement.get()) != SQLITE_ROW || ColumnText(replacement.get(), 0) != request.corrected.summary ||
+                ColumnText(replacement.get(), 1) != request.corrected.category ||
+                sqlite3_column_int(replacement.get(), 2) != static_cast<int>(request.expectedSubject.kind) ||
+                ColumnText(replacement.get(), 3) != request.expectedSubject.entityId)
+                throw std::runtime_error("Reviewed replacement changed or is absent.");
+        }
         memoryDecision corrected = request.corrected;
         corrected.source = "owner_revision:" + request.ownerRequestId;
         bool added = false;
         std::string memoryId;
         if (!Save(corrected, added, &memoryId) || memoryId.empty() || memoryId == request.originalId)
             throw std::runtime_error("Revision content was not replaced.");
+        if (!request.expectedReplacementId.empty() && memoryId != request.expectedReplacementId)
+            throw std::runtime_error("Reviewed replacement no longer resolves to the exact saved record.");
         const std::string otherChain = FindRevisionChain(database, memoryId);
         if (!otherChain.empty() && otherChain != chain)
             throw std::runtime_error("Replacement belongs to a different revision chain.");
@@ -1009,7 +1051,7 @@ bool longTermMemory::HasMemories() const
 
 std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, const std::size_t maxEntries,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch,
-    const revia::memory::MemoryScope* scope) const
+    const revia::memory::MemoryScope* scope, revia::memory::MemoryReranker* reranker, const std::stop_token stopToken) const
 {
     const std::lock_guard operationLock(databaseMutex);
     if ((scope && !revia::memory::IsAttributedPrivateScope(*scope)) || maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
@@ -1023,7 +1065,9 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
         return {};
     }
 
-    const std::size_t candidateLimit = std::max<std::size_t>(maxEntries * 4, 20);
+    const bool rerank = reranker && !queryText.empty() && reranker->IsAvailable() && !stopToken.stop_requested();
+    const std::size_t requestedCandidates = rerank ? std::max<std::size_t>(maxEntries, 30) : maxEntries;
+    const std::size_t candidateLimit = std::max<std::size_t>(requestedCandidates * 4, 20);
     std::vector<memoryEntry> lexicalEntries;
     const std::string ftsQuery = BuildFtsQuery(queryText);
     if (!ftsQuery.empty())
@@ -1182,6 +1226,22 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
             }
             return left.entry.createdAt > right.entry.createdAt;
         });
+    if (rerank && !combined.empty())
+    {
+        const std::size_t shortlistSize = std::min<std::size_t>(combined.size(), 30);
+        std::vector<std::string> documents;
+        documents.reserve(shortlistSize);
+        for (std::size_t index = 0; index < shortlistSize; ++index)
+            documents.push_back(combined[index].entry.summary);
+        const auto order = revia::memory::RerankOrder(reranker->Rerank(queryText, documents, stopToken), shortlistSize);
+        std::vector<CombinedCandidate> reordered;
+        reordered.reserve(combined.size());
+        for (const auto index : order)
+            reordered.push_back(std::move(combined[index]));
+        for (std::size_t index = shortlistSize; index < combined.size(); ++index)
+            reordered.push_back(std::move(combined[index]));
+        combined = std::move(reordered);
+    }
     if (combined.size() > maxEntries)
     {
         combined.resize(maxEntries);
@@ -1198,7 +1258,7 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
 
 std::string longTermMemory::BuildPromptBlock(const std::string& query, const std::size_t maxEntries,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch,
-    const revia::memory::MemoryScope* scope) const
+    const revia::memory::MemoryScope* scope, revia::memory::MemoryReranker* reranker, const std::stop_token stopToken) const
 {
     const std::lock_guard operationLock(databaseMutex);
     if ((scope && !revia::memory::IsAttributedPrivateScope(*scope)) || maxEntries == 0)
@@ -1208,7 +1268,7 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
 
     const std::int64_t now = nowEpoch > 0 ? nowEpoch : revia::memory::CurrentEpoch();
     std::vector<memoryEntry> entries = query.empty() ? (scope ? LoadScoped(*scope, maxEntries) : Load())
-                                                     : Search(query, maxEntries, queryEmbedding, embeddingModel, now, scope);
+                                                     : Search(query, maxEntries, queryEmbedding, embeddingModel, now, scope, reranker, stopToken);
     if (scope)
         std::erase_if(entries,
             [&](const memoryEntry& entry)
@@ -1251,6 +1311,13 @@ std::string longTermMemory::BuildPromptBlock(const std::string& query, const std
     }
     if (!ProjectRevisions(database, entries))
         return {};
+
+    // Select by relevance first, then present dated evidence in the order it happened.
+    // Unknown legacy dates sort first without inventing a timestamp.
+    std::stable_sort(entries.begin(), entries.end(), [](const memoryEntry& left, const memoryEntry& right)
+    {
+        return revia::memory::ParseEpochSecondsText(left.createdAt) < revia::memory::ParseEpochSecondsText(right.createdAt);
+    });
 
     std::ostringstream stream;
     // The clock is stated before the memories because every stamp below is relative to
@@ -1379,4 +1446,138 @@ bool longTermMemory::SaveEmbedding(const std::string& memoryId,
         memoryId,
         embeddingModel,
         embedding);
+}
+
+std::vector<revia::memory::SemanticDuplicatePair> longTermMemory::SemanticDuplicateCandidates(
+    const std::string& memoryId, const std::string& model, const revia::memory::MemoryScope& scope,
+    const revia::memory::SemanticDuplicateSettings& settings) const
+{
+    using namespace revia::memory;
+    std::vector<SemanticDuplicatePair> result;
+    if (!ValidSemanticDuplicateSettings(settings) || !IsAttributedPrivateScope(scope) || memoryId.empty() || model.empty()) return result;
+    const std::lock_guard operationLock(databaseMutex);
+    auto* database = Acquire();
+    if (!database) return result;
+    auto target = Prepare(database,
+        "SELECT m.id,m.category,m.summary,m.source,m.created_at,m.subject_kind,m.subject_id,m.rowid,e.dimensions,e.vector "
+        "FROM memories m JOIN memory_embeddings e ON e.memory_id=m.id WHERE m.id=?1 AND e.model=?2 AND m.active=1 "
+        "AND ((m.subject_kind=1 AND m.subject_id=?3) OR (m.subject_kind=2 AND m.subject_id=?4)) "
+        "AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.original_id=m.id OR r.revised_id=m.id);");
+    if (!target) return result;
+    BindText(target.get(), 1, memoryId); BindText(target.get(), 2, model);
+    BindText(target.get(), 3, scope.participantId); BindText(target.get(), 4, scope.companionId);
+    if (sqlite3_step(target.get()) != SQLITE_ROW) return result;
+    const auto candidate = ReadEntry(target.get());
+    const auto row = sqlite3_column_int64(target.get(), 7);
+    const auto dimensions = sqlite3_column_int64(target.get(), 8);
+    const auto bytes = sqlite3_column_bytes(target.get(), 9);
+    if (dimensions <= 0 || dimensions > 65536 || bytes != dimensions * static_cast<int>(sizeof(float))) return result;
+    std::vector<float> vector(static_cast<std::size_t>(dimensions));
+    std::memcpy(vector.data(), sqlite3_column_blob(target.get(), 9), bytes);
+    if (!IsValidEmbedding(vector)) return result;
+    const auto norm = VectorNorm(vector);
+    auto query = Prepare(database,
+        "SELECT m.id,m.category,m.summary,m.source,m.created_at,m.subject_kind,m.subject_id,e.dimensions,e.vector "
+        "FROM memories m JOIN memory_embeddings e ON e.memory_id=m.id WHERE m.rowid<?1 AND m.active=1 "
+        "AND m.subject_kind=?2 AND m.subject_id=?3 AND e.model=?4 "
+        "AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.original_id=m.id OR r.revised_id=m.id) "
+        "AND NOT EXISTS(SELECT 1 FROM memory_duplicate_marks d WHERE d.memory_id=?5 AND d.matched_id=m.id AND d.model_identity=?6) "
+        "ORDER BY m.rowid DESC LIMIT 256;");
+    if (!query) return result;
+    sqlite3_bind_int64(query.get(), 1, row);
+    sqlite3_bind_int(query.get(), 2, static_cast<int>(candidate.subject.kind));
+    BindText(query.get(), 3, candidate.subject.entityId); BindText(query.get(), 4, model);
+    BindText(query.get(), 5, memoryId); BindText(query.get(), 6, settings.modelIdentity);
+    int status;
+    while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
+    {
+        const auto existing = ReadEntry(query.get());
+        if (!MayCompareSemanticDuplicates(candidate.summary, existing.summary)) continue;
+        const auto similarity = CosineSimilarity(vector, norm, sqlite3_column_blob(query.get(), 8),
+            sqlite3_column_bytes(query.get(), 8), sqlite3_column_int64(query.get(), 7));
+        if (similarity && *similarity >= settings.minimumCandidateSimilarity)
+            result.push_back({candidate, existing, *similarity, model});
+    }
+    if (status != SQLITE_DONE) return {};
+    std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a.similarity > b.similarity; });
+    if (result.size() > settings.maximumCandidates) result.resize(settings.maximumCandidates);
+    return result;
+}
+
+bool longTermMemory::SaveSemanticDuplicateMark(const revia::memory::SemanticDuplicatePair& pair,
+    const revia::memory::NliPairResult& verdict, const revia::memory::MemoryScope& scope,
+    const revia::memory::SemanticDuplicateSettings& settings, std::function<bool()> admission) const
+{
+    using namespace revia::memory;
+    const auto admitted = [&]() { try { return !admission || admission(); } catch (...) { return false; } };
+    if (!IsStrongBidirectionalEntailment(verdict, settings) || !IsAttributedPrivateScope(scope) || !admitted()) return false;
+    const std::lock_guard operationLock(databaseMutex);
+    auto* database = Acquire();
+    if (!database || !Execute(database, "BEGIN IMMEDIATE;")) return false;
+    bool committed = false;
+    try
+    {
+        // Repeat the bounded shortlist under the write transaction: active status,
+        // scope, vectors, receipt membership and exact captured text must still agree.
+        const auto current = SemanticDuplicateCandidates(pair.candidate.id, pair.embeddingModel, scope, settings);
+        const auto match = std::find_if(current.begin(), current.end(), [&](const auto& item) {
+            return item.existing.id == pair.existing.id && item.candidate.summary == pair.candidate.summary &&
+                item.existing.summary == pair.existing.summary && item.candidate.subject == pair.candidate.subject &&
+                item.existing.subject == pair.existing.subject;
+        });
+        if (match != current.end() && admitted())
+        {
+            auto insert = Prepare(database,
+                "INSERT OR IGNORE INTO memory_duplicate_marks(memory_id,matched_id,memory_digest,matched_digest,subject_kind,subject_id,"
+                "model_identity,forward_entailment,reverse_entailment,created_at) VALUES(?,?,?,?,?,?,?,?,?,?);");
+            if (insert)
+            {
+                BindText(insert.get(), 1, pair.candidate.id); BindText(insert.get(), 2, pair.existing.id);
+                BindText(insert.get(), 3, revia::audit::ContentDigest(pair.candidate.summary));
+                BindText(insert.get(), 4, revia::audit::ContentDigest(pair.existing.summary));
+                sqlite3_bind_int(insert.get(), 5, static_cast<int>(pair.candidate.subject.kind));
+                BindText(insert.get(), 6, pair.candidate.subject.entityId); BindText(insert.get(), 7, verdict.modelIdentity);
+                sqlite3_bind_double(insert.get(), 8, verdict.forwardEntailment);
+                sqlite3_bind_double(insert.get(), 9, verdict.reverseEntailment);
+                BindText(insert.get(), 10, CurrentEpochSeconds());
+                if (sqlite3_step(insert.get()) == SQLITE_DONE && sqlite3_changes(database) == 1 && admitted())
+                    committed = Execute(database, "COMMIT;");
+            }
+        }
+    }
+    catch (...) { /* Optional metadata cannot invalidate a saved fact. */ }
+    if (!committed) Execute(database, "ROLLBACK;");
+    return committed;
+}
+
+std::vector<revia::memory::SemanticDuplicateMark> longTermMemory::LoadSemanticDuplicateMarks(
+    const revia::memory::MemoryScope& scope, std::size_t maxMarks) const
+{
+    using namespace revia::memory;
+    std::vector<SemanticDuplicateMark> result;
+    if (!IsAttributedPrivateScope(scope) || maxMarks == 0) return result;
+    const std::lock_guard operationLock(databaseMutex);
+    auto* database = Acquire();
+    if (!database) return result;
+    auto query = Prepare(database,
+        "SELECT d.memory_id,d.matched_id,d.memory_digest,d.matched_digest,d.subject_kind,d.subject_id,d.model_identity,"
+        "d.forward_entailment,d.reverse_entailment,d.created_at,a.summary,b.summary FROM memory_duplicate_marks d "
+        "JOIN memories a ON a.id=d.memory_id JOIN memories b ON b.id=d.matched_id WHERE a.active=1 AND b.active=1 "
+        "AND a.subject_kind=d.subject_kind AND b.subject_kind=d.subject_kind AND a.subject_id=d.subject_id AND b.subject_id=d.subject_id "
+        "AND ((d.subject_kind=1 AND d.subject_id=?1) OR (d.subject_kind=2 AND d.subject_id=?2)) "
+        "AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.original_id IN(a.id,b.id) OR r.revised_id IN(a.id,b.id)) "
+        "ORDER BY d.rowid DESC LIMIT ?3;");
+    if (!query) return result;
+    BindText(query.get(), 1, scope.participantId); BindText(query.get(), 2, scope.companionId);
+    sqlite3_bind_int64(query.get(), 3, static_cast<sqlite3_int64>(std::min<std::size_t>(maxMarks, 128)));
+    int status;
+    while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
+    {
+        if (ColumnText(query.get(), 2) != revia::audit::ContentDigest(ColumnText(query.get(), 10)) ||
+            ColumnText(query.get(), 3) != revia::audit::ContentDigest(ColumnText(query.get(), 11))) continue;
+        result.push_back({ColumnText(query.get(), 0), ColumnText(query.get(), 1), ColumnText(query.get(), 2), ColumnText(query.get(), 3),
+            {static_cast<MemorySubjectKind>(sqlite3_column_int(query.get(), 4)), ColumnText(query.get(), 5)}, ColumnText(query.get(), 6),
+            sqlite3_column_double(query.get(), 7), sqlite3_column_double(query.get(), 8), ColumnText(query.get(), 9)});
+    }
+    return status == SQLITE_DONE ? result : std::vector<SemanticDuplicateMark>{};
 }

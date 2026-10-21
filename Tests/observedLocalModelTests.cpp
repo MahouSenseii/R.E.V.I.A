@@ -1,4 +1,5 @@
 #include "../Tools/Quality/observedLocalModel.h"
+#include "../Tools/Quality/answerGateExperiment.h"
 
 #include <iostream>
 
@@ -15,8 +16,20 @@ void Check(const bool condition, const char* message)
 class Upstream
 {
   public:
-    Upstream()
+    explicit Upstream(const std::string& requiredKey = {})
     {
+        server.set_pre_routing_handler([requiredKey](const auto& request, auto& response)
+        {
+            if (!requiredKey.empty() && request.get_header_value("Authorization") != "Bearer " + requiredKey)
+            {
+                response.status = 401;
+                response.set_content(R"({"error":"unauthorized"})", "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+        server.Get("/v1/models", [](const auto&, auto& response)
+        { response.set_content(R"({"data":[{"id":"fixture"}]})", "application/json"); });
         server.Post("/apply-template",
             [](const auto& request, auto& response)
             {
@@ -34,7 +47,7 @@ class Upstream
             {
                 const std::lock_guard lock(mutex);
                 completions.push_back(request.body);
-                response.set_content(R"({"choices":[]})", "application/json");
+                response.set_content(request.body.find("fixtureSecret") != std::string::npos ? request.body : R"({"choices":[]})", "application/json");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(2); };
         port = server.bind_to_any_port("127.0.0.1");
@@ -81,6 +94,72 @@ int main()
 {
     try
     {
+        const auto refuses = [](const auto& action)
+        {
+            try { action(); } catch (const std::runtime_error&) { return true; }
+            return false;
+        };
+        for (const auto& value : {std::string{}, std::string("abc\r\ndef"), std::string("a b"), std::string(4097, 'x')})
+            Check(refuses([&] { revia::quality::LocalModelCredentialSource::Validate(value); }),
+                "Empty, oversized, or header-breaking credentials must fail closed.");
+        revia::quality::LocalModelCredentialSource ambiguous;
+        ambiguous.file = "not-opened";
+        ambiguous.environment = "not-read";
+        Check(refuses([&] { (void)ambiguous.Read(); }), "Ambiguous secret sources must be refused before reading either source.");
+        const auto credentialDirectory = std::filesystem::temp_directory_path() /
+            ("revia-credential-fixture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directory(credentialDirectory);
+        revia::quality::LocalModelCredentialSource credential;
+        credential.file = credentialDirectory / "fixture.key";
+        { std::ofstream file(credential.file, std::ios::binary); file << "fixture-token\r\n"; }
+        Check(credential.Read() == "fixture-token", "A file credential may end in a conventional newline.");
+        { std::ofstream file(credential.file, std::ios::binary); file << std::string(4096, 'x') << "\r\nsuffix"; }
+        Check(refuses([&] { (void)credential.Read(); }), "Oversized files must never silently truncate to a valid credential.");
+        std::filesystem::remove_all(credentialDirectory);
+        revia::quality::AnswerGateExperiment experiment;
+        experiment.ValidateBaselineRequest(true, true, false);
+        Check(refuses([&] { experiment.ValidateBaselineRequest(true, false, false); }) &&
+                  refuses([&] { experiment.ValidateBaselineRequest(true, true, true); }),
+            "Deterministic-only and subset runs cannot be baseline artifacts.");
+        experiment.statePacket = false;
+        Check(refuses([&] { experiment.ValidateBaselineRequest(true, true, false); }),
+            "An ablation must not become the canonical baseline.");
+        experiment.ValidateBaselineRequest(false, true, false);
+        {
+            const std::string key = "explicit-evaluation-fixture-key";
+            Upstream protectedUpstream(key);
+            revia::quality::ObservedLocalModel protectedObserver(protectedUpstream.port, key);
+            httplib::Client unauthenticated("127.0.0.1", protectedObserver.port);
+            for (const auto* path : {"/v1/models", "/unrecognized"})
+            {
+                const auto denied = unauthenticated.Get(path);
+                Check(denied && denied->status == 401, "Protected proxy must not expose an unauthenticated bridge.");
+            }
+            unauthenticated.set_default_headers({{"Authorization", "Bearer incorrect"}});
+            const auto wrongKey = unauthenticated.Post("/v1/chat/completions", "{}", "application/json");
+            Check(wrongKey && wrongKey->status == 401 && protectedObserver.Requests().empty(),
+                "Wrong credentials must be refused before forwarding or observation.");
+            httplib::Client authorized("127.0.0.1", protectedObserver.port);
+            authorized.set_default_headers({{"Authorization", "Bearer " + key}});
+            const auto models = authorized.Get("/v1/models");
+            Check(models && models->status == 200,
+                "Explicit evaluation authentication must reach upstream model discovery.");
+            const auto templateReply = authorized.Post("/apply-template", "{}", "application/json");
+            const auto tokenReply = authorized.Post("/tokenize", "{}", "application/json");
+            Check(templateReply && templateReply->status == 201 && tokenReply && tokenReply->status == 422,
+                "Authenticated accounting must preserve upstream status.");
+            const std::string echo = nlohmann::json{{"messages", nlohmann::json::array()}, {"fixtureSecret", key}}.dump();
+            const auto completion = authorized.Post("/v1/chat/completions", echo, "application/json");
+            Check(completion && completion->status == 200 && protectedUpstream.Completions().front() == echo,
+                "Authenticated completion must preserve original request bytes.");
+            Check(completion->body.find(key) == std::string::npos,
+                "An upstream-reflected credential must not enter runtime replies or diagnostic logs.");
+            Check(nlohmann::json(protectedObserver.Requests()).dump().find(key) == std::string::npos &&
+                      nlohmann::json(protectedObserver.RawRequests()).dump().find(key) == std::string::npos &&
+                      nlohmann::json(protectedObserver.Responses()).dump().find(key) == std::string::npos,
+                "Explicit credentials must be redacted from captured traffic if reflected in content.");
+            Check(protectedObserver.Requests().size() == 1, "Accounting calls must not enter authenticated completion indices.");
+        }
         Upstream upstream;
         revia::quality::ObservedLocalModel observed(upstream.port);
         httplib::Client client("127.0.0.1", observed.port);
