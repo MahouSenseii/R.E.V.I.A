@@ -128,8 +128,14 @@ int main(int argc, char** argv)
         const auto cancelStarted = std::chrono::steady_clock::now();
         cancel.request_stop();
         CheckFailure(pending.get(), "caller cancellation");
-        Check(!worker.IsAvailable() && std::chrono::steady_clock::now() - cancelStarted < 1500ms,
-              "Cancellation did not stop owned inference promptly.");
+        // Caller cancellation must abandon the request without killing the worker, so
+        // one Stop/barge-in/new turn cannot disable duplicate marking for the rest of
+        // the session. The deadline branch above still terminates a hung worker. The
+        // fixture HTTPServer is single-threaded and still mid-sleep on the abandoned
+        // "delay" request, so the next Compare cannot land here; the Start below
+        // tears down the sleeping child and brings up a fresh one.
+        Check(worker.IsAvailable() && std::chrono::steady_clock::now() - cancelStarted < 1500ms,
+              "Cancellation stopped owned inference instead of abandoning the request.");
 
         Check(worker.Start(settings), "NLI worker could not restart after cancellation.");
         const auto beforeStop = directory.Requests();

@@ -260,16 +260,22 @@ RerankResult MemoryReranker::Rerank(const std::string& query, const std::vector<
     httplib::Response response;
     httplib::Error transportError;
     const bool received = !requestStop.stop_requested() && client.send(request, response, transportError);
-    if (Clock::now() >= started + timeout)
+    const bool deadlineExpired = Clock::now() >= started + timeout;
+    if (deadlineExpired)
         requestStop.request_stop();
     deadline.request_stop();
     deadline.join();
     if (requestStop.stop_requested())
     {
-        // Terminating the owned process also stops inference after the caller leaves.
-        // A later explicit lifecycle Start may reload it; retrieval itself stays cheap.
+        // Caller or owner cancellation (Stop, barge-in, new turn) must not disable
+        // reranking for the rest of the session. Owner Stop() still kills the child
+        // once it acquires impl->operation; a real deadline expiry still terminates
+        // the possibly-hung worker so a lifecycle Start can bring up a fresh one.
+        const bool callerCancelled = stopToken.stop_requested() || ownerToken.stop_requested();
+        if (callerCancelled && !deadlineExpired)
+            return finish(RerankStatus::Cancelled);
         impl->StopChild();
-        return finish(stopToken.stop_requested() || ownerToken.stop_requested() ? RerankStatus::Cancelled : RerankStatus::TimedOut);
+        return finish(callerCancelled ? RerankStatus::Cancelled : RerankStatus::TimedOut);
     }
     if (!received || response.status != 200)
         return finish(RerankStatus::Unavailable);

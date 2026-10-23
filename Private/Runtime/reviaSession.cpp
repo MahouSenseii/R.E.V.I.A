@@ -3511,7 +3511,10 @@ std::string ReviaSession::RecallConversation(
         std::vector<std::string> documents;
         for (const auto& turn : turns)
             documents.push_back(memory::ArchiveEmbeddingText(turn));
-        const auto order = memory::RerankOrder(memoryReranker->Rerank(query, documents, stopToken), turns.size());
+        // The cross-encoder was trained on natural questions. The keyword query drove
+        // the embedding step; the reranker scores the user's actual utterance.
+        const std::string& rerankQuery = (!currentInput.empty() && currentInput.size() <= 4096) ? currentInput : query;
+        const auto order = memory::RerankOrder(memoryReranker->Rerank(rerankQuery, documents, stopToken), turns.size());
         std::vector<memory::ArchivedTurn> reordered;
         for (const auto index : order)
             reordered.push_back(std::move(turns[index]));

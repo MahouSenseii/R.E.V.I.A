@@ -9,10 +9,11 @@ namespace revia::speech
 {
 
 // Silence held after a phrase's audio before the next phrase may start. PlaySound is
-// asynchronous, so the playback thread waits out the clip itself; this only absorbs
-// timer granularity. It was 350 ms, which put a third of a second of dead air between
-// every pair of sentences.
-inline constexpr double PlaybackTailMilliseconds = 60.0;
+// asynchronous and its ASYNC worker queues the request before the device starts, so
+// a 60 ms hold was being overrun by device start-up and clipping the end of every
+// phrase. 250 ms is an interim measure; the durable fix is a waveOut/WASAPI path
+// with a real completion callback.
+inline constexpr double PlaybackTailMilliseconds = 250.0;
 
 // The clip's length from its header: whole sample frames in the data chunk over the
 // sample rate, with a data size larger than the bytes present clamped to what is

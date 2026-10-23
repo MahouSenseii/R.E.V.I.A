@@ -1053,13 +1053,13 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, const std::int64_t nowEpoch,
     const revia::memory::MemoryScope* scope, revia::memory::MemoryReranker* reranker, const std::stop_token stopToken) const
 {
-    const std::lock_guard operationLock(databaseMutex);
+    std::unique_lock operationLock(databaseMutex);
     if ((scope && !revia::memory::IsAttributedPrivateScope(*scope)) || maxEntries == 0 || (queryText.empty() && queryEmbedding.empty()))
     {
         return {};
     }
 
-    sqlite3* const database = Acquire();
+    sqlite3* database = Acquire();
     if (!database)
     {
         return {};
@@ -1233,7 +1233,15 @@ std::vector<memoryEntry> longTermMemory::Search(const std::string& queryText, co
         documents.reserve(shortlistSize);
         for (std::size_t index = 0; index < shortlistSize; ++index)
             documents.push_back(combined[index].entry.summary);
+        // Cross-encoder rerank is a loopback HTTP round-trip up to a second long.
+        // Holding databaseMutex across it blocks every other memory read and write;
+        // the shortlist is already a local copy, so the DB is not needed to rank it.
+        operationLock.unlock();
         const auto order = revia::memory::RerankOrder(reranker->Rerank(queryText, documents, stopToken), shortlistSize);
+        operationLock.lock();
+        database = Acquire();
+        if (!database)
+            return {};
         std::vector<CombinedCandidate> reordered;
         reordered.reserve(combined.size());
         for (const auto index : order)

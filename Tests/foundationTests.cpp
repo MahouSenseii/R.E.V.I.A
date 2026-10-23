@@ -1656,7 +1656,8 @@ void RunVisionUiaLiveFixture()
     revia::vision::VisionActionIntent intent;
     intent.action = ActionType::InvokeControl;
     intent.targetName = "Save";
-    intent.region = {bounds.left, bounds.top, bounds.right, bounds.bottom};
+    intent.region = {static_cast<int>(bounds.left), static_cast<int>(bounds.top),
+                     static_cast<int>(bounds.right), static_cast<int>(bounds.bottom)};
     intent.modelConfidence = 0.99;
     revia::actions::windows::VisionUiaResolver resolver;
     const auto resolved = resolver.Resolve(
@@ -2813,6 +2814,28 @@ void TestSpeechTextNormalization()
         "one two three four five six seven eight nine ten", 20);
     Check(clipped.size() <= 21 && clipped.ends_with('.'),
         "Speech normalization did not bound long utterances.");
+
+    // The split variant preserves the full reply by producing multiple chunks instead
+    // of truncating with "." at maxCharactersPerChunk. This exists because the
+    // single-piece path silently lost everything past the limit.
+    const auto splitShort = revia::speech::SpeechService::NormalizeAndSplitForSpeech(
+        "Hello there.", 100);
+    Check(splitShort.size() == 1 && splitShort.front().find("Hello") != std::string::npos,
+        "A short reply was split when it did not need to be.");
+    const auto splitLong = revia::speech::SpeechService::NormalizeAndSplitForSpeech(
+        "First sentence here. Second sentence there. Third sentence everywhere.", 25);
+    Check(splitLong.size() >= 2, "A long reply was not split into chunks.");
+    std::string joined;
+    for (const auto& chunk : splitLong)
+    {
+        Check(chunk.size() <= 25, "A split chunk exceeded the per-chunk cap.");
+        if (!joined.empty()) joined.push_back(' ');
+        joined += chunk;
+    }
+    Check(joined.find("First sentence") != std::string::npos &&
+            joined.find("Second sentence") != std::string::npos &&
+            joined.find("Third sentence") != std::string::npos,
+        "Splitting dropped reply content past the per-chunk cap.");
 }
 
 void TestSpeechRuntimePathResolution()

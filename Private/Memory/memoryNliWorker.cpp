@@ -235,13 +235,19 @@ NliPairResult MemoryNliWorker::Compare(const std::string& left, const std::strin
     httplib::Response response;
     httplib::Error transportError;
     const bool received = !requestStop.stop_requested() && client.send(request, response, transportError);
-    if (Clock::now() >= started + timeout)
+    const bool deadlineExpired = Clock::now() >= started + timeout;
+    if (deadlineExpired)
         requestStop.request_stop();
     deadline.request_stop();
     deadline.join();
     if (requestStop.stop_requested())
     {
-        impl->StopChild();
+        // Caller/owner cancellation must not disable duplicate marking for the rest
+        // of the session. Owner Stop() still terminates the child once it holds
+        // impl->operation. A real deadline expiry still kills a possibly-hung child.
+        const bool callerCancelled = stopToken.stop_requested() || ownerToken.stop_requested();
+        if (!callerCancelled || deadlineExpired)
+            impl->StopChild();
         return output;
     }
     if (!received || response.status != 200)

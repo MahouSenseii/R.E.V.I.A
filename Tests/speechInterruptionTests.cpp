@@ -253,7 +253,10 @@ void TestPlaybackIsHeldForTheClipAndBarelyLonger()
     Check(PlaybackHoldMilliseconds(1000.0, 900.0) == 1000.0 + PlaybackTailMilliseconds,
         "A short reported length ended the hold before the audio did.");
     Check(PlaybackHoldMilliseconds(1000.0, 1200.0) == 1200.0 + PlaybackTailMilliseconds, "A longer reported length was ignored.");
-    Check(PlaybackTailMilliseconds <= 80.0, "More than a short tail of silence follows each phrase.");
+    // Raised from 60 ms to 250 ms as the interim fix for the clipped-tail bug: the old
+    // bound was being overrun by PlaySound SND_ASYNC device start-up, cutting the end
+    // off every phrase. The durable fix is a waveOut/WASAPI completion-callback path.
+    Check(PlaybackTailMilliseconds <= 300.0, "The playback tail is longer than the interim fix bound.");
     Check(PlaybackHoldMilliseconds(0.0, 0.0) >= 250.0, "A clip of unknown length was not held at all.");
 }
 

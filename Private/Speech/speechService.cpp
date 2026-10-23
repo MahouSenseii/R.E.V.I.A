@@ -14,10 +14,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -1303,6 +1305,7 @@ std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(const std::
 {
     std::vector<PlannedSegment> plan;
     const SpokenScript script = ParseVocalizations(reply);
+    const std::size_t maxCharacters = static_cast<std::size_t>(std::max(settings.maxCharacters, 1));
     for (const ScriptSegment& segment : script.segments)
     {
         if (segment.kind == SegmentKind::Speech)
@@ -1310,14 +1313,14 @@ std::vector<SpeechService::PlannedSegment> SpeechService::PlanSpeech(const std::
             // Normalised per segment rather than once over the whole reply. The parser
             // has already taken the tags out, so this is defence in depth -- but it is
             // the guard the no-narration test holds, and a segment that went round it
-            // is exactly the one that would say "chuckles" out loud.
-            std::string spoken = PrepareForSynthesis(segment.text, settings);
-            if (spoken.empty())
+            // is exactly the one that would say "chuckles" out loud. A segment longer
+            // than maxCharacters is split at word boundaries instead of truncated.
+            for (std::string& chunk : NormalizeAndSplitForSpeech(segment.text, maxCharacters, false))
             {
-                continue;
+                if (chunk.empty())
+                    continue;
+                plan.push_back({SegmentKind::Speech, std::move(chunk), VocalizationKind::Laugh});
             }
-            plan.push_back({SegmentKind::Speech, std::move(spoken),
-                VocalizationKind::Laugh});
             continue;
         }
         if (!decide || decide(segment.vocalization) != VocalizationVerdict::Allowed)
@@ -1452,6 +1455,67 @@ std::string SpeechService::NormalizeForSpeech(const std::string& text, const std
         }
     }
     return output;
+}
+
+std::vector<std::string> SpeechService::NormalizeAndSplitForSpeech(const std::string& text,
+    const std::size_t maxCharactersPerChunk, const bool keepVocalizations)
+{
+    // The whole reply is normalised with no size cap so no content is lost to the old
+    // truncate-and-append-"." path, then the normalised stream is sliced at word
+    // boundaries into chunks of at most maxCharactersPerChunk.
+    const std::string normalised = NormalizeForSpeech(
+        text, std::numeric_limits<std::size_t>::max(), keepVocalizations);
+    std::vector<std::string> chunks;
+    if (normalised.empty() || maxCharactersPerChunk == 0)
+        return chunks;
+    if (normalised.size() <= maxCharactersPerChunk)
+    {
+        chunks.push_back(normalised);
+        return chunks;
+    }
+    std::size_t cursor = 0;
+    while (cursor < normalised.size())
+    {
+        const std::size_t remaining = normalised.size() - cursor;
+        if (remaining <= maxCharactersPerChunk)
+        {
+            chunks.emplace_back(normalised, cursor);
+            break;
+        }
+        std::size_t take = maxCharactersPerChunk;
+        // Prefer breaking after a sentence terminator inside the slice.
+        const std::size_t slabEnd = cursor + take;
+        std::size_t breakAt = std::string::npos;
+        for (char terminator : {'.', '!', '?'})
+        {
+            const std::size_t position = normalised.find_last_of(terminator, slabEnd - 1);
+            if (position != std::string::npos && position > cursor + maxCharactersPerChunk / 2 && position < slabEnd)
+                breakAt = (breakAt == std::string::npos) ? position : std::max(breakAt, position);
+        }
+        if (breakAt != std::string::npos)
+        {
+            take = breakAt - cursor + 1;
+        }
+        else
+        {
+            // No sentence terminator in the usable half; fall back to the last space.
+            const std::size_t lastSpace = normalised.find_last_of(' ', slabEnd - 1);
+            if (lastSpace != std::string::npos && lastSpace > cursor + maxCharactersPerChunk / 2)
+                take = lastSpace - cursor;
+        }
+        if (take == 0)
+            take = maxCharactersPerChunk;
+        chunks.emplace_back(normalised, cursor, take);
+        // Trim trailing whitespace so the chunk itself doesn't carry it, and advance
+        // past any leading whitespace that separated the chunks.
+        while (!chunks.back().empty() && std::isspace(static_cast<unsigned char>(chunks.back().back())))
+            chunks.back().pop_back();
+        cursor += take;
+        while (cursor < normalised.size() && std::isspace(static_cast<unsigned char>(normalised[cursor])))
+            ++cursor;
+    }
+    std::erase_if(chunks, [](const std::string& chunk) { return chunk.empty(); });
+    return chunks;
 }
 
 void SpeechService::Run(const std::stop_token stopToken)
@@ -2492,10 +2556,10 @@ bool SpeechService::PlayPreparedQwen(const PreparedUtterance& preparedUtterance,
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
-    // SND_MEMORY plays straight from the generated buffer, which is freed when this
-    // returns. Stop the device first so it can never read freed memory.
-    if (inMemory && !player && !cancelled)
-        PlaySoundW(nullptr, nullptr, 0);
+    // PlaySound's SND_MEMORY|SND_ASYNC path has copied the WAV into its own buffer
+    // since Windows 7, so the completion stop that used to protect freed memory is
+    // no longer needed and was shortening the audible tail of every phrase. The
+    // cancel branch above still calls PlaySoundW(nullptr) to tear down playback.
     const bool interrupted = bargeInMonitor.Triggered();
     DisarmBargeIn();
     if (!inMemory)

@@ -168,6 +168,13 @@ public:
     // flattened, because reading the word "laughs" aloud is worse than silence.
     static std::string NormalizeForSpeech(const std::string& text, std::size_t maxCharacters, bool keepVocalizations = false);
 
+    // Normalises the whole reply, then slices the normalised text into chunks of at
+    // most maxCharactersPerChunk at word boundaries. Replaces the old truncate-and-
+    // append-"." behaviour that silently dropped everything past the limit when a
+    // single reply exceeded settings.maxCharacters.
+    [[nodiscard]] static std::vector<std::string> NormalizeAndSplitForSpeech(
+        const std::string& text, std::size_t maxCharactersPerChunk, bool keepVocalizations = false);
+
     // Whether the pipeline owns an audio file or is only borrowing it.
     enum class AudioLifetime
     {

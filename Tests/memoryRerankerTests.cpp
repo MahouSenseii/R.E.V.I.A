@@ -111,7 +111,13 @@ int main(int argc, char** argv)
         cancel.request_stop();
         Check(request.get().status == RerankStatus::Cancelled, "Caller cancellation was lost.");
         Check(std::chrono::steady_clock::now() - cancelStarted < 1500ms, "Caller cancellation waited for inference.");
-        Check(!reranker.IsAvailable(), "Cancelled inference retained its worker.");
+        // Caller cancellation (Stop, barge-in, new turn) must not disable reranking for
+        // the rest of the session. The deadline branch above still terminates a hung
+        // worker; this branch just abandons the request without killing the child, so
+        // the next request need not force a lifecycle restart. The fixture is a
+        // single-threaded HTTPServer still mid-sleep on the abandoned "delay" request,
+        // so the next Rerank cannot be issued here; the restart below covers that.
+        Check(reranker.IsAvailable(), "Caller cancellation incorrectly stopped the worker.");
 
         Check(reranker.Start(settings), "Worker could not restart before owner stop.");
         auto ownerRequest = std::async(std::launch::async, [&] { return reranker.Rerank("delay", documents); });
