@@ -175,6 +175,56 @@ struct UserPreferenceSnapshot
     bool aiResponseReviewEnabled = false;
     int initiativeMaxPerHour = 0;
     int resourceSampleSeconds = 0;
+    // conversation.delegation: "off", "on_request" or "auto".
+    std::string delegation = "on_request";
+};
+
+// Where a task Revia delegated from chat is in its life. The workflow snapshot says what
+// the workers are doing; this says what Revia has done with their work.
+enum class DelegatedTaskStatus
+{
+    // Workers or the reviewer are running, or waiting for capacity.
+    Working,
+    // The reviewed deliverable is with her acceptance check.
+    Reviewing,
+    // An outcome exists and is waiting for the conversation to be free so she can report it.
+    Reporting,
+    // She reported reviewer-verified work and it was accepted.
+    Reported,
+    // She reported that the work did not establish an answer; Agent Studio can retry it.
+    NotEstablished,
+    Cancelled,
+    // The person rejected it in Agent Studio before she reported it.
+    Rejected,
+    // Another workflow took the single workforce, so nothing more from this one is shown.
+    Replaced,
+    // An outcome exists but she could not report it; it stays inspectable in Agent Studio.
+    ReportFailed
+};
+
+[[nodiscard]] std::string ToString(DelegatedTaskStatus status);
+
+// One task Revia handed to her workers from chat, as the chat card and Agent Studio show it.
+// Both read it beside AgentWorkflowSnapshot(), so they cannot disagree about what runs.
+struct DelegatedTaskView
+{
+    std::string taskId;
+    std::string objective;
+    std::string reason;
+    // The conversation turn that delegated, so the card sits under that reply.
+    std::uint64_t originTurnId = 0;
+    std::string conversationId;
+    // What the workers may touch: read-only tools inside approved folders, or nothing.
+    std::string access;
+    DelegatedTaskStatus status = DelegatedTaskStatus::Working;
+    // Raised when Agent Studio reopens the same task, e.g. a retry with changed evidence.
+    std::uint32_t revision = 1;
+    agents::WorkflowBudget budget;
+    std::chrono::system_clock::time_point submittedAt{};
+    std::chrono::steady_clock::time_point submittedSteady{};
+    // The exact deliverable she reported, when she reported one.
+    std::optional<agents::ArtifactReference> reportedArtifact;
+    std::string detail;
 };
 
 // One switch of the desktop's Settings dialog. value is what is persisted (settings.json with
@@ -220,6 +270,11 @@ class ReviaSession
     void CancelAgentWorkflow();
     [[nodiscard]] agents::WorkflowSnapshot AgentWorkflowSnapshot() const;
     [[nodiscard]] std::string AgentWorkflowResult() const;
+    // The chat-delegated task the shared workflow belongs to, when it came from chat.
+    [[nodiscard]] std::optional<DelegatedTaskView> DelegatedTask() const;
+    // Cancels exactly the delegated task `taskId`. Any other id is refused, so "cancel that
+    // investigation" can never stop a different piece of work.
+    bool CancelDelegatedTask(const std::string& taskId, std::string& outError);
     [[nodiscard]] LearningStudioSnapshot LearningStudio();
     SessionResult RunInventorySkill(const std::filesystem::path& directory, std::stop_token stopToken = {});
     bool UpdateInventorySkill(std::string& outError);
@@ -892,6 +947,44 @@ class ReviaSession
     agents::AgentWorkflow::Provider AgentProvider(AgentProviderMode mode);
     void ObserveAgentWorkflow(const agents::WorkflowSnapshot& snapshot, AgentProviderMode mode);
     void AdvanceAgentWorkflow();
+    struct AgentLaunchOptions
+    {
+        // Narrows the captured tool scope to reading inside approved folders, whatever else
+        // the owner has granted.
+        bool readOnlyTools = false;
+        // A question to investigate rather than a plan to draft: findings tied to receipts,
+        // what they do not cover, and what would confirm them.
+        bool investigation = false;
+        agents::WorkflowBudget budget;
+    };
+    // One workflow start for Agent Studio and chat alike.
+    bool LaunchAgentWorkflow(
+        const std::string& id, const std::string& objective, AgentProviderMode mode, const AgentLaunchOptions& options, std::string& outError);
+    // Chat delegation (sessionDelegation.cpp). The executors run on the conversation turn.
+    agents::ToolExecution DelegateFromChat(const agents::DelegationSubmission& submission, const agents::ToolCallContext& call);
+    agents::ToolExecution DelegatedTaskStatusForChat(const std::string& taskId, const agents::ToolCallContext& call) const;
+    agents::ToolExecution CancelDelegatedTaskForChat(const std::string& taskId, const agents::ToolCallContext& call);
+    [[nodiscard]] bool DelegatedTaskKnown() const;
+    // Called from AdvanceAgentWorkflow. True when the workflow is a chat task, which then
+    // follows its own acceptance path instead of Agent Studio's automatic one.
+    bool AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snapshot);
+    // Agent Studio started a different workflow, so a chat task can never report later.
+    void RetireDelegationFor(const std::string& newWorkflowId);
+    // Agent Studio deliberately restarted this same task (a retry with changed evidence, or a
+    // resume): its next outcome is a new revision, reported afresh. Only an explicit restart
+    // reopens a task; a workflow merely seen running again never does.
+    void ReopenDelegationFor(const std::string& workflowId);
+    // Whether the person in the conversation now is the one the task was delegated for.
+    [[nodiscard]] bool DelegationDisclosed() const;
+    // Stop and companion retirement: no delegated outcome may be reported afterwards.
+    void CancelDelegation(const std::string& because);
+    [[nodiscard]] std::string DescribeDelegatedRunning() const;
+    [[nodiscard]] std::string DescribeDelegatedFinished() const;
+    void PersistDelegation();
+    void PublishDelegation(const std::string& phase, const std::string& message) const;
+    void StartDelegationWorker();
+    void StopDelegationWorker();
+    void RunDelegationReport(std::stop_token stopToken);
     RuntimeEventBus eventBus;
     logger appLogger;
     messageRouter router;
@@ -1065,6 +1158,10 @@ class ReviaSession
     std::string conversationSessionId;
     // Writers also hold operationMutex; this lets the window read the id without it.
     mutable std::mutex conversationIdMutex;
+    // Advanced whenever the chat on screen stops being the one it was: a new chat, continuing
+    // or deleting one, forgetting them all. Even with archiving off, so a delegated task can
+    // tell that the conversation it came from has gone.
+    std::atomic<std::uint64_t> conversationEpoch{0};
 
     mutable std::mutex operationMutex;
     // Preference commands already run under operationMutex, while UI setters do not.
@@ -1217,6 +1314,37 @@ class ReviaSession
     std::shared_ptr<const core::TaskContract> foregroundTaskContract;
     std::map<std::string, std::shared_ptr<const core::TaskContract>> ownedTaskContracts;
     std::optional<agents::InputContext> admittedTaskInputContext;
+    // conversation.delegation, read by every chat turn's tool grant while the UI may change it.
+    std::atomic<agents::DelegationMode> delegationMode = agents::DelegationMode::OnRequest;
+    struct DelegationRecord
+    {
+        DelegatedTaskView view;
+        // The person's own words on the delegating turn; the report answers these.
+        std::string userRequest;
+        // The workflow's stamp, and who the outcome may be reported to.
+        RuntimeStamp origin;
+        TaskContext context;
+        memory::MemoryScope memoryScope;
+        std::shared_ptr<const core::TaskContract> taskContract;
+        // The chat it came from. Its outcome is reported there or not in chat at all.
+        std::uint64_t conversationEpoch = 0;
+        // Set by AdvanceDelegatedWorkflow, claimed by the report worker.
+        bool reportDue = false;
+        bool verifiedOutcome = false;
+        // The deliverable she is about to examine, bound to its exact identity.
+        std::optional<agents::WorkflowArtifact> candidate;
+        // For an outcome without a verified deliverable: which stage stopped and why.
+        std::string outcomeEvidence;
+        unsigned reportAttempts = 0;
+    };
+    // Serialises chat launches against each other; never held across a model call.
+    std::mutex delegationLaunchMutex;
+    mutable std::mutex delegationMutex;
+    std::condition_variable_any delegationCondition;
+    std::optional<DelegationRecord> delegation;
+    // Declared last: it borrows nearly everything above and must be joined before any of it
+    // is destroyed. Stop() joins it before taking operationMutex.
+    std::jthread delegationWorker;
 };
 
 } // namespace revia::runtime

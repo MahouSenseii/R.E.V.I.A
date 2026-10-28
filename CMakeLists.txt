@@ -554,6 +554,8 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaAgentToolWorkerTests Tests/agentToolWorkerTests.cpp RunAgentToolWorkerTests)
     revia_add_studio_check(ReviaAgentToolActionTests Tests/agentToolActionTests.cpp RunAgentToolActionTests)
     revia_add_studio_check(ReviaToolLoopTests Tests/toolLoopTests.cpp RunToolLoopTests)
+    # Chat delegation drives whole chat turns against a llama-server stand-in that holds its workers.
+    revia_add_studio_check(ReviaDelegationTests Tests/delegationTests.cpp RunDelegationTests)
     # The MCP suite drives a real stdio server, built below, and reads Config/settings.json.
     revia_add_studio_check(ReviaMcpClientTests Tests/mcpClientTests.cpp RunMcpClientTests)
     revia_add_studio_check(ReviaLocalApiTests Tests/localApiTests.cpp RunLocalApiTests)

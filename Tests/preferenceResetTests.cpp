@@ -247,7 +247,8 @@ void EveryPreferenceCommitsOnlyItsOwnField()
     PreferenceStore store(directory.root / "preferences.json");
     const appSettings defaults;
     const std::map<std::string, std::string> values = {{"speech.volume", "37"}, {"speech.rate", "3"}, {"initiative.maxPerHour", "7"},
-        {"llm.temperature", "1.25"}, {"resources.usageSampleSeconds", "17"}, {"resources.voiceDevice", "cpu"}, {"activeProfile", "elsewhere"}};
+        {"llm.temperature", "1.25"}, {"resources.usageSampleSeconds", "17"}, {"resources.voiceDevice", "cpu"},
+        {"conversation.delegation", "auto"}, {"activeProfile", "elsewhere"}};
     for (const revia::core::PreferenceKey& key : PreferenceStore::Writable())
     {
         const auto flag = revia::core::BooleanPreference(defaults, key.name);
@@ -273,7 +274,8 @@ void EveryPreferenceCommitsOnlyItsOwnField()
     Check(copied.speech.volume == source.speech.volume && copied.speech.rate == source.speech.rate &&
               copied.initiative.maxUtterancesPerHour == source.initiative.maxUtterancesPerHour &&
               copied.llm.temperature == source.llm.temperature && copied.resources.usageSampleSeconds == source.resources.usageSampleSeconds &&
-              copied.resources.voice == source.resources.voice && copied.activeProfile == source.activeProfile,
+              copied.resources.voice == source.resources.voice && copied.conversation.delegation == "auto" &&
+              copied.activeProfile == source.activeProfile,
         "A numeric or text preference was not copied from its own field.");
     appSettings single;
     Check(!revia::core::CopySettingField(single, source, "vision.enabled"), "CopySettingField accepted a key the store refuses.");

@@ -108,6 +108,8 @@ bool ReviaSession::StartNewConversation(std::string& outError)
     // store and stays exactly as it was.
     conversationRuntime.ResetParticipantContinuity();
     lastExchange.reset();
+    // A task delegated from the chat being left never reports into the new one.
+    conversationEpoch.fetch_add(1);
     // Marked as already restored for the person typing, so the first turn of the new chat
     // does not pull the previous chat straight back in.
     {
@@ -177,6 +179,7 @@ bool ReviaSession::ContinueConversation(const std::string& sessionId, std::strin
     const int wanted = settings.conversation.restoreTurns > 0 ? settings.conversation.restoreTurns : 12;
     context.RestoreMessages(restored, static_cast<std::size_t>(wanted));
     lastExchange.reset();
+    conversationEpoch.fetch_add(1);
     {
         const std::scoped_lock lock(speakerMutex, audienceMutex);
         privateContextParticipant = scope.participantId;
@@ -231,6 +234,8 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
     conversationArchive.ForgetSession(sessionId);
     conversationRuntime.ResetParticipantContinuity();
     lastExchange.reset();
+    // The id is reused for the fresh chat, so the epoch is what tells a delegated task apart.
+    conversationEpoch.fetch_add(1);
     std::string error;
     if (!conversationArchive.BeginSession(sessionId, error))
     {

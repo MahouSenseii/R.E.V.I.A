@@ -275,6 +275,18 @@ void TestShippedSettingsSelectA32KMainContext()
     document["conversation"]["deliberation"] = "ponder";
     std::ofstream(invalid) << document.dump(2);
     Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown deliberation mode passed validation.");
+
+    // Delegation from chat waits to be asked until a qualification run shows it helps.
+    Check(shipped.conversation.delegation == "on_request", "The shipped settings do not delegate only on request.");
+    document["conversation"]["deliberation"] = "native";
+    document["conversation"]["delegation"] = "auto";
+    std::ofstream(invalid) << document.dump(2);
+    appSettings automatic;
+    Check(configManager(invalid.string(), "Profiles").LoadSettings(automatic) && automatic.conversation.delegation == "auto",
+        "A valid delegation mode was refused.");
+    document["conversation"]["delegation"] = "sometimes";
+    std::ofstream(invalid) << document.dump(2);
+    Check(!configManager(invalid.string(), "Profiles").LoadSettings(rejected), "An unknown delegation mode passed validation.");
 }
 
 void TestPronounRecallUsesTheLatestAdmittedTopic()
@@ -608,15 +620,23 @@ class ContextBackend
                     std::lock_guard lock(mutex);
                     lastRequest = body;
                 }
+                // Review and memory requests stream too; their system contract selects
+                // the fixture payload independently of the response transport.
+                const auto& firstMessage = body.at("messages").front();
+                const std::string system =
+                    firstMessage.value("role", "") == "system" ? firstMessage.value("content", "") : std::string{};
+                const bool review = system.find("Revia's post-generation response reviewer") != std::string::npos;
+                const bool classification = !review && system.find("shouldRemember") != std::string::npos;
+                if (review)
+                    ++reviewCalls;
+                if (classification)
+                    ++memoryCalls;
+                const std::string& content = classification ? memoryReplyText : review ? reviewReplyText : replyText;
                 if (!body.value("stream", false))
                 {
-                    const bool classification =
-                        body.at("messages").front().value("content", "").find("shouldRemember") != std::string::npos;
-                    if (classification)
-                        ++memoryCalls;
                     response.set_content(
                         nlohmann::json{{"choices", nlohmann::json::array(
-                                                       {{{"message", {{"content", classification ? memoryReplyText : reviewReplyText}}}}})}}
+                                                       {{{"message", {{"content", content}}}}})}}
                             .dump(),
                         "application/json");
                     return;
@@ -628,7 +648,7 @@ class ContextBackend
                     return;
                 }
                 const nlohmann::json chunk = {
-                    {"choices", nlohmann::json::array({{{"delta", {{"content", replyText}}}, {"finish_reason", "stop"}}})}};
+                    {"choices", nlohmann::json::array({{{"delta", {{"content", content}}}, {"finish_reason", "stop"}}})}};
                 response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(1); };
@@ -666,6 +686,7 @@ class ContextBackend
     std::atomic<bool> validTokenizerRequest = false;
     std::atomic<bool> templateThinking = false;
     std::atomic<int> completionCalls = 0;
+    std::atomic<int> reviewCalls = 0;
     std::atomic<int> memoryCalls = 0;
     std::stop_source cancellation;
 
@@ -996,10 +1017,13 @@ void TestLookupAndReplyAuthorityOnTheWire()
     backend.replyText = R"({"answer":1})";
     backend.reviewReplyText = R"({"verdict":"replace","replacement":"Controlled invalid replacement.","reason":"Fixture replacement."})";
     history.Clear();
+    const int reviewsBeforeReplacement = backend.reviewCalls;
     const auto replaced = run(comma);
     const auto recent = history.GetRecentMessages();
     Check(
-        !replaced.succeeded && std::none_of(recent.begin(), recent.end(), [](const auto& message) { return message.role == "assistant"; }),
+        backend.reviewCalls == reviewsBeforeReplacement + 1 && !replaced.succeeded &&
+            replaced.reason.find("explicit turn-local reply contract") != std::string::npos &&
+            std::none_of(recent.begin(), recent.end(), [](const auto& message) { return message.role == "assistant"; }),
         "An invalid post-review replacement entered delivery or history.");
     revia::agents::ResponseFilterContext filterContext;
     responseFilterSettings filters;

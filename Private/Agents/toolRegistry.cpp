@@ -322,6 +322,67 @@ ChatTool ImageTool(const ToolExecutors& executors)
     { return generate(Text(arguments, "prompt"), context); };
     return tool;
 }
+
+ChatTool DelegateTaskTool(const ToolExecutors& executors, const DelegationMode mode)
+{
+    ChatTool tool;
+    const std::string when =
+        mode == DelegationMode::OnRequest
+            ? "The person asked you to use your agents. "
+            : "Use it only when the request benefits from separate investigation, several independent outputs or an independent check, "
+              "such as diagnosing a fault and verifying its cause. Never use it for conversation, opinions, or anything you can answer "
+              "directly or with one search, memory lookup, file read or calculation; use those tools instead. ";
+    tool.definition = {"delegate_task",
+        "Hand one bounded investigation to your Agent Studio workers, who work in the background while you keep talking: two workers "
+        "investigate separately and an independent reviewer checks their evidence before you see it. " +
+            when +
+            "The workers can only read inside approved folders and cannot change anything. It returns at once with a task id: "
+            "nothing has been checked yet, so say briefly what you handed off and do not wait or poll. You will report what they found "
+            "when they finish.",
+        ObjectSchema({{"objective", StringSchema(1, MaximumDelegatedObjectiveCharacters,
+                                        "The task for the workers, self-contained: what to find out or check and what would count as an "
+                                        "answer. They do not see this conversation.")},
+                         {"reason", StringSchema(1, MaximumDelegationReasonCharacters,
+                                        "Why this needs separate investigation instead of a direct answer.")}},
+            {"objective", "reason"})};
+    tool.effect = ToolEffect::Effect;
+    tool.describe = [](const Json& arguments) { return "Handing to the agents: " + Shown(Text(arguments, "objective")); };
+    tool.execute = [delegate = executors.delegateTask](const Json& arguments, const ToolCallContext& context)
+    {
+        DelegationSubmission submission;
+        submission.objective = Text(arguments, "objective");
+        submission.reason = Text(arguments, "reason");
+        return delegate(submission, context);
+    };
+    return tool;
+}
+
+ChatTool TaskStatusTool(const ToolExecutors& executors)
+{
+    ChatTool tool;
+    tool.definition = {"task_status",
+        "Check how a task you delegated to your agents is going: its state, which worker is active or waiting, elapsed time and the "
+        "next handoff.",
+        ObjectSchema({{"task_id", StringSchema(0, 64, "The task id delegate_task returned; empty for the most recent task.")}}, {})};
+    tool.parallelSafe = true;
+    tool.describe = [](const Json&) { return std::string("Checking on the delegated task"); };
+    tool.execute = [status = executors.taskStatus](const Json& arguments, const ToolCallContext& context)
+    { return status(Text(arguments, "task_id"), context); };
+    return tool;
+}
+
+ChatTool CancelTaskTool(const ToolExecutors& executors)
+{
+    ChatTool tool;
+    tool.definition = {"cancel_task",
+        "Cancel a task you delegated to your agents, when the person asks you to stop it. Only the task with this id is cancelled.",
+        ObjectSchema({{"task_id", StringSchema(1, 64, "The task id delegate_task returned.")}}, {"task_id"})};
+    tool.effect = ToolEffect::Effect;
+    tool.describe = [](const Json& arguments) { return "Cancelling delegated task " + Shown(Text(arguments, "task_id")); };
+    tool.execute = [cancel = executors.cancelTask](const Json& arguments, const ToolCallContext& context)
+    { return cancel(Text(arguments, "task_id"), context); };
+    return tool;
+}
 }
 
 bool ToolCallContext::Admitted() const
@@ -382,6 +443,15 @@ ToolRegistry ToolRegistry::Project(const ToolPermissions& permissions, const Too
     if (permissions.imageGenerationEnabled && executors.generateImage)
         registry.Add(ImageTool(executors));
     AddSandboxTools(registry, permissions.sandbox, executors.sandbox);
+    if (OffersDelegation(permissions.delegationMode, permissions.delegationCue) && executors.delegateTask)
+        registry.Add(DelegateTaskTool(executors, permissions.delegationMode));
+    if (permissions.delegatedTaskKnown)
+    {
+        if (executors.taskStatus)
+            registry.Add(TaskStatusTool(executors));
+        if (executors.cancelTask)
+            registry.Add(CancelTaskTool(executors));
+    }
     return registry;
 }
 

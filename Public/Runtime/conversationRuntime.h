@@ -147,6 +147,11 @@ public:
         std::vector<agents::ChatTool> mcpTools;
         // The guest code tools, projected by the session from the guest permission and VM state.
         agents::SandboxToolPermissions sandbox;
+        // conversation.delegation as the session read it. Off by default, so a missing or
+        // failed provider never offers delegation.
+        agents::DelegationMode delegationMode = agents::DelegationMode::Off;
+        // A delegated task exists that task_status and cancel_task can name.
+        bool delegatedTaskKnown = false;
     };
     // Called with the turn's admission and stop token, so every executor it returns is
     // bound to that turn and no other.
@@ -216,6 +221,15 @@ public:
         const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0,
         std::function<bool()> admission = {});
 
+    // Revia's report on work she delegated earlier in this conversation, written through the
+    // same reply path as any other turn: her identity, history, filters and voice. `evidence`
+    // is the reviewed deliverable with its artifact and receipt references, treated as
+    // untrusted data; `verified` says whether the independent review established it. The
+    // request and evidence never enter history; only her visible reply does.
+    SessionResult ReportDelegatedTask(const std::string& originalRequest, const std::string& objective, const std::string& evidence,
+        bool verified, const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken,
+        std::uint64_t audienceRevision, std::function<bool()> admission, const memory::MemoryScope& memoryScope = {});
+
     // Runs one conversation-contract evaluation turn against the active model.
     //
     // It uses the same posture assembly, style guidance, and turn coordinator a real
@@ -250,6 +264,8 @@ private:
         // Set when the user explicitly asked the cloud model for this turn, with the
         // per-turn sharing flags they gave.
         std::optional<llm::cloud::CloudAsk> cloudAsk;
+        // What opened a proactive turn, for its trace. Empty means an initiative event.
+        std::string proactiveTrace;
     };
 
     // Canonical state and posture for replies, proactive openings and evaluation.

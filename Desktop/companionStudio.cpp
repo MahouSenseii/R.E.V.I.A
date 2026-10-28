@@ -467,7 +467,7 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                     agentStudioPanel->setEnabled(true);
                     SetNavigationLocked(false);
                     UpdateSendState();
-                    agentStudioPanel->SetSnapshot(Session().AgentWorkflowSnapshot());
+                    RefreshAgentWorkflowViews();
                     RefreshStudioPanels();
                     if (restart)
                         StartRuntime();

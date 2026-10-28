@@ -203,6 +203,16 @@ attempts, timings, evidence and the accepted deliverable through the existing
 glass theme. Token/model usage is shown only when the provider reports it. Provider
 intervals include internal router/model waits; model queue timing is unavailable.
 
+Chat is the main way to reach the same owner. `delegate_task` submits one bounded,
+read-only investigation to it from an ordinary private chat turn and returns at once;
+`sessionDelegation` records the task's origin and lifecycle, gates Agent Studio's
+automatic acceptance, and has a background worker report the reviewed outcome through
+Revia's normal reply path before the workflow is accepted. There is still one workflow
+owner and one status source: the chat card and `AgentStudioPanel` read the same
+snapshot. Workflow parent and worker authority tasks are registered as narrowing tasks,
+which do not advance the shared policy revision, so their lifecycle cannot revoke a chat
+reply running beside them. See [Chat delegation](CHAT_DELEGATION.md).
+
 The engineering Director/Supervisor/Worker status artifact tracks repository work
 separately from these product workflow nodes.
 

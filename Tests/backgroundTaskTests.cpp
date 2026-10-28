@@ -203,26 +203,37 @@ void TestGoalContractsDoNotAdoptLaterConversationContext()
 
 void TestDelayedGoalRetainsItsBackgroundAdmission()
 {
-    revia::tests::ScopedTestDirectory directory;
-    ReviaSession session(revia::runtime::CompanionPaths(directory.root, {"delayed-admission", "Delayed admission fixture", "assistant", false}));
-    Access::MarkStudioStarted(session, true);
-    SelectPrivateTaskAudience(session, "background-origin");
-    (void)session.Submit("/task");
-    std::atomic<bool> release = false;
-    std::atomic<bool> admitted = true;
-    std::string message;
-    Check(Access::LaunchTask(session, "delayed scope fixture", [&](const std::stop_token stop)
+    for (const bool inheritBackgroundAdmission : {true, false})
     {
-        while (!release.load() && !stop.stop_requested()) std::this_thread::sleep_for(2ms);
-        Access::WithGoalAdmission(session, [&](const auto&, const bool current) { admitted.store(current); });
-        revia::goals::Goal goal;
-        goal.status = revia::goals::GoalStatus::Failed;
-        return goal;
-    }, message), message);
-    SelectPrivateTaskAudience(session, "changed-before-goal-start");
-    release.store(true);
-    Access::WaitForTask(session);
-    Check(!admitted.load(), "A delayed goal replaced its background task's captured audience with the current conversation.");
+        revia::tests::ScopedTestDirectory directory;
+        ReviaSession session(revia::runtime::CompanionPaths(directory.root, {"delayed-admission", "Delayed admission fixture", "assistant", false}));
+        Access::MarkStudioStarted(session, true);
+        SelectPrivateTaskAudience(session, "background-origin");
+        (void)session.Submit("/task");
+        std::atomic<bool> release = false;
+        std::atomic<bool> admitted = true;
+        std::atomic<bool> examined = false;
+        std::string message;
+        Check(Access::LaunchTask(session, "delayed scope fixture", [&](const std::stop_token stop)
+        {
+            while (!release.load() && !stop.stop_requested()) std::this_thread::sleep_for(2ms);
+            // Only the actual launch token makes this goal a child of the captured task.
+            Access::WithGoalAdmission(session, [&](const auto&, const bool current)
+                { admitted.store(current); examined.store(true); },
+                inheritBackgroundAdmission ? stop : std::stop_token{});
+            revia::goals::Goal goal;
+            goal.status = revia::goals::GoalStatus::Failed;
+            return goal;
+        }, message), message);
+        SelectPrivateTaskAudience(session, "changed-before-goal-start");
+        release.store(true);
+        Access::WaitForTask(session);
+        Check(examined.load(), "The delayed goal fixture did not examine its registered goal admission.");
+        if (inheritBackgroundAdmission)
+            Check(!admitted.load(), "A delayed goal replaced its background task's captured audience with the current conversation.");
+        else
+            Check(admitted.load(), "An unrelated empty-token goal inherited the background task's captured audience.");
+    }
 }
 
 void TestTaskContextStaysWithItsPrivateAudience()

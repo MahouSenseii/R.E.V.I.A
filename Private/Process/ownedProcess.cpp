@@ -36,6 +36,7 @@ struct OwnedProcess::Impl
     std::string errors;
     std::string stopReason;
     bool outputClosed = true;
+    bool errorsClosed = true;
     bool started = false;
     std::atomic<bool> stopping{false};
     std::size_t maxPendingOutput = 0;
@@ -93,6 +94,15 @@ struct OwnedProcess::Impl
         arrived.notify_all();
     }
 
+    void CloseErrors()
+    {
+        {
+            std::lock_guard lock(mutex);
+            errorsClosed = true;
+        }
+        arrived.notify_all();
+    }
+
 #ifdef _WIN32
     // Polling rather than blocking reads: a blocked ReadFile on an anonymous pipe cannot
     // be cancelled portably from MinGW's threads, and a stop must always return.
@@ -117,8 +127,7 @@ struct OwnedProcess::Impl
                 break;
             isOutput ? AppendOutput(bytes.data(), read) : AppendError(bytes.data(), read);
         }
-        if (isOutput)
-            CloseOutput();
+        isOutput ? CloseOutput() : CloseErrors();
     }
 
     void Kill()
@@ -147,8 +156,7 @@ struct OwnedProcess::Impl
                 break;
             isOutput ? AppendOutput(bytes.data(), static_cast<std::size_t>(read)) : AppendError(bytes.data(), static_cast<std::size_t>(read));
         }
-        if (isOutput)
-            CloseOutput();
+        isOutput ? CloseOutput() : CloseErrors();
     }
 
     void Kill()
@@ -271,6 +279,7 @@ bool OwnedProcess::Start(const OwnedProcessRequest& request, std::string& error)
     impl->outputRead.Reset(outputRead.Release());
     impl->errorRead.Reset(errorRead.Release());
     impl->outputClosed = false;
+    impl->errorsClosed = false;
     impl->started = true;
     impl->outputReader = std::thread([this] { impl->Drain(impl->outputRead.Get(), true); });
     impl->errorReader = std::thread([this] { impl->Drain(impl->errorRead.Get(), false); });
@@ -368,6 +377,7 @@ bool OwnedProcess::Start(const OwnedProcessRequest& request, std::string& error)
     impl->outputRead = output[0];
     impl->errorRead = errors[0];
     impl->outputClosed = false;
+    impl->errorsClosed = false;
     impl->started = true;
     impl->outputReader = std::thread([this] { impl->Drain(impl->outputRead, true); });
     impl->errorReader = std::thread([this] { impl->Drain(impl->errorRead, false); });
@@ -430,6 +440,13 @@ std::string OwnedProcess::ErrorOutput() const
     return utf8::Sanitize(impl->errors);
 }
 
+std::string OwnedProcess::FinalErrorOutput(const std::chrono::milliseconds wait) const
+{
+    std::unique_lock lock(impl->mutex);
+    impl->arrived.wait_for(lock, wait, [this] { return impl->errorsClosed; });
+    return utf8::Sanitize(impl->errors);
+}
+
 std::string OwnedProcess::StopReason() const
 {
     std::lock_guard lock(impl->mutex);
@@ -468,6 +485,7 @@ void OwnedProcess::Terminate()
     {
         std::lock_guard lock(impl->mutex);
         impl->outputClosed = true;
+        impl->errorsClosed = true;
         impl->started = false;
     }
     impl->arrived.notify_all();

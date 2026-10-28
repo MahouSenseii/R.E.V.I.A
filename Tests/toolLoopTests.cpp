@@ -732,6 +732,7 @@ struct RuntimeToolFixture
     revia::runtime::RuntimeEventBus events;
     logger log{directory.root / "Logs"};
     std::vector<std::string> lookups;
+    std::vector<std::size_t> lookupRequestCounts;
     revia::runtime::ConversationRuntime runtime{router, context, coordinator, speech, affect, emotions, events, log,
         [](auto, const auto&) {}, [](const auto&) {},
         []
@@ -744,6 +745,7 @@ struct RuntimeToolFixture
         {},
         [this](const std::string& query, const std::string& requestedBy)
         {
+            lookupRequestCounts.push_back(backend.Requests().size());
             lookups.push_back(query);
             revia::actions::ActionOutcome outcome;
             outcome.result.attempted = outcome.result.succeeded = true;
@@ -779,9 +781,10 @@ void TestRuntimeLetsTheModelSearchInPrivateChat()
     const auto reply = fixture.runtime.Reply("Search the web for the newest llama.cpp release.", fixture.profile, true, false);
     const auto requests = fixture.backend.Requests();
     Check(reply.succeeded && reply.text == "The newest llama.cpp release is b10453.", "The private tool turn failed: " + reply.reason);
-    Check(fixture.lookups == std::vector<std::string>{"llama.cpp newest release"},
-        "The phrase router searched before generation, or the model's own search did not run through the lookup owner: " +
-            Json(fixture.lookups).dump());
+    Check(fixture.lookupRequestCounts == std::vector<std::size_t>{1},
+        "The phrase router searched before the model proposed a native lookup: " + Json(fixture.lookupRequestCounts).dump());
+    Check(fixture.lookups == std::vector<std::string>{"newest llama.cpp release"},
+        "The model-proposed lookup lost the explicitly authored search subject: " + Json(fixture.lookups).dump());
     std::vector<std::string> offered;
     for (const auto& tool : requests.front().at("tools"))
         offered.push_back(tool.at("function").at("name"));
@@ -792,7 +795,9 @@ void TestRuntimeLetsTheModelSearchInPrivateChat()
     const auto components = fixture.Components();
     Check(std::find(components.begin(), components.end(), "Tools|Running|Searching the web for \"llama.cpp newest release\"") !=
               components.end(),
-        "The chat activity did not show the model's search: " + Json(components).dump());
+        "The chat activity did not show the exact model-proposed search: " + Json(components).dump());
+    Check(std::find(components.begin(), components.end(), "Internet activity|Searching|newest llama.cpp release") != components.end(),
+        "The internet activity did not show the exact authored subject sent to its lookup owner: " + Json(components).dump());
 
     revia::identity::RelationshipState viewer;
     viewer.entityId = "adapter:fixture:viewer";
@@ -803,6 +808,34 @@ void TestRuntimeLetsTheModelSearchInPrivateChat()
     const auto after = fixture.backend.Requests();
     Check(publicReply.succeeded && after.size() == before + 1 && !after.back().contains("tools") && fixture.lookups.size() == 1,
         "A public turn was offered tools or searched.");
+}
+
+void TestRuntimePreservesTheModelSearchQueryWithoutAnExplicitSubject()
+{
+    RuntimeToolFixture fixture(32768);
+    fixture.backend.Then({ScriptedBackend::Call(0, "w", "web_search", R"({"query":"compiler release overview"})", "tool_calls")});
+    fixture.backend.Then({ScriptedBackend::Text("The compiler release is b10453.", "stop")});
+    const auto reply = fixture.runtime.Reply("Tell me something about compilers.", fixture.profile, true, false);
+    const auto requests = fixture.backend.Requests();
+    Check(reply.succeeded && reply.text == "The compiler release is b10453.", "The automatic native lookup failed: " + reply.reason);
+    Check(fixture.lookupRequestCounts == std::vector<std::size_t>{1} &&
+              fixture.lookups == std::vector<std::string>{"compiler release overview"},
+        "An implicit automatic lookup ran before the model or replaced its exact proposed query: " + Json(fixture.lookups).dump());
+    std::vector<std::string> offered;
+    for (const auto& tool : requests.front().at("tools"))
+        offered.push_back(tool.at("function").at("name"));
+    Check(requests.size() == 2 && offered == std::vector<std::string>{"web_search", "calculator"},
+        "The implicit turn did not retain the exact permitted tools and request sequence: " + Json(offered).dump());
+    const auto results = ToolMessages(requests[1]);
+    Check(results.size() == 1 && results[0].value("tool_call_id", "") == "w" &&
+              results[0].at("content").get<std::string>().find("The newest release is b10453.") != std::string::npos,
+        "The implicit lookup did not return its correlated provider evidence to the model.");
+    const auto components = fixture.Components();
+    Check(std::find(components.begin(), components.end(), "Tools|Running|Searching the web for \"compiler release overview\"") !=
+              components.end(),
+        "The implicit lookup activity lost the model's exact query: " + Json(components).dump());
+    Check(std::find(components.begin(), components.end(), "Internet activity|Searching|compiler release overview") != components.end(),
+        "The implicit internet activity did not retain the exact model-proposed subject: " + Json(components).dump());
 }
 
 void TestRuntimeFallsBackToThePhraseRouterWithoutTools()
@@ -1402,6 +1435,7 @@ void RunToolLoopTests()
     TestFinalAnswerIsStillGated();
     TestServerWithoutToolsFallsBack();
     TestRuntimeLetsTheModelSearchInPrivateChat();
+    TestRuntimePreservesTheModelSearchQueryWithoutAnExplicitSubject();
     TestRuntimeFallsBackToThePhraseRouterWithoutTools();
     TestRuntimeAddsMcpToolsOnlyToPrivateTurns();
     TestSandboxToolsFollowTheGuestPermissionAndHealth();

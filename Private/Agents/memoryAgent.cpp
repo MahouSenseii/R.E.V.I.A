@@ -925,6 +925,15 @@ void MemoryAgent::RetireUnadmittedSubscriptions()
     if (retireArchive) archived->cancellation.request_stop();
 }
 
+void MemoryAgent::Start()
+{
+    std::lock_guard lock(mutex);
+    if (!worker.joinable())
+    {
+        worker = std::jthread([this](const std::stop_token stopToken) { Run(stopToken); });
+    }
+}
+
 void MemoryAgent::Stop()
 {
     DisableSemanticDuplicates();

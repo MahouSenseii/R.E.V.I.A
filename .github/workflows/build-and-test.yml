@@ -136,9 +136,11 @@ jobs:
   windows:
     name: Windows / MinGW
     runs-on: windows-latest
-    # A cold build alone takes close to an hour on a hosted runner, so a 60-minute limit
-    # kept cancelling runs before any test could report.
-    timeout-minutes: 120
+    # A build that misses the compiler cache below is cold. A cold Debug build has grown from
+    # about an hour to 100-125 minutes on a hosted runner, and a slow runner was cancelled at
+    # 120 minutes seven steps before the end of the build. The limit leaves room for that and
+    # the tests.
+    timeout-minutes: 180
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_MAXSIZE: 2G
@@ -155,7 +157,7 @@ jobs:
           New-Item -ItemType Directory -Force build/ci-evidence | Out-Null
           git rev-parse HEAD | Set-Content build/ci-evidence/source-head.txt
           git status --porcelain=v1 | Set-Content build/ci-evidence/source-status.txt
-          "REVIA_CI_DEADLINE_UTC=$([DateTime]::UtcNow.AddMinutes(110).ToString('o'))" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "REVIA_CI_DEADLINE_UTC=$([DateTime]::UtcNow.AddMinutes(170).ToString('o'))" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/setup-node@v4
         with:
           node-version: '24.15.0'
@@ -280,14 +282,14 @@ jobs:
 
       - name: Build every target with measured bounded concurrency
         id: native_build
-        timeout-minutes: 90
+        timeout-minutes: 145
         shell: pwsh
         run: |
           ccache --zero-stats
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $remaining = ([DateTime]::Parse($env:REVIA_CI_DEADLINE_UTC) - [DateTime]::UtcNow).TotalSeconds - 1500
           if ($remaining -lt 1) { throw 'No build time remains after reserving relay, CTest and upload time.' }
-          $budget = [int][Math]::Min(5400, $remaining)
+          $budget = [int][Math]::Min(8700, $remaining)
           ./Tools/Build/InvokeMeasuredBuild.ps1 -BuildDirectory build/ci -Parallel 6 -TimeoutSeconds $budget -EvidenceDirectory build/ci-evidence/build
           exit $LASTEXITCODE
 

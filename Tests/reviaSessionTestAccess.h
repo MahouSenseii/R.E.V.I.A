@@ -74,11 +74,12 @@ struct ReviaSessionTestAccess
     { session.voiceWarmupSucceeded.store(value); }
     static actions::CapabilitySettings GoalScope(const ReviaSession& session)
     { return session.DeriveGoalScope(); }
-    static void WithGoalAdmission(ReviaSession& session, const std::function<void(const RuntimeStamp&, bool)>& examine)
+    static void WithGoalAdmission(ReviaSession& session, const std::function<void(const RuntimeStamp&, bool)>& examine,
+        const std::stop_token stopToken = {})
     {
-        ReviaSession::GoalTokenScope scope(session, {});
+        ReviaSession::GoalTokenScope scope(session, stopToken);
         tests::Check(scope.admitted, "The contract fixture could not register its goal.");
-        examine(scope.stamp, session.OperatorAdmitted({}));
+        examine(scope.stamp, session.OperatorAdmitted(stopToken));
     }
     static std::shared_ptr<const core::TaskContract> ActionContract(ReviaSession& session,
         const actions::ActionRequest& request, const RuntimeStamp& stamp)
@@ -112,6 +113,47 @@ struct ReviaSessionTestAccess
         return session.ExecuteAction(std::move(request));
     }
     static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
+    static void SetDelegationMode(ReviaSession& session, agents::DelegationMode mode) { session.delegationMode.store(mode); }
+    // Ends only the report loop and joins its current tail, without cancelling the record
+    // or invalidating the session. Publication callbacks may have just changed that record.
+    static void JoinDelegationReportWorker(ReviaSession& session) { session.StopDelegationWorker(); }
+    // Simulates an already resolved, explicitly private consented input. No microphone,
+    // recognizer or biometric match is claimed by this contract fixture.
+    static agents::InputBatch ConsentedDelegationInput(ReviaSession& session, const std::string& text)
+    {
+        agents::InputBatch batch;
+        batch.source = agents::InputSource::Voice;
+        batch.text = text;
+        batch.context = session.CaptureInputContext(agents::InputSource::Typed);
+        (void)session.relationships.Get(batch.context.participantId);
+        std::string error;
+        tests::Check(session.relationships.GrantRecognitionConsent(batch.context.participantId, error), error);
+        const auto revision = session.relationships.RecognitionConsentRevision(batch.context.participantId);
+        tests::Check(revision.has_value(), "The delegated report fixture has no recognition consent.");
+        batch.context.participantSource = identity::SpeakerSource::ConsentedVoice;
+        batch.context.consentRevision = *revision;
+        return batch;
+    }
+    static void RevokeDelegationConsent(ReviaSession& session, const std::string& participant)
+    {
+        std::string error;
+        tests::Check(session.relationships.RevokeRecognitionConsent(participant, error), error);
+    }
+    static std::shared_ptr<const core::TaskContract> DelegationContract(ReviaSession& session)
+    {
+        std::lock_guard lock(session.delegationMutex);
+        return session.delegation ? session.delegation->taskContract : nullptr;
+    }
+    static std::vector<memory::ArchivedTurn> RawArchivedSession(ReviaSession& session, const std::string& id)
+    { return session.conversationArchive.LoadSession(id); }
+    // A typed command as a turn would handle it, for a caller that already holds the lane.
+    static SessionResult HandleCommand(ReviaSession& session, const std::string& input)
+    {
+        SessionResult result;
+        result.succeeded = true;
+        (void)session.TryHandleActionInput(input, result);
+        return result;
+    }
     static void Log(ReviaSession& session, const std::string& text) { session.appLogger.Log(text); }
     static bool LoadConfiguredProfile(const ReviaSession& session, const std::string& id, aiProfile& profile)
     { return session.config.LoadProfile(id, profile); }
@@ -141,7 +183,16 @@ struct ReviaSessionTestAccess
         std::lock_guard lock(session.operationMutex);
         return session.context.GetRecentMessages();
     }
-    static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true)
+    // No fixture serves the embedding port. Left enabled, every model step asks it first, and
+    // on Windows a refused loopback connect takes about two seconds.
+    static embeddingSettings NoEmbeddingServer()
+    {
+        embeddingSettings embedding;
+        embedding.bEnabled = false;
+        return embedding;
+    }
+    static void ConfigureStartupBrains(ReviaSession& session, int port, bool fastWarm = true, bool expertWarm = true,
+        const embeddingSettings& embedding = embeddingSettings{})
     {
         session.settings.llm.backend = "LLamaCpp";
         session.settings.llm.host = "127.0.0.1";
@@ -152,8 +203,18 @@ struct ReviaSessionTestAccess
         session.fastLlmSettings = session.expertLlmSettings = session.settings.llm;
         session.settings.intelligence.fast.bWarmAtStartup = fastWarm;
         session.settings.intelligence.expert.bWarmAtStartup = expertWarm;
+        if (!embedding.bEnabled)
+            session.settings.embedding.bEnabled = false;
         session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
-            session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+            session.expertLlmSettings, embedding, aiProfile{}, true, true);
+    }
+    // As the shipped settings run on one GPU: Expert is not configured, so background reviews go
+    // straight to Main and share its slots with chat.
+    static void ConfigureMainOnly(ReviaSession& session, int port, const embeddingSettings& embedding = embeddingSettings{})
+    {
+        ConfigureStartupBrains(session, port, true, true, embedding);
+        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings,
+            session.expertLlmSettings, embedding, aiProfile{}, true, false);
     }
     static bool EnsureBrain(ReviaSession& session, intelligence::IntelligenceTier tier, std::stop_token token = {})
     {

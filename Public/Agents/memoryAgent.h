@@ -168,6 +168,8 @@ public:
         std::function<bool()> contextAdmission = {});
     void DisableSemanticDuplicates();
     std::vector<MemoryAgentEvent> DrainEvents();
+    // The owner serializes Start/Stop. Only explicit startup can revive a joined worker.
+    void Start();
     void Stop();
 
     // Plain diagnostic lines: queue depth, delay, overflow. Never task content.

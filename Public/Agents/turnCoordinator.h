@@ -37,6 +37,7 @@ public:
     [[nodiscard]] LearnedFindingResult SubmitLearnedFinding(const messageRouter& router, memoryDecision decision, std::uint64_t turnId,
         std::string* outMemoryId, std::function<bool()> contextAdmission = {});
     void BackfillMemoryEmbeddings(const messageRouter& router, const std::string& embeddingModel);
+    void Start();
     void Stop();
 
 private:

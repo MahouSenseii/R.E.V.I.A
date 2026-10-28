@@ -200,6 +200,12 @@ class AgentWorkflow
     void Join();
     [[nodiscard]] WorkflowSnapshot Snapshot() const;
     [[nodiscard]] std::optional<WorkflowArtifact> AcceptedArtifact() const;
+    // The parent's evaluated, verified deliverable while it still awaits a decision; nothing
+    // before parent evaluation has finished or once cancellation was requested.
+    [[nodiscard]] std::optional<WorkflowArtifact> CandidateArtifact() const;
+    // Accept only the deliverable that was actually examined: refused when the parent's
+    // current verified artifact is not `expected` by id, version and hash.
+    bool AcceptCandidate(const ArtifactReference& expected, std::string& error);
     bool Retry(const std::string& nodeId, std::string changedInput, std::string changedEvidence, std::string& error);
     bool EvaluateParent(std::string& error);
     bool Decide(ParentDecision decision, std::string& error);

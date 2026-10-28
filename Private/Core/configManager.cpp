@@ -1289,6 +1289,10 @@ bool ReadSettings(json& data, appSettings& outSettings)
             {
                 outSettings.conversation.deliberation = conversationData["deliberation"].get<std::string>();
             }
+            if (conversationData.contains("delegation") && conversationData["delegation"].is_string())
+            {
+                outSettings.conversation.delegation = conversationData["delegation"].get<std::string>();
+            }
             if (conversationData.contains("selfInquiryCooldownTurns"))
             {
                 outSettings.conversation.selfInquiryCooldownTurns =
@@ -1600,6 +1604,9 @@ bool ReadSettings(json& data, appSettings& outSettings)
          outSettings.conversation.selfInquiryScope != "questions") ||
         (outSettings.conversation.deliberation != "native" &&
          outSettings.conversation.deliberation != "selfInquiry") ||
+        (outSettings.conversation.delegation != "off" &&
+         outSettings.conversation.delegation != "on_request" &&
+         outSettings.conversation.delegation != "auto") ||
         outSettings.responseFilter.aiMaxReviewTokens < 64 ||
         outSettings.responseFilter.aiMaxReviewTokens > 512 ||
         outSettings.responseFilter.maxReplyCharacters < 256 ||

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Agents/delegation.h"
 #include "LLM/toolCall.h"
 
 #include <nlohmann/json.hpp>
@@ -122,6 +123,12 @@ struct ToolPermissions
     bool remindersAvailable = false;
     bool imageGenerationEnabled = false;
     SandboxToolPermissions sandbox;
+    // delegate_task: conversation.delegation and what the person said this turn.
+    DelegationMode delegationMode = DelegationMode::Off;
+    DelegationCue delegationCue = DelegationCue::None;
+    // task_status and cancel_task: a delegated task exists to ask about. Offered whatever the
+    // mode, so turning delegation off never strands a running task without a way to stop it.
+    bool delegatedTaskKnown = false;
 };
 
 // Bound to the existing owners: the internet lookup, memory retrieval, the conversation
@@ -138,6 +145,11 @@ struct ToolExecutors
     std::function<ToolExecution(const std::string& text, const std::string& when, const ToolCallContext&)> setReminder;
     std::function<ToolExecution(const std::string& prompt, const ToolCallContext&)> generateImage;
     SandboxToolExecutors sandbox;
+    // The session's delegation owner. Submitting returns at once with a task id; the workers
+    // run in the background and Revia reports their findings in the same conversation.
+    std::function<ToolExecution(const DelegationSubmission&, const ToolCallContext&)> delegateTask;
+    std::function<ToolExecution(const std::string& taskId, const ToolCallContext&)> taskStatus;
+    std::function<ToolExecution(const std::string& taskId, const ToolCallContext&)> cancelTask;
 };
 
 // The tools one turn may offer the model, projected from that turn's permissions.

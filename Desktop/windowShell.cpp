@@ -282,6 +282,21 @@ void ReviaWindow::BuildSettingsDialog()
     connect(initiativeMaxSpin, &QSpinBox::editingFinished, this,
         [this]() { WriteSpinPreference(initiativeMaxSpin, "initiative.maxPerHour", initiativeMaxStored); });
 
+    delegationModeCombo = new QComboBox();
+    delegationModeCombo->setObjectName("delegationModeCombo");
+    delegationModeCombo->setAccessibleName("Use agents from chat");
+    delegationModeCombo->addItem(QStringLiteral("Off"), QStringLiteral("off"));
+    delegationModeCombo->addItem(QStringLiteral("On request"), QStringLiteral("on_request"));
+    delegationModeCombo->addItem(QStringLiteral("Auto"), QStringLiteral("auto"));
+    delegationModeCombo->setCurrentIndex(1);
+    const QString delegationHelp = QStringLiteral(
+        "When a chat may start an investigation with the Agent Studio workers. The workers only read inside approved folders; "
+        "this choice grants no writes or process execution.");
+    delegationModeCombo->setToolTip(delegationHelp);
+    settingsDialog->AddCustomRow(SettingsSection::Chat, QStringLiteral("Agent investigations"), QStringLiteral("Use agents from chat"),
+        delegationHelp, delegationModeCombo, QStringLiteral("delegationModeRow"));
+    connect(delegationModeCombo, &QComboBox::activated, this, [this](const int index) { WriteDelegationMode(index); });
+
     auto* hardFilterStatus = new QLabel(QStringLiteral("Always on"));
     hardFilterStatus->setObjectName("hardFilterStatus");
     settingsDialog->AddCustomRow(SettingsSection::Chat, QStringLiteral("Reply checks"), QStringLiteral("Basic safety filter"),
@@ -421,6 +436,7 @@ void ReviaWindow::RefreshSettingsExtras()
         return;
     RefreshPreferenceSpins();
     RefreshCloudUseFor();
+    RefreshDelegationMode();
     // /internet, /set and capability changes from elsewhere reach the hosted panel here, so a
     // switch never shows a value from before them.
     if (capabilityPanel)
@@ -441,6 +457,51 @@ void ReviaWindow::RefreshPreferenceSpins()
     };
     show(initiativeMaxSpin, snapshot.initiativeMaxPerHour, initiativeMaxStored);
     show(resourceSampleSpin, snapshot.resourceSampleSeconds, resourceSampleStored);
+}
+
+void ReviaWindow::RefreshDelegationMode()
+{
+    if (delegationModeCombo == nullptr)
+        return;
+    const QString value = QString::fromStdString(Session().UserPreferences().delegation);
+    const int index = delegationModeCombo->findData(value);
+    const QSignalBlocker blocker(delegationModeCombo);
+    delegationModeCombo->setCurrentIndex(index < 0 ? 0 : index);
+}
+
+void ReviaWindow::WriteDelegationMode(const int index)
+{
+    if (delegationModeCombo == nullptr || index < 0 || index >= delegationModeCombo->count() || switchingCompanion || shuttingDown.load() ||
+        !settingsWorker)
+        return;
+    const std::string value = delegationModeCombo->itemData(index).toString().toStdString();
+    if (value == Session().UserPreferences().delegation)
+        return;
+    revia::runtime::ReviaSession* session = &Session();
+    const std::uint64_t epoch = sessionUiEpoch.load();
+    settingsWorker->Post(
+        [this, session, value, epoch]()
+        {
+            revia::core::PreferenceResult result;
+            try
+            {
+                result = session->SetPreference("conversation.delegation", value);
+            }
+            catch (const std::exception& error)
+            {
+                result = {false, error.what()};
+            }
+            QMetaObject::invokeMethod(
+                this,
+                [this, result, epoch]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    RefreshDelegationMode();
+                    ShowPreferenceResult(result);
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void ReviaWindow::WriteSpinPreference(QSpinBox* spin, const std::string& key, int& stored)

@@ -71,6 +71,7 @@ ReviaContentDigestTests
 ReviaContextFittingTests
 ReviaConversationArchiveHybridTests
 ReviaConversationGuidanceTests
+ReviaDelegationTests
 ReviaEvidenceJournalTests
 ReviaImprovementAgentTests
 ReviaInvestigationCheckTests

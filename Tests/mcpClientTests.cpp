@@ -288,8 +288,38 @@ void TestTimeoutCancellationAndListChanged()
     // A revision Revia does not speak, and a server that dies at once.
     mcp::McpClient wrong(mcp::MakeStdioTransport(FixtureServer({"--version", "1999-01-01"})), 2000ms);
     Check(!wrong.Initialize({}, error) && Contains(error, "1999-01-01"), "A server with an unknown revision was accepted.");
+    // Evaluated before the message is built, which would otherwise show the last error.
+    error.clear();
     mcp::McpClient dead(mcp::MakeStdioTransport(FixtureServer({"--exit-on-start"})), 2000ms);
-    Check(!dead.Initialize({}, error) && Contains(error, "fixture refused to start"), "A server that exited was not diagnosed: " + error);
+    const bool deadStarted = dead.Initialize({}, error);
+    Check(!deadStarted && Contains(error, "fixture refused to start"), "A server that exited was not diagnosed: " + error);
+    // Standard error is read apart from standard output, so the end of a server's output
+    // can be seen before its last words. They are still in the diagnosis.
+    auto gone = mcp::MakeStdioTransport(FixtureServer({"--exit-on-start"}));
+    const bool goneOpened = gone->Open(error);
+    Check(goneOpened, "The exiting fixture did not start: " + error);
+    for (int attempt = 0; attempt < 500 && !gone->Closed(); ++attempt)
+        std::this_thread::sleep_for(2ms);
+    const std::string goneDiagnosis = gone->Diagnostics();
+    Check(gone->Closed() && Contains(goneDiagnosis, "fixture refused to start"),
+        "A server seen closing lost its last error output: " + goneDiagnosis);
+    // A server can stop reading before it is seen to have gone, and say why only after the
+    // refused write: the diagnosis of that write still waits for its last words.
+    auto quitting = mcp::MakeStdioTransport(FixtureServer({"--close-input-then-complain"}));
+    const bool quittingOpened = quitting->Open(error);
+    Check(quittingOpened, "The quitting fixture did not start: " + error);
+    bool writeRefused = false;
+    for (int attempt = 0; attempt < 500 && !writeRefused; ++attempt)
+    {
+        writeRefused = !quitting->Send("{}", {}, error);
+        if (!writeRefused)
+            std::this_thread::sleep_for(2ms);
+    }
+    const bool quittingClosed = quitting->Closed();
+    const std::string quittingDiagnosis = quitting->Diagnostics();
+    Check(writeRefused && !quittingClosed && Contains(quittingDiagnosis, "fixture closed its input"),
+        "A refused write lost the server's last error output (refused " + std::to_string(writeRefused) + ", closed " +
+            std::to_string(quittingClosed) + "): " + quittingDiagnosis);
     mcpServerSettings missing = FixtureServer();
     missing.command = actions::PathToUtf8(FixturePath().parent_path() / "no-such-mcp-server");
     mcp::McpClient absent(mcp::MakeStdioTransport(missing), 2000ms);
@@ -496,8 +526,12 @@ void TestManagerGatesEveryCall()
               recorder.audit.size() == 2,
         "A server with confirmation off still asked, or skipped its audit.");
     Check(Find(tools, "mcp_fake_change")->execute(Json::object(), context).succeeded, "The change tool failed.");
-    std::this_thread::sleep_for(100ms);
-    tools = manager.ChatTools(true, recorder.Ports(true), {});
+    // The notification follows the answer; the turn after it arrives offers the new tool.
+    for (int attempt = 0; attempt < 100 && Find(tools, "mcp_fake_added") == nullptr; ++attempt)
+    {
+        std::this_thread::sleep_for(20ms);
+        tools = manager.ChatTools(true, recorder.Ports(true), {});
+    }
     Check(Find(tools, "mcp_fake_added") != nullptr, "A tool announced by list_changed was not offered on the next turn.");
     manager.Shutdown();
 }

@@ -169,6 +169,7 @@ const std::array PreferenceFields = {
     Value<&appSettings::resources, &resourceSettings::usageSampleSeconds>("resources.usageSampleSeconds"),
     Value<&appSettings::resources, &resourceSettings::voice>("resources.voiceDevice"),
     Flag<&appSettings::conversation, &conversationSettings::bArchiveEnabled>("conversation.archiveEnabled"),
+    Value<&appSettings::conversation, &conversationSettings::delegation>("conversation.delegation"),
     Flag<&appSettings::conversation, &conversationSettings::bSelfInquiryEnabled>("conversation.selfInquiryEnabled"),
     Flag<&appSettings::conversation, &conversationSettings::bIterativeInvestigationEnabled>("conversation.iterativeInvestigationEnabled"),
     Flag<&appSettings::performance, &performanceSettings::bEnabled>("performance.enabled"),
@@ -271,6 +272,11 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Sing songs from the song library.", 0, 0, {}},
         {"performance.interruptSongToSpeak", PreferenceType::Boolean,
             "Stop singing to answer.", 0, 0, {}},
+        // Pacing, not permission: it decides whether she may reach for her workers, never
+        // what they may touch, which stays read-only inside the approved folders.
+        {"conversation.delegation", PreferenceType::Text,
+            "When Revia may hand an investigation to her agents from chat: off, on_request or auto.",
+            0, 0, {"off", "on_request", "auto"}},
         {"responseFilter.aiReviewEnabled", PreferenceType::Boolean,
             "Run the AI response review after the always-on hard filter.", 0, 0, {}},
         {"activeProfile", PreferenceType::Text,
@@ -595,6 +601,11 @@ void PreferenceStore::Apply(appSettings& settings) const
     if (temperature != values.end() && ParseNumber(temperature->second, parsedTemperature))
     {
         settings.llm.temperature = static_cast<float>(parsedTemperature);
+    }
+    const auto delegation = values.find("conversation.delegation");
+    if (delegation != values.end() && !delegation->second.empty())
+    {
+        settings.conversation.delegation = delegation->second;
     }
     const auto profile = values.find("activeProfile");
     if (profile != values.end() && !profile->second.empty())

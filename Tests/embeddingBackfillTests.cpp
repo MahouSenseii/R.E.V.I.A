@@ -407,6 +407,44 @@ void TestCancellationAndInflightDeduplication()
     std::cout << "Backfill Stop during blocked inference: " << elapsed << "ms\n";
 }
 
+void TestSessionRestartRestoresMemoryEvaluation()
+{
+    ScopedTestDirectory directory;
+    Backend backend;
+    backend.ConfigureSession(directory.root, false, false);
+    WorkingDirectory cwd(directory.root);
+    std::atomic<int> evaluations{0};
+    ReviaSession session;
+    Access::UsePreferences(session, directory.root);
+    MemoryAgentTestAccess::SetEvaluator(Access::Memory(session), [&](const auto&, const auto&)
+    {
+        ++evaluations;
+        memoryDecision decision;
+        decision.bSuccess = true;
+        return decision;
+    });
+    const auto completed = [&](const std::uint64_t turnId)
+    {
+        return Until([&]
+        {
+            const auto events = Access::Memory(session).DrainEvents();
+            return std::any_of(events.begin(), events.end(), [&](const auto& event)
+                { return event.turnId == turnId && event.decision.bSuccess; });
+        });
+    };
+
+    Check(session.Start() && session.Start(), "Memory restart fixture did not start idempotently.");
+    Access::SubmitMemoryEvaluation(session, "The initial session can evaluate memory.", 1601);
+    Check(completed(1601) && evaluations == 1, "Initial memory work did not execute exactly once.");
+    session.Stop();
+    Access::SubmitMemoryEvaluation(session, "Stopped-session work must stay retired.", 1602);
+    Check(session.Start() && session.Start(), "Memory restart fixture did not restart idempotently.");
+    Access::SubmitMemoryEvaluation(session, "The restarted session must evaluate fresh memory.", 1603);
+    Check(completed(1603), "Restart left the existing memory worker stopped.");
+    session.Stop();
+    Check(evaluations == 2, "Restart duplicated memory work or revived a stopped-session submission.");
+}
+
 void TestArchivePreferenceCancellationAndClearRestartsBackfill()
 {
     ScopedTestDirectory directory;
@@ -634,6 +672,7 @@ void TestDuplicateLearningEmbedsRetainedSummary()
 
 void RunEmbeddingBackfillTests()
 {
+    TestSessionRestartRestoresMemoryEvaluation();
     TestDuplicateLearningEmbedsRetainedSummary();
     TestSessionContinuationRecoveryAndProfileGates();
     TestCancellationAndInflightDeduplication();

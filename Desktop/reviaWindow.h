@@ -270,7 +270,29 @@ class ReviaWindow final : public QMainWindow
         Message,
         SelfInquiry,
         InvestigationChecking,
-        InvestigationFindings
+        InvestigationFindings,
+        // A task Revia handed to her agents from chat, shown under the reply that did it.
+        DelegatedTask
+    };
+
+    // What a delegated-task card follows and last showed. The text is kept, not recomputed,
+    // once the session reports on another task or none, so an old card still says honestly
+    // how its own task ended.
+    struct DelegatedCard
+    {
+        std::string workflowId;
+        std::uint64_t originTurnId = 0;
+        QString objective;
+        // The last phase the session published for this task, used once it no longer
+        // reports on the task directly.
+        std::optional<revia::runtime::DelegatedTaskStatus> published;
+        QString publishedDetail;
+        QString status;
+        QString progress;
+        // Running, as far as the session last said: the only state that offers Cancel.
+        bool active = true;
+        // What the shown text was computed from. A poll that changes none of it renders nothing.
+        QString basis;
     };
 
     struct ChatEntry
@@ -299,11 +321,34 @@ class ReviaWindow final : public QMainWindow
         std::vector<AttachmentChip> attachments;
         // An unprompted offer (a Proposal event): drawn as a quiet activity row.
         bool proposal = false;
+        // Set for EntryKind::DelegatedTask only.
+        DelegatedCard delegated;
     };
 
     // Appends one of Revia's working entries. `detail` is the supporting evidence, shown
     // only when the user expands it.
     void AppendWorkEntry(EntryKind kind, const QString& body, const QString& detail, quint64 taskId, int round);
+    // Chat delegation. Agent Studio and every task card are refreshed together from one read
+    // of the workflow and the delegated task, so the two views can never disagree.
+    // `transcriptChanged` renders the chat even when no card's text changed.
+    void RefreshAgentWorkflowViews(bool transcriptChanged = false);
+    // A Delegation event: starts a card on submission and records each later phase.
+    // Returns whether it added an entry to the transcript.
+    bool ObserveDelegation(const revia::runtime::RuntimeEvent& event);
+    // True when the card's shown text changed.
+    bool UpdateTaskCard(ChatEntry& entry, const revia::agents::WorkflowSnapshot& snapshot,
+        const std::optional<revia::runtime::DelegatedTaskView>& task);
+    // Appends the held card, unless a card for its task is already on screen. The caller
+    // trims and renders; true when it appended.
+    bool PlaceHeldTaskCard();
+    // By task id, never by a stored index: trimming shifts every index.
+    [[nodiscard]] std::optional<std::size_t> FindTaskCard(const std::string& workflowId) const;
+    // The submission arrives mid-turn, before the reply it belongs under, so its card waits
+    // here until that reply is on screen. One workflow owner means one card at most.
+    std::optional<ChatEntry> heldTaskCard;
+    // The latest conversation turn seen to end, so a submission arriving after its own turn
+    // is placed at once instead of waiting for a reply that has already been shown.
+    std::uint64_t lastFinishedConversationTurn = 0;
     // Display only. Turning this off hides the blocks and changes nothing about whether
     // the investigation runs -- enablement lives in the runtime settings, not here.
     bool showWorkSummaries = true;
@@ -389,10 +434,11 @@ class ReviaWindow final : public QMainWindow
     void ShowPreferenceResult(const revia::core::PreferenceResult& result);
     // Settings re-reads its values once a burst of preference changes has settled.
     void SchedulePreferenceRefresh();
-    // What the window placed into Settings beside the dialog's own rows (the two number rows, the
-    // cloud choice and the hosted permission panel), read again when Settings opens.
+    // The shell's custom choices, number rows and permission panel, read again when Settings opens.
     void RefreshSettingsExtras();
     void RefreshPreferenceSpins();
+    void RefreshDelegationMode();
+    void WriteDelegationMode(int index);
     // Saves a number row through the settings worker, but only when it changed since it was read:
     // a spin box reports editingFinished whenever it loses focus.
     void WriteSpinPreference(QSpinBox* spin, const std::string& key, int& stored);
@@ -566,6 +612,7 @@ class ReviaWindow final : public QMainWindow
     QCheckBox* speakWhenAwayCheck = nullptr;
     QCheckBox* aiFilterCheck = nullptr;
     QSpinBox* initiativeMaxSpin = nullptr;
+    QComboBox* delegationModeCombo = nullptr;
     QSpinBox* resourceSampleSpin = nullptr;
     // What the two number rows last read or wrote.
     int initiativeMaxStored = -1;

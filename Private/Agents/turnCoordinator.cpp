@@ -89,6 +89,11 @@ void TurnCoordinator::BackfillMemoryEmbeddings(const messageRouter& router, cons
     memoryAgent.StartEmbeddingBackfill(router, embeddingModel);
 }
 
+void TurnCoordinator::Start()
+{
+    memoryAgent.Start();
+}
+
 void TurnCoordinator::Stop()
 {
     memoryAgent.Stop();
