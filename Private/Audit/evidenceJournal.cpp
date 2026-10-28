@@ -157,20 +157,36 @@ Projection Project(const std::string& bytes)
         projection.health.error = "Incomplete or invalid journal records quarantined; outcomes remain unknown.";
     return projection;
 }
-std::string ReadBytes(const std::filesystem::path& path)
+std::string ReadBytes(const std::filesystem::path& path, const JournalInputFactory& factory)
 {
-    std::ifstream input(path, std::ios::binary);
-    if (!input.is_open())
+    std::unique_ptr<std::istream> source;
+    if (factory)
+        source = factory(path);
+    else
     {
-        if (!std::filesystem::exists(path))
-            return {};
-        throw std::runtime_error("Journal cannot be read.");
+        auto file = std::make_unique<std::ifstream>(path, std::ios::binary);
+        if (!file->is_open())
+        {
+            if (!std::filesystem::exists(path))
+                return {};
+            throw std::runtime_error("Journal cannot be read.");
+        }
+        source = std::move(file);
     }
-    std::ostringstream output;
-    output << input.rdbuf();
-    if (input.bad())
-        throw std::runtime_error("Journal read failed.");
-    return output.str();
+    if (!source)
+        throw std::runtime_error("Journal reader unavailable.");
+    auto& input = *source;
+    std::string bytes;
+    char buffer[8192];
+    for (;;)
+    {
+        input.read(buffer, sizeof(buffer));
+        if (input.bad() || (input.fail() && !input.eof()))
+            throw std::runtime_error("Journal read failed; history is incomplete.");
+        bytes.append(buffer, static_cast<std::size_t>(input.gcount()));
+        if (input.eof())
+            return bytes;
+    }
 }
 
 // The builder runs under the OS writer lock, including duplicate admission.
@@ -364,8 +380,8 @@ std::string NewJournalEventId()
 #endif
     return std::to_string(time) + "-" + std::to_string(process) + "-" + std::to_string(++sequence);
 }
-EvidenceJournal::EvidenceJournal(std::filesystem::path inputPath, std::size_t capacity, JournalIoGate gate)
-    : path(std::move(inputPath)), telemetryCapacity(capacity), ioGate(std::move(gate))
+EvidenceJournal::EvidenceJournal(std::filesystem::path inputPath, std::size_t capacity, JournalIoGate gate, JournalInputFactory factory)
+    : path(std::move(inputPath)), telemetryCapacity(capacity), ioGate(std::move(gate)), inputFactory(std::move(factory))
 {
 }
 AppendReceipt EvidenceJournal::AppendRecord(const std::string& record, const std::string& eventId, bool retainActionObservation)
@@ -439,7 +455,7 @@ AppendReceipt EvidenceJournal::AppendRecord(const std::string& record, const std
         {
             receipt.state = AppendState::Durable;
             const auto dropped = health.droppedTelemetry;
-            health = Project(ReadBytes(path)).health;
+            health = Project(ReadBytes(path, inputFactory)).health;
             health.droppedTelemetry = std::max(dropped, health.droppedTelemetry);
         }
         else if (!stored)
@@ -448,6 +464,8 @@ AppendReceipt EvidenceJournal::AppendRecord(const std::string& record, const std
     catch (const std::exception& failure)
     {
         receipt.error = failure.what();
+        health.degraded = true;
+        health.error = receipt.error;
     }
     if (!receipt.Durable() && receipt.state == AppendState::Degraded)
     {
@@ -513,7 +531,7 @@ std::vector<core::EvidenceRef> EvidenceJournal::Read(const EvidenceQuery& query)
     std::vector<core::EvidenceRef> references;
     try
     {
-        const auto projection = Project(ReadBytes(path));
+        const auto projection = Project(ReadBytes(path, inputFactory));
         const auto dropped = health.droppedTelemetry;
         health = projection.health;
         health.droppedTelemetry = std::max(dropped, health.droppedTelemetry);
@@ -545,7 +563,7 @@ bool EvidenceJournal::HasUnresolvedForTask(const runtime::RuntimeStamp& stamp, c
     std::lock_guard lock(mutex);
     try
     {
-        const auto projection = Project(ReadBytes(path));
+        const auto projection = Project(ReadBytes(path, inputFactory));
         std::set<std::string> pending;
         if (projection.unsupportedVersion || projection.conflictingIds)
             return true;
@@ -586,7 +604,7 @@ JournalHealth EvidenceJournal::Recover()
     try
     {
         const auto dropped = health.droppedTelemetry;
-        health = Project(ReadBytes(path)).health;
+        health = Project(ReadBytes(path, inputFactory)).health;
         health.droppedTelemetry = std::max(dropped, health.droppedTelemetry);
     }
     catch (const std::exception& failure)

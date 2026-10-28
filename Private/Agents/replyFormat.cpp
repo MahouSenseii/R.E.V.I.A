@@ -44,8 +44,15 @@ std::string RequestText(const std::string& input, bool compactWhitespace = true)
         if (!open.empty())
         {
             auto end = text.find(close, index + open.size());
-            while (end != std::string::npos && end > 0 && text[end - 1] == '\\')
+            while (end != std::string::npos)
+            {
+                std::size_t slashes = 0;
+                for (auto before = end; before > 0 && text[before - 1] == '\\'; --before)
+                    ++slashes;
+                if (slashes % 2 == 0)
+                    break;
                 end = text.find(close, end + close.size());
+            }
             end = end == std::string::npos ? text.size() : end + close.size();
             std::fill(text.begin() + index, text.begin() + end, ' ');
             index = end - 1;
@@ -82,8 +89,10 @@ std::optional<bool> RequestPolarity(const std::string& text, std::size_t positio
     if (first == std::string::npos)
         return true;
     prefix = prefix.substr(first, prefix.find_last_not_of(" \t") - first + 1);
-    static const std::regex negation(R"(\b(?:do not|don't|never)\b)");
-    if (std::regex_search(prefix, negation))
+    // Commas around emphasis belong to the same prohibition; a complete earlier
+    // instruction such as "do not add commentary" belongs to another clause.
+    static const std::regex continuedNegation(R"(\b(?:do not|don't|never)(?:(?:,\s*|\s+)(?:ever|under any circumstances))*\s*,?\s*$)");
+    if (std::regex_search(prefix, continuedNegation))
         return false;
     if (const auto comma = prefix.find_last_of(','); comma != std::string::npos)
     {
@@ -93,6 +102,9 @@ std::optional<bool> RequestPolarity(const std::string& text, std::size_t positio
             return true;
         prefix = prefix.substr(clauseStart);
     }
+    static const std::regex negation(R"(\b(?:do not|don't|never)\b)");
+    if (std::regex_search(prefix, negation))
+        return false;
     for (const std::string lead : {"please", "now", "then", "and", "so", "instead", "actually", "actually please", "can you", "could you",
              "would you", "can you please", "could you please", "would you please"})
         if (prefix == lead)

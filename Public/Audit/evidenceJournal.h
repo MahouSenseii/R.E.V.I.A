@@ -4,6 +4,8 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <istream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -33,6 +35,7 @@ enum class JournalIoBoundary
     BeforeFlush
 };
 using JournalIoGate = std::function<bool(JournalIoBoundary)>;
+using JournalInputFactory = std::function<std::unique_ptr<std::istream>(const std::filesystem::path&)>;
 
 struct JournalEvent
 {
@@ -78,7 +81,8 @@ struct JournalHealth
 class EvidenceJournal
 {
   public:
-    explicit EvidenceJournal(std::filesystem::path path, std::size_t telemetryCapacity = 64, JournalIoGate ioGate = {});
+    explicit EvidenceJournal(std::filesystem::path path, std::size_t telemetryCapacity = 64, JournalIoGate ioGate = {},
+        JournalInputFactory inputFactory = {});
     [[nodiscard]] AppendReceipt Append(const JournalEvent& event);
     [[nodiscard]] std::vector<core::EvidenceRef> Read(const EvidenceQuery& query);
     [[nodiscard]] bool HasUnresolvedForTask(const runtime::RuntimeStamp& stamp, const memory::MemoryScope& scope);
@@ -100,6 +104,7 @@ class EvidenceJournal
     std::filesystem::path path;
     std::size_t telemetryCapacity;
     JournalIoGate ioGate;
+    JournalInputFactory inputFactory;
     mutable std::mutex mutex;
     mutable std::mutex telemetryMutex;
     std::mutex telemetryFlushMutex;

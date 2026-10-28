@@ -10,6 +10,17 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <sstream>
+#include <streambuf>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -105,6 +116,101 @@ std::vector<nlohmann::json> Decode(const std::string& bytes)
         start = end + 1;
     }
     return records;
+}
+class FailedReadBuffer : public std::streambuf
+{
+  public:
+    explicit FailedReadBuffer(std::string prefix) : bytes(std::move(prefix)) {}
+
+  private:
+    int_type underflow() override
+    {
+        if (position == bytes.size())
+            throw std::runtime_error("Injected journal read failure.");
+        current = bytes[position++];
+        setg(&current, &current, &current + 1);
+        return traits_type::to_int_type(current);
+    }
+    std::string bytes;
+    std::size_t position = 0;
+    char current = 0;
+};
+class FailedReadStream : public std::istream
+{
+  public:
+    explicit FailedReadStream(std::string prefix) : std::istream(nullptr), buffer(std::move(prefix))
+    {
+        rdbuf(&buffer);
+    }
+
+  private:
+    FailedReadBuffer buffer;
+};
+void TestReadFailuresDoNotBecomeEmptyOrPartialHistory()
+{
+    Directory directory;
+    const auto path = directory.root / "read-failure.jsonl";
+    EvidenceJournal writer(path);
+    Check(!writer.Recover().degraded && !writer.HasUnresolvedForTask(Query().stamp, Query().scope),
+        "Missing journal was not treated as new history.");
+    { std::ofstream empty(path, std::ios::binary); }
+    Check(!writer.Recover().degraded && writer.Read(Query()).empty(), "Empty regular journal was not healthy.");
+    Check(writer.Append(Event("complete-before-error")).Durable(), "Read fixture observation did not persist.");
+    const auto prefix = Bytes(path);
+    Check(writer.Append(Event("pending-after-error", JournalKind::Intent, "read-tx")).Durable(), "Read fixture intent did not persist.");
+    Check(writer.HasUnresolvedForTask(Query().stamp, Query().scope), "Valid pending intent was not blocked.");
+
+    for (const auto& retained : {std::string{}, prefix})
+    {
+        EvidenceJournal failed(path, 64, {}, [&](const auto&) { return std::make_unique<FailedReadStream>(retained); });
+        Check(failed.Recover().degraded && !failed.Health().error.empty(), "A failed read was projected as healthy history.");
+        Check(failed.Read(Query()).empty() && failed.Health().degraded, "A partial read exposed a successful evidence prefix.");
+        Check(failed.HasUnresolvedForTask(Query().stamp, Query().scope), "A failed read allowed dependent effects.");
+    }
+
+    EvidenceJournal normalSource(path, 64, {}, [&](const auto&) { return std::make_unique<std::istringstream>(Bytes(path)); });
+    Check(!normalSource.Recover().degraded && normalSource.Read(Query()).size() == 2 &&
+              normalSource.HasUnresolvedForTask(Query().stamp, Query().scope),
+        "Normal EOF or the injected source changed valid pending history.");
+    Check(writer.Append(Event("resolved-after-error", JournalKind::Result, "read-tx")).Durable(), "Read fixture result did not persist.");
+    Check(!writer.HasUnresolvedForTask(Query().stamp, Query().scope) && !writer.Recover().degraded,
+        "Valid resolved history stayed blocked after the read failure fixture.");
+
+    const auto appendPath = directory.root / "post-write-read-failure.jsonl";
+    EvidenceJournal postWrite(appendPath, 64, {}, [](const auto&) { return std::make_unique<FailedReadStream>(std::string{}); });
+    const auto durable = postWrite.Append(Event("durable-before-read-failure"));
+    Check(durable.Durable() && Bytes(appendPath).find("durable-before-read-failure") != std::string::npos,
+        "A post-write read failure erased acknowledgement of an actual durable append.");
+    Check(!durable.error.empty() && postWrite.Health().degraded && !postWrite.Health().error.empty(),
+        "A post-write read failure left journal health looking healthy.");
+    Check(postWrite.HasUnresolvedForTask(Query().stamp, Query().scope), "A post-write read failure allowed dependent effects.");
+    EvidenceJournal recoveredAppend(appendPath);
+    Check(!recoveredAppend.Recover().degraded && recoveredAppend.Read(Query()).size() == 1,
+        "The durable append was lost after restoring readable history.");
+
+    EvidenceJournal invalid(directory.root);
+    Check(invalid.Recover().degraded && invalid.HasUnresolvedForTask(Query().stamp, Query().scope),
+        "Directory journal path was mistaken for empty history.");
+#ifdef _WIN32
+    const HANDLE locked = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(locked != INVALID_HANDLE_VALUE, "Read-denial fixture could not lock its journal.");
+    const bool denied = writer.Recover().degraded && writer.HasUnresolvedForTask(Query().stamp, Query().scope);
+    CloseHandle(locked);
+    Check(denied, "Unreadable existing journal was treated as empty history.");
+#else
+    if (geteuid() != 0)
+    {
+        const auto original = std::filesystem::status(path).permissions();
+        std::filesystem::permissions(path, std::filesystem::perms::none);
+        const bool denied = writer.Recover().degraded && writer.HasUnresolvedForTask(Query().stamp, Query().scope);
+        std::filesystem::permissions(path, original);
+        Check(denied, "Unreadable existing journal was treated as empty history.");
+    }
+    else
+        std::cout << "SKIP: permission-denied file control requires a non-root user.\n";
+#endif
+    Check(!writer.Recover().degraded, "A repaired readable source did not recover health.");
+    std::cout << "Journal read controls: missing, empty, valid pending/resolved, initial/mid-read failure, normal EOF, directory, read denial.\n";
 }
 void TestTelemetryProducerDoesNotWaitForFailedDiskFlush()
 {
@@ -542,6 +648,7 @@ void TestLegacyAdapterUsesJournalAndPreservesReadableFields()
 }
 void RunEvidenceJournalTests()
 {
+    TestReadFailuresDoNotBecomeEmptyOrPartialHistory();
     TestTelemetryProducerDoesNotWaitForFailedDiskFlush();
     TestDurableDropMarkerIsNotRestoredAfterLaterFailure();
     TestDependentTaskRefusesUnknownEffects();
@@ -564,7 +671,9 @@ int main(int argumentCount, char** arguments)
 {
     try
     {
-        if (argumentCount > 1 && std::string(arguments[1]) == "repair")
+        if (argumentCount > 1 && std::string(arguments[1]) == "read")
+            TestReadFailuresDoNotBecomeEmptyOrPartialHistory();
+        else if (argumentCount > 1 && std::string(arguments[1]) == "repair")
             TestTwentyCrashesDuringRepairCannotCommitAnUnflushedResult();
         else if (argumentCount > 1 && std::string(arguments[1]) == "oversized")
             TestOversizedActionResultIsNeverAcknowledgedOrProjected();

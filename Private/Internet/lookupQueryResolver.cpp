@@ -1,4 +1,5 @@
 #include "Internet/lookupQueryResolver.h"
+#include "Internet/internetLookupPolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -84,15 +85,29 @@ bool EndsWithPhrase(const std::string& lowered, const std::string_view phrase)
 
 // Politeness and framing that comes before the actual instruction.
 constexpr std::array LeadingCourtesies{
-    std::string_view{"hey revia"}, std::string_view{"ok revia"},
-    std::string_view{"okay revia"}, std::string_view{"revia"},
-    std::string_view{"i want you to"}, std::string_view{"i would like you to"},
-    std::string_view{"i'd like you to"}, std::string_view{"do me a favor and"},
+    std::string_view{"hey revia"},
+    std::string_view{"ok revia"},
+    std::string_view{"okay revia"},
+    std::string_view{"revia"},
+    std::string_view{"i want you to"},
+    std::string_view{"i would like you to"},
+    std::string_view{"i'd like you to"},
+    std::string_view{"do me a favor and"},
     std::string_view{"do me a favour and"},
-    std::string_view{"can you"}, std::string_view{"could you"},
-    std::string_view{"would you"}, std::string_view{"will you"},
-    std::string_view{"please"}, std::string_view{"hey"}, std::string_view{"hi"},
-    std::string_view{"go"}, std::string_view{"and"},
+    std::string_view{"can you"},
+    std::string_view{"could you"},
+    std::string_view{"would you"},
+    std::string_view{"will you"},
+    std::string_view{"please"},
+    std::string_view{"hey"},
+    std::string_view{"hi"},
+    std::string_view{"actually"},
+    std::string_view{"instead"},
+    std::string_view{"but"},
+    std::string_view{"now"},
+    std::string_view{"then"},
+    std::string_view{"go"},
+    std::string_view{"and"},
 };
 
 // The instruction itself. Every entry either carries an explicit object marker ("for",
@@ -252,7 +267,13 @@ bool StripTrailing(std::string& value, const std::array<std::string_view, Size>&
 ResolvedLookupQuery ResolveLookupQuery(const std::string& input)
 {
     ResolvedLookupQuery resolved;
-    std::string body = TrimSentencePunctuation(Trim(input));
+    const auto request = SelectLookupRequest(input);
+    if (request.prohibited || !request.reason.empty())
+    {
+        resolved.reason = request.reason.empty() ? "The current request prohibits lookup." : request.reason;
+        return resolved;
+    }
+    std::string body = TrimSentencePunctuation(Trim(request.text.empty() ? input : request.text));
     if (body.empty())
     {
         resolved.reason = "The request was empty.";
@@ -292,6 +313,12 @@ ResolvedLookupQuery ResolveLookupQuery(const std::string& input)
         body = TrimSentencePunctuation(std::move(body));
     }
     body = TrimSentencePunctuation(std::move(body));
+
+    if (body.size() > 1024)
+    {
+        resolved.reason = "The requested search subject exceeds the 1,024-byte query limit; please name a shorter subject.";
+        return resolved;
+    }
 
     if (body.empty())
     {

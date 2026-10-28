@@ -2,6 +2,10 @@
 CMakeUserPresets.json
 cmake-build-*/
 build/
+!/Tools/Build/
+/Tools/Build/*
+!/Tools/Build/*.ps1
+!/Tools/Build/*.txt
 out/
 *.exe
 *.obj

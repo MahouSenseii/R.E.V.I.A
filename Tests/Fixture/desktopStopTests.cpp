@@ -163,6 +163,10 @@ struct ReviaWindowStopTests
             request.id = revia::actions::NewActionId();
             request.type = revia::actions::ActionType::CreateDirectory;
             request.source = owner.Paths().InstallRoot() / name;
+            expect(!owner.IsStarted(), "companion switch fixture begins with its runtime stopped");
+            const auto stopped = runtime.Execute(request, true);
+            expect(!stopped.result.attempted && !stopped.Succeeded() && !std::filesystem::exists(request.source),
+                "stopped companion cannot authorize a native effect");
             const auto outcome = [&]()
             {
                 // Admit only this fixture action without starting model or device services.
@@ -173,6 +177,8 @@ struct ReviaWindowStopTests
                     ~RestoreAdmission() { ReviaSessionTestAccess::MarkStudioStarted(owner, wasStarted); }
                 } restore{owner, owner.IsStarted()};
                 ReviaSessionTestAccess::MarkStudioStarted(owner, true);
+                (void)ReviaSessionTestAccess::StudioInput(owner, revia::agents::InputSource::Typed);
+                request.id = revia::actions::NewActionId();
                 return runtime.Execute(request, true);
             }();
             const bool matched = outcome.Succeeded() == allowed && std::filesystem::exists(request.source) == allowed;
@@ -181,6 +187,9 @@ struct ReviaWindowStopTests
                           << ", succeeded=" << outcome.Succeeded() << ", reason=" << outcome.Message() << '\n';
             expect(matched,
                 "companion selection lost its denial or narrowed the other companion");
+            if (!allowed)
+                expect(outcome.Message().find("explicit companion denial") != std::string::npos,
+                    "original companion is refused by its retained denial, not an unrelated admission failure");
         };
         const auto cwd = QDir::currentPath();
         memoryDecision finding;

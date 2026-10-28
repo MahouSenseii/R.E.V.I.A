@@ -1,6 +1,7 @@
 #include "Runtime/reviaSession.h"
 
 #include "Core/utf8.h"
+#include "Core/taskContract.h"
 #include "Agents/responseFilter.h"
 #include "Agents/agentToolWorker.h"
 #include "Audit/contentDigest.h"
@@ -103,10 +104,15 @@ struct WorkerScope
 {
     std::string workflowId;
     actions::CapabilitySettings settings;
+    core::TaskContract task;
 };
 
-bool SaveWorkerScope(const std::filesystem::path& path, const std::string& workflowId, const actions::CapabilitySettings& captured)
+bool SaveWorkerScope(const std::filesystem::path& path, const std::string& workflowId, const actions::CapabilitySettings& captured,
+    const core::TaskContract& task)
 {
+    std::string serialized;
+    if (!core::SerializeTaskContract(task, serialized))
+        return false;
     nlohmann::json roots = nlohmann::json::array(), executables = nlohmann::json::array();
     for (const auto& root : captured.approvedRoots)
         roots.push_back(actions::PathToUtf8(root));
@@ -114,7 +120,8 @@ bool SaveWorkerScope(const std::filesystem::path& path, const std::string& workf
         executables.push_back(actions::PathToUtf8(executable));
     const bool writes =
         captured.mode == actions::ExecutionMode::OwnerFullAccess || captured.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite;
-    return SaveWorkflowJson(path, {{"workflowId", workflowId}, {"enabled", captured.mode != actions::ExecutionMode::Disabled},
+    return SaveWorkflowJson(path, {{"workflowId", workflowId}, {"taskContract", nlohmann::json::parse(serialized)},
+                                      {"enabled", captured.mode != actions::ExecutionMode::Disabled},
                                       {"mode", actions::ToString(captured.mode)}, {"roots", roots}, {"writes", writes},
                                       {"process", captured.process.enabled && captured.process.allowTaskExecution},
                                       {"executables", executables}, {"commandInterpreters", captured.process.allowCommandInterpreters},
@@ -133,6 +140,8 @@ std::optional<WorkerScope> LoadWorkerScope(const std::filesystem::path& path)
         input >> value;
         WorkerScope scope;
         scope.workflowId = value.at("workflowId").get<std::string>();
+        if (!core::DeserializeTaskContract(value.at("taskContract").dump(), scope.task) || scope.task.stamp.taskId != scope.workflowId)
+            return std::nullopt;
         auto& settings = scope.settings;
         settings.mode = value.at("enabled").get<bool>()
                             ? actions::ExecutionModeFromString(value.value("mode", std::string("approved_scope")))
@@ -169,6 +178,12 @@ std::optional<WorkerScope> LoadWorkerScope(const std::filesystem::path& path)
     {
         return std::nullopt;
     }
+}
+
+bool SameTaskContract(const core::TaskContract& saved, const core::TaskContract& admitted)
+{
+    std::string savedJson, admittedJson;
+    return core::SerializeTaskContract(saved, savedJson) && core::SerializeTaskContract(admitted, admittedJson) && savedJson == admittedJson;
 }
 
 policy::AuthorityPermissions WorkerRestriction(const WorkerScope& scope, const bool process)
@@ -210,14 +225,29 @@ bool ReviaSession::Admits(const RuntimeStamp& stamp) const
 
 agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderMode mode)
 {
-    const auto capturedScope = mode == AgentProviderMode::LocalWithTools
+    auto capturedScope = mode != AgentProviderMode::Demonstration
                                    ? LoadWorkerScope(companionPaths.Resolve("RuntimeData/Agents/tool-scope.json"))
                                    : std::optional<WorkerScope>{};
+    if (capturedScope)
+    {
+        std::lock_guard lock(taskContractMutex);
+        const auto original = ownedTaskContracts.find(capturedScope->workflowId);
+        if (original == ownedTaskContracts.end() || !SameTaskContract(capturedScope->task, *original->second))
+            capturedScope.reset();
+        else
+            capturedScope->task = *original->second;
+    }
     return [this, mode, capturedScope](const agents::NodeRequest& request, const std::stop_token stop)
     {
         agents::NodeResult result;
         if (stop.stop_requested() || !Admits(request.stamp))
             return result;
+        if (mode != AgentProviderMode::Demonstration && (!capturedScope || capturedScope->workflowId != request.stamp.taskId ||
+            !TaskContextCurrent(capturedScope->task)))
+        {
+            result.diagnostic = "The originating workflow context is no longer admitted.";
+            return result;
+        }
         if (mode == AgentProviderMode::Demonstration)
         {
             const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(180);
@@ -281,6 +311,11 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
         };
         const auto reserve = [&](const agents::WorkflowWorkKind kind, const std::uint64_t bytes = 0)
         {
+            if (kind == agents::WorkflowWorkKind::Provider && (!capturedScope || !TaskContextCurrent(capturedScope->task)))
+            {
+                result.diagnostic = "The originating workflow context is no longer admitted.";
+                return false;
+            }
             if (!usagePersisted || stop.stop_requested() || !Admits(request.stamp) ||
                 !agentWorkflow.ReserveWork(request.stamp, kind, bytes))
                 return false;
@@ -354,6 +389,26 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     break;
                 if (!reserve(agents::WorkflowWorkKind::Tool, agents::WorkerToolOutputReservation))
                     return result;
+                // Registration changes the ledger revision, but cannot change the captured origin or scope.
+                authorityStamp.policyVersion = companionAuthority->Revision();
+                core::TaskContract nodeTask;
+                auto requirements = scope.task;
+                requirements.cancellation.origin.policyVersion = request.stamp.policyVersion;
+                if (!core::AdaptNodeTask(request, std::move(requirements), nodeTask))
+                {
+                    result.diagnostic = "The worker node contract could not retain its originating admission.";
+                    return result;
+                }
+                nodeTask.cancellation.ancestorTaskIds.push_back(scope.workflowId);
+                nodeTask.cancellation.origin.policyVersion = authorityStamp.policyVersion;
+                action->authorityStamp = authorityStamp;
+                core::TaskContract actionTask;
+                if (!core::AdaptActionTask(*action, std::move(nodeTask), actionTask))
+                {
+                    result.diagnostic = "The worker action contract could not retain its originating admission.";
+                    return result;
+                }
+                action->taskContract = std::make_shared<const core::TaskContract>(std::move(actionTask));
                 action->beforeEffect = [this, stop, requestStamp = request.stamp,
                                            isProcess = action->type == actions::ActionType::ExecuteProcess,
                                            allowProcess](const std::string&)
@@ -393,7 +448,7 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
         recordUsage(response);
         if (!usagePersisted)
             return result;
-        if (stop.stop_requested() || !Admits(request.stamp))
+        if (stop.stop_requested() || !Admits(request.stamp) || !capturedScope || !TaskContextCurrent(capturedScope->task))
             return result;
         result.succeeded = response.bSuccess;
         if (!response.bSuccess)
@@ -492,6 +547,20 @@ bool ReviaSession::StartAgentWorkflow(const std::string& objective, const AgentP
         else
             node.deliverableContract = {{steps, constraints, risks, criteria}, true};
     }
+    if (mode != AgentProviderMode::Demonstration)
+    {
+        const auto contract = CaptureOwnedTaskContract(stamp, objective);
+        if (!contract || !TaskContractRefusal(*contract, {}).empty() ||
+            !SaveWorkerScope(companionPaths.Resolve("RuntimeData/Agents/tool-scope.json"), spec.id, actionRuntime.Settings(), *contract))
+        {
+            outError = "The originating workflow context could not be captured.";
+            return false;
+        }
+        std::lock_guard lock(taskContractMutex);
+        if (!current.id.empty())
+            ownedTaskContracts.erase(current.id);
+        ownedTaskContracts[spec.id] = contract;
+    }
     if (mode == AgentProviderMode::LocalWithTools)
     {
         const auto verification =
@@ -501,11 +570,6 @@ bool ReviaSession::StartAgentWorkflow(const std::string& objective, const AgentP
                                   "constraints, risks and acceptance evidence";
         verification->deliverableContract.requireAllPrerequisites = true;
         const auto path = companionPaths.Resolve("RuntimeData/Agents/tool-scope.json");
-        if (!SaveWorkerScope(path, spec.id, actionRuntime.Settings()))
-        {
-            outError = "The captured tool scope could not be saved.";
-            return false;
-        }
         const auto scope = LoadWorkerScope(path);
         if (!scope || !companionAuthority->RegisterTask(stamp, {}, WorkerRestriction(*scope, scope->settings.process.allowTaskExecution)))
         {
@@ -573,16 +637,25 @@ bool ReviaSession::ResumeAgentWorkflow(std::string& outError)
         return false;
     }
     workflowProviderMode.store(mode);
-    const auto stamp = sessionIdentity.Stamp(agentWorkflow.Snapshot().id);
-    if (mode == AgentProviderMode::LocalWithTools)
+    const auto stamp = sessionIdentity.Stamp(agentWorkflow.Snapshot().id, {}, companionAuthority->Revision());
+    if (mode != AgentProviderMode::Demonstration)
     {
         const auto scope = LoadWorkerScope(companionPaths.Resolve("RuntimeData/Agents/tool-scope.json"));
-        if (!scope || scope->workflowId != stamp.taskId)
+        std::shared_ptr<const core::TaskContract> original;
+        {
+            std::lock_guard lock(taskContractMutex);
+            const auto found = ownedTaskContracts.find(stamp.taskId);
+            if (found != ownedTaskContracts.end())
+                original = found->second;
+        }
+        if (!scope || scope->workflowId != stamp.taskId || !original || !SameTaskContract(scope->task, *original) ||
+            !TaskContextCurrent(*original))
         {
             outError = "The original captured tool scope is unavailable.";
             return false;
         }
-        (void)companionAuthority->RegisterTask(stamp, {}, WorkerRestriction(*scope, scope->settings.process.allowTaskExecution));
+        if (mode == AgentProviderMode::LocalWithTools)
+            (void)companionAuthority->RegisterTask(stamp, {}, WorkerRestriction(*scope, scope->settings.process.allowTaskExecution));
     }
     return agentWorkflow.Resume(stamp, AgentProvider(mode), outError,
         [this, mode](const agents::WorkflowSnapshot& snapshot) { ObserveAgentWorkflow(snapshot, mode); });
@@ -594,7 +667,7 @@ bool ReviaSession::RetryAgentNode(
     if (!agentWorkflow.Retry(nodeId, changedInput, evidence, outError))
         return false;
     const auto mode = workflowProviderMode.load();
-    return agentWorkflow.Resume(sessionIdentity.Stamp(agentWorkflow.Snapshot().id), AgentProvider(mode), outError,
+    return agentWorkflow.Resume(sessionIdentity.Stamp(agentWorkflow.Snapshot().id, {}, companionAuthority->Revision()), AgentProvider(mode), outError,
         [this, mode](const agents::WorkflowSnapshot& snapshot) { ObserveAgentWorkflow(snapshot, mode); });
 }
 

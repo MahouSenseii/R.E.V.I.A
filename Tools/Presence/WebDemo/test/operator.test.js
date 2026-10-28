@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -12,7 +12,7 @@ import { loadSettings, readStatus, nativeEnvironment } from '../operator/config.
 const localToken = 'local-test-only-'.repeat(4);
 const hostToken = 'host-test-only-'.repeat(4);
 async function settings(t, native = '', bridge = '') {
-  const dir = await mkdtemp(join(tmpdir(), 'revia-operator-'));
+  const dir = await mkdtemp(join(tmpdir(), 'revia operator config '));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(join(dir, '.env.revia'), `REVIA_WEB_ENABLED=1\nREVIA_WEB_PORT=17864\nREVIA_WEB_LOCAL_TOKEN=${localToken}\n${native}`);
   await writeFile(join(dir, '.env.bridge'), `NODE_ENV=production\nREVIA_WEB_HOST_ID=revia-public\nREVIA_WEB_HOST_TOKEN=${hostToken}\nREVIA_WEB_RELAY_URL=wss://relay.example/v1/host\n${bridge}`);
@@ -43,14 +43,22 @@ test('native-only settings do not require a bridge file', async t => {
   await rm(join(dir, '.env.bridge'));
   assert.equal((await loadSettings(dir, false)).port, 17864);
 });
-test('Windows entry point validates files with spaces without exposing credentials', { skip: process.platform !== 'win32' }, async t => {
+test('Windows entry point validates files with spaces without exposing credentials', { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
   const dir = await settings(t);
-  const script = fileURLToPath(new URL('../WebDemo.ps1', import.meta.url));
+  const source = fileURLToPath(new URL('..', import.meta.url));
+  const fixture = await mkdtemp(join(tmpdir(), 'revia operator source '));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  await Promise.all(['WebDemo.ps1', 'package.json', 'operator', 'bridge', 'relay', 'protocol', 'node_modules'].map(
+    name => cp(join(source, name), join(fixture, name), { recursive: true })));
+  const script = join(fixture, 'WebDemo.ps1');
+  assert.match(script, / /, 'The entry script path must contain a space.');
+  assert.match(dir, / /, 'The configuration path must contain a space.');
   const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'check', '-ConfigDirectory', dir], { windowsHide: true });
   let output = '';
   child.stdout.on('data', bytes => output += bytes);
   child.stderr.on('data', bytes => output += bytes);
-  const [code] = await once(child, 'exit');
+  t.after(() => child.kill());
+  const [code] = await once(child, 'close');
   assert.equal(code, 0, output);
   assert.match(output, /no network connection made/);
   assert.ok(!output.includes(localToken) && !output.includes(hostToken));

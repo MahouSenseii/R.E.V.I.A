@@ -1195,6 +1195,28 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             intelligence::ToString(routeDecision.mode) + ". " + routeDecision.reason,
         ElapsedMilliseconds(turnStarted), 0, currentTurn);
 
+    const auto lookupRequest = revia::internet::SelectLookupRequest(policyInput);
+    const auto resolvedLookup = revia::internet::ResolveLookupQuery(policyInput);
+    const auto lookupAccess = internetSettings ? internetSettings() : actions::CapabilitySettings::InternetAccess{};
+    const bool lookupEligible = turnPolicy.allowInternetLookup && !proactive && !reflex.matched && internetLookup && lookupAccess.enabled;
+    const bool lookupWanted = lookupEligible &&
+        revia::internet::InternetLookupPolicy::ShouldLookup(policyInput, lookupAccess.automaticLookup);
+    if (lookupEligible && policyInput.size() > 65536 && lookupRequest.explicitRequest)
+    {
+        result.succeeded = false;
+        result.reason = resolvedLookup.reason + " No external lookup ran.";
+        result.text = result.reason;
+        publishComponent("Internet", "Skipped", result.reason, -1.0, 0, currentTurn);
+        return admitted() ? result : revoked();
+    }
+    if (lookupWanted && !resolvedLookup.resolved)
+    {
+        publishComponent("Internet", "Skipped", "The lookup request could not supply a bounded search subject. " + resolvedLookup.reason,
+            -1.0, 0, currentTurn);
+        internetGrounding = "Lookup limitation: " + resolvedLookup.reason +
+                            " No external lookup ran. Explain this limitation if the answer needs that lookup.";
+    }
+
     // Native tool calling. On a private, ordinary reply the model may choose its own tools,
     // and each runs through the owner that already does that work, under the same
     // permissions, admission and audit. The deterministic routers below stay for every
@@ -1203,7 +1225,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     if (!proactive && !reflex.matched && !turnPolicy.publicAudience && llmAvailable &&
         agents::RequestedReplyContract(policyInput).rootKind == agents::ReplyFormat::Conversation)
     {
-        const auto access = internetSettings ? internetSettings() : actions::CapabilitySettings::InternetAccess{};
+        const auto access = lookupAccess;
         const memory::MemoryScope memoryScope = promptBuilder::CapturedMemoryScope(promptContext);
         ChatToolGrant grant;
         if (chatToolProvider)
@@ -1219,7 +1241,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         agents::ToolPermissions permissions;
         permissions.privateAudience = true;
-        permissions.internetEnabled = turnPolicy.allowInternetLookup && access.enabled;
+        permissions.internetEnabled = turnPolicy.allowInternetLookup && access.enabled && !lookupRequest.prohibited &&
+                                      lookupRequest.reason.empty() && (!lookupWanted || resolvedLookup.resolved);
         permissions.automaticLookup = access.automaticLookup;
         permissions.explicitSearchRequest = revia::internet::InternetLookupPolicy::ShouldLookup(policyInput, false);
         permissions.memoryEnabled = profile.bMemoryEnabled && memory::IsAttributedPrivateScope(memoryScope);
@@ -1239,9 +1262,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         if (internetLookup)
         {
             // The same typed WebSearch action, provider and audit as the lookup below;
-            // only the query now comes from the model's call instead of a phrase list.
-            executors.webSearch = [&, access](const std::string& query, const agents::ToolCallContext& call)
+            // a native call still stays within any explicitly authored search subject.
+            executors.webSearch = [&, access](const std::string& proposedQuery, const agents::ToolCallContext& call)
             {
+                // An explicit authored request fixes the admitted subject even when a model proposes the call.
+                const std::string& query = lookupRequest.explicitRequest ? resolvedLookup.query : proposedQuery;
                 if (!call.Admitted())
                     return agents::ToolExecution::Fail("The turn ended before the search ran.");
                 const std::string configured = access.visibleBrowser
@@ -1325,18 +1350,6 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             const std::string lookupQuery = resolvedQuery.query;
             const bool shouldLookup =
                 access.enabled && revia::internet::InternetLookupPolicy::ShouldLookup(policyInput, access.automaticLookup);
-            if (shouldLookup && !resolvedQuery.resolved)
-            {
-                // Worth searching, but nothing to search for. Falling back to the raw
-                // sentence is exactly the defect this replaced, and inventing a subject is
-                // Curiosity's job rather than this turn's, so the lookup is skipped and the
-                // turn continues without web grounding.
-                publishComponent("Internet", "Skipped",
-                    "A lookup was warranted but the request named no subject to search "
-                    "for. " +
-                        resolvedQuery.reason,
-                    -1.0, 0, currentTurn);
-            }
             if (shouldLookup && resolvedQuery.resolved)
             {
                 const std::string configuredBackend = access.visibleBrowser

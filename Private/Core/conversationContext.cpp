@@ -20,13 +20,60 @@ std::string BoundExcerpt(const std::string& text, const std::size_t limit)
     return revia::utf8::Prefix(text, head) + std::string(marker) + text.substr(tail);
 }
 
+bool NamesFileToken(const std::string_view prefix)
+{
+    std::string lower(prefix);
+    std::transform(
+        lower.begin(), lower.end(), lower.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    for (const auto cue : {"save ", "filename ", "file name ", "file ", "path "})
+    {
+        const auto position = lower.find(cue);
+        if (position != std::string::npos && (position == 0 || std::isspace(static_cast<unsigned char>(lower[position - 1]))))
+            return true;
+    }
+    return false;
+}
+
 std::size_t FindContinuitySentenceBoundary(const std::string_view text, const std::size_t begin)
 {
     auto boundary = text.find_first_of(".!?\n", begin);
-    while (boundary != std::string_view::npos && text[boundary] == '.' && boundary + 1 < text.size() &&
-           std::isdigit(static_cast<unsigned char>(text[boundary + 1])))
+    while (boundary != std::string_view::npos && boundary + 1 < text.size())
     {
-        if (boundary > 0)
+        const auto next = static_cast<unsigned char>(text[boundary + 1]);
+        if (text[boundary] != '.')
+        {
+            const auto tokenStart = text.find_last_of(" \t\r\n", boundary);
+            const auto token = text.substr(tokenStart == std::string_view::npos ? 0 : tokenStart + 1,
+                boundary - (tokenStart == std::string_view::npos ? 0 : tokenStart + 1));
+            if ((text[boundary] == '?' || text[boundary] == '!') && !std::isspace(next) && token.find("://") != std::string_view::npos)
+            {
+                boundary = text.find_first_of(".!?\n", boundary + 1);
+                continue;
+            }
+            break;
+        }
+        const bool decimal = std::isdigit(next) != 0;
+        const auto tokenStart = text.find_last_of(" \t\r\n", boundary);
+        const auto tokenBegin = tokenStart == std::string_view::npos ? 0 : tokenStart + 1;
+        const auto tokenEnd = text.find_first_of(" \t\r\n", boundary + 1);
+        const auto token = text.substr(tokenBegin, (tokenEnd == std::string_view::npos ? text.size() : tokenEnd) - tokenBegin);
+        auto digitsEnd = boundary + 1;
+        while (digitsEnd < text.size() && std::isdigit(static_cast<unsigned char>(text[digitsEnd])))
+            ++digitsEnd;
+        const bool numericLabel =
+            decimal && digitsEnd < text.size() &&
+            (std::isalpha(static_cast<unsigned char>(text[digitsEnd])) ||
+                (text[digitsEnd] == '.' && digitsEnd + 1 < text.size() && std::isalpha(static_cast<unsigned char>(text[digitsEnd + 1]))));
+        const bool pathToken = token.find_first_of("/\\") != std::string_view::npos;
+        // Explicit filename context makes the token opaque; numeric suffixes alone
+        // remain ambiguous with the existing decimal and sentence-boundary rules.
+        const bool fileToken = tokenBegin >= begin && NamesFileToken(text.substr(begin, tokenBegin - begin));
+        const bool dottedToken =
+            !std::isspace(next) &&
+            (pathToken || (boundary > tokenBegin && (fileToken || std::isalpha(next) != 0 || next == '_' || numericLabel)));
+        if (!decimal && !dottedToken)
+            break;
+        if (decimal && !dottedToken && boundary > 0)
         {
             const auto previous = static_cast<unsigned char>(text[boundary - 1]);
             if (!std::isdigit(previous) && !std::isspace(previous) &&
