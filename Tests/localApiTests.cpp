@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <iostream>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -112,13 +113,21 @@ class RawClient
     }
     RawClient(const RawClient&) = delete;
     RawClient& operator=(const RawClient&) = delete;
-    void Send(const std::string& bytes)
+    bool Send(const std::string& bytes)
     {
+        std::size_t offset = 0;
+        while (offset < bytes.size())
+        {
 #ifdef _WIN32
-        send(fd, bytes.data(), static_cast<int>(bytes.size()), 0);
+            const auto sent = send(fd, bytes.data() + offset, static_cast<int>(bytes.size() - offset), 0);
 #else
-        send(fd, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+            const auto sent = send(fd, bytes.data() + offset, bytes.size() - offset, MSG_NOSIGNAL);
 #endif
+            if (sent <= 0)
+                return false;
+            offset += static_cast<std::size_t>(sent);
+        }
+        return true;
     }
     int Status(const std::chrono::milliseconds timeout)
     {
@@ -404,12 +413,219 @@ void TestTrustedModeIsAnOwnerTurn()
         "The trusted API used the shared router, or ran a command.");
     api.Stop();
 }
+
+void TestEditorObservationsRequireTrustedCallback()
+{
+    FakeLlama llama;
+    std::atomic<int> ownerTurns = 0;
+    for (const bool trusted : {false, true})
+    {
+        presence::LocalApiRuntime api(Model(llama.port), [] { return false; });
+        presence::LocalApiRuntime::PrivateTurn owner;
+        if (trusted)
+            owner = [&](const std::string&, std::stop_token) { ++ownerTurns; return runtime::SessionResult{}; };
+        Check(api.Start(0, Token, owner), "The editor boundary fixture did not start.");
+        httplib::Client client("127.0.0.1", api.Port());
+        client.set_read_timeout(5);
+        const Json saved = {{"source", "saved_file"}, {"projectRoot", "C:/fixture"}, {"path", "C:/fixture/code.cpp"},
+            {"revision", std::string(64, 'a')}, {"occurredAtUnixMs", 1793206800000LL}};
+        const auto payload = saved.dump();
+        {
+            RawClient raw(api.Port());
+            Check(raw.Send("POST /v1/editor/observations HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(api.Port()) +
+                    "\r\nAuthorization: Bearer " + Token + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                    std::to_string(payload.size()) + "\r\n\r\n"), "The gated editor request headers were not sent.");
+            const int wire = raw.Status(1500ms);
+            const bool bodySent = raw.Send(payload);
+            std::cout << "Editor absent-callback wire: trusted=" << trusted << " status=" << wire
+                      << " body_attempted=1 body_sent=" << bodySent << " owner_turns=" << ownerTurns.load()
+                      << " inference_requests=" << llama.Requests().size() << std::endl;
+            Check(wire == 403 && ownerTurns == 0 && llama.Requests().empty(),
+                "The nonempty editor challenge lacked an actual wire 403 or caused a callback/model effect.");
+        }
+        // Keep the ordinary parser assertion independent of the gated nonempty wire challenge.
+        const auto response = client.Post("/v1/editor/observations", Bearer(), "", "application/json");
+        Check(response && response->status == 403,
+            "An editor observation without a trusted callback was not refused: " +
+                (response ? std::to_string(response->status) + " " + response->body : httplib::to_string(response.error())));
+        api.Stop();
+        Check(ownerTurns == 0 && llama.Requests().empty(), "An absent editor callback caused an owner turn or inference.");
+    }
+}
+
+void TestEditorObservationsAreBoundedAndDoNotGenerate()
+{
+    FakeLlama llama;
+    std::atomic<int> calls = 0;
+    bool accept = true;
+    bool fail = false;
+    bool retryable = false;
+    presence::EditorObservationRequest received;
+    const auto callback = [&](const presence::EditorObservationRequest& saved)
+    {
+        ++calls;
+        received = saved;
+        if (fail)
+            throw std::runtime_error("PRIVATE_EXCEPTION_CANARY");
+        return presence::EditorObservationResult{accept, accept ? "Saved observation accepted." : "Source is paused.", "saved-event-1", retryable};
+    };
+    const auto owner = [](const std::string&, std::stop_token) { return runtime::SessionResult{}; };
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const Json saved = {{"source", "saved_file"}, {"projectRoot", "C:/fixture"}, {"path", "C:/fixture/code.cpp"},
+        {"revision", std::string(64, 'a')}, {"occurredAtUnixMs", now}};
+    {
+        presence::LocalApiRuntime shared(Model(llama.port), [] { return false; });
+        Check(shared.Start(0, Token, {}, callback), "The shared editor fixture did not start.");
+        httplib::Client client("127.0.0.1", shared.Port());
+        const auto payload = saved.dump();
+        {
+            RawClient raw(shared.Port());
+            Check(raw.Send("POST /v1/editor/observations HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(shared.Port()) +
+                    "\r\nAuthorization: Bearer " + Token + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                    std::to_string(payload.size()) + "\r\n\r\n"), "The shared editor challenge headers were not sent.");
+            const int wire = raw.Status(1500ms);
+            const bool bodySent = raw.Send(payload);
+            std::cout << "Editor shared-callback wire: status=" << wire << " body_attempted=1 body_sent=" << bodySent
+                      << " callbacks=" << calls.load() << " inference_requests=" << llama.Requests().size() << std::endl;
+            Check(wire == 403 && calls == 0 && llama.Requests().empty(), "Shared editor authority was not refused on the wire before its body.");
+        }
+        const auto response = client.Post("/v1/editor/observations", Bearer(), "", "application/json");
+        Check(response && response->status == 403 && calls == 0, "A callback granted shared-mode editor authority.");
+        shared.Stop();
+    }
+    presence::LocalApiRuntime api(Model(llama.port), [] { return false; });
+    Check(api.Start(0, Token, owner, callback), "The trusted editor fixture did not start.");
+    httplib::Client client("127.0.0.1", api.Port());
+    client.set_read_timeout(5);
+    const auto post = [&](const Json& body) { return client.Post("/v1/editor/observations", Bearer(), body.dump(), "application/json"); };
+    const auto wrongTokenValue = "revia-" + std::string(64, 'b');
+    {
+        const auto payload = saved.dump();
+        RawClient raw(api.Port());
+        Check(raw.Send("POST /v1/editor/observations HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(api.Port()) +
+                "\r\nAuthorization: Bearer " + wrongTokenValue + "\r\nContent-Type: application/json\r\nContent-Length: " +
+                std::to_string(payload.size()) + "\r\n\r\n"), "The wrong-token editor challenge headers were not sent.");
+        const int wire = raw.Status(1500ms);
+        const bool bodySent = raw.Send(payload);
+        std::cout << "Editor wrong-token wire: status=" << wire << " body_attempted=1 body_sent=" << bodySent
+                  << " callbacks=" << calls.load() << " inference_requests=" << llama.Requests().size() << std::endl;
+        Check(wire == 401 && calls == 0 && llama.Requests().empty(), "The wrong editor token lacked wire401 or caused an effect.");
+    }
+    const auto wrongToken = client.Post("/v1/editor/observations", Bearer(wrongTokenValue), "", "application/json");
+    Check(wrongToken && wrongToken->status == 401, "An incorrect editor token did not produce a parsed 401: " +
+        (wrongToken ? std::to_string(wrongToken->status) : httplib::to_string(wrongToken.error())));
+    auto origin = Bearer();
+    origin.emplace("Origin", "http://127.0.0.1");
+    {
+        const auto payload = saved.dump();
+        RawClient raw(api.Port());
+        Check(raw.Send("POST /v1/editor/observations HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(api.Port()) +
+                "\r\nAuthorization: Bearer " + Token + "\r\nOrigin: http://127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: " +
+                std::to_string(payload.size()) + "\r\n\r\n"), "The editor Origin challenge headers were not sent.");
+        const int wire = raw.Status(1500ms);
+        const bool bodySent = raw.Send(payload);
+        std::cout << "Editor Origin wire: status=" << wire << " body_attempted=1 body_sent=" << bodySent
+                  << " callbacks=" << calls.load() << " inference_requests=" << llama.Requests().size() << std::endl;
+        Check(wire == 403 && calls == 0 && llama.Requests().empty(), "The editor Origin challenge lacked wire403 or caused an effect.");
+    }
+    const auto browser = client.Post("/v1/editor/observations", origin, "", "application/json");
+    Check(browser && browser->status == 403, "An editor browser Origin did not produce a parsed 403: " +
+        (browser ? std::to_string(browser->status) : httplib::to_string(browser.error())));
+    Check(client.Post("/v1/editor/observations", Bearer(), "{", "application/json")->status == 400, "Malformed editor JSON was accepted.");
+    Check(client.Post("/v1/editor/observations", Bearer(), saved.dump(), "text/plain")->status == 400, "Non-JSON editor input was accepted.");
+    Check(client.Post("/v1/editor/observations", Bearer(), saved.dump(), "application/jsonp")->status == 400,
+        "A JSON-prefix media type was accepted for editor observations.");
+    std::vector<Json> invalid;
+    auto changed = saved;
+    changed["text"] = "Client supplied code or commands must never become an observation.";
+    invalid.push_back(changed);
+    for (const auto& source : {Json("unsaved_buffer"), Json("screen"), Json(1)})
+    {
+        changed = saved;
+        changed["source"] = source;
+        invalid.push_back(changed);
+    }
+    for (const auto& path : {Json(""), Json(std::string(1025, 'x')), Json(std::string("bad\0path", 8)), Json(3)})
+    {
+        changed = saved;
+        changed["path"] = path;
+        invalid.push_back(changed);
+    }
+    changed = saved;
+    changed["projectRoot"] = "";
+    invalid.push_back(changed);
+    for (const auto& revision : {Json(std::string(63, 'a')), Json(std::string(64, 'g')), Json(17)})
+    {
+        changed = saved;
+        changed["revision"] = revision;
+        invalid.push_back(changed);
+    }
+    for (const auto& time : {Json("now"), Json(1.5), Json(0), Json(now - 600000), Json(now + 120000), Json(UINT64_MAX)})
+    {
+        changed = saved;
+        changed["occurredAtUnixMs"] = time;
+        invalid.push_back(changed);
+    }
+    changed = saved;
+    changed.erase("revision");
+    invalid.push_back(changed);
+    invalid.push_back(Json::array());
+    for (const auto& value : invalid)
+    {
+        const auto response = post(value);
+        Check(response && response->status == 400, "An invalid saved-file observation was accepted: " + value.dump());
+    }
+    auto duplicate = saved.dump();
+    duplicate.insert(1, "\"source\":\"saved_file\",");
+    Check(client.Post("/v1/editor/observations", Bearer(), duplicate, "application/json")->status == 400,
+        "A duplicate editor JSON key was accepted.");
+    const auto headers = [&](const std::string& fields, const std::string& host = "")
+    {
+        return "POST /v1/editor/observations HTTP/1.1\r\nHost: " +
+               (host.empty() ? "127.0.0.1:" + std::to_string(api.Port()) : host) + "\r\nAuthorization: Bearer " + Token +
+               "\r\nContent-Type: application/json\r\n" + fields + "\r\n";
+    };
+    for (const auto& test : std::vector<std::pair<std::string, int>>{{"Content-Length: 8193\r\n", 413},
+             {"Transfer-Encoding: chunked\r\n", 400}, {"", 400}})
+    {
+        RawClient raw(api.Port());
+        raw.Send(headers(test.first));
+        Check(raw.Status(1500ms) == test.second, "An editor body was not refused at its headers.");
+    }
+    {
+        RawClient raw(api.Port());
+        raw.Send(headers("Content-Length: 10\r\n", "foreign.example:" + std::to_string(api.Port())));
+        Check(raw.Status(1500ms) == 400, "A foreign Host reached editor observations.");
+    }
+    Check(calls == 0 && llama.Requests().empty(), "Rejected editor observations reached the callback or model.");
+    auto response = post(saved);
+    Check(response && response->status == 202 && Json::parse(response->body)["eventId"] == "saved-event-1" && calls == 1 &&
+              received.projectRoot == "C:/fixture" && received.path == "C:/fixture/code.cpp" &&
+              received.revision == std::string(64, 'a') && received.occurredAtUnixMs == now,
+        "A valid editor observation did not reach the typed callback exactly once.");
+    accept = false;
+    response = post(saved);
+    Check(response && response->status == 409 && Json::parse(response->body)["accepted"] == false &&
+              Json::parse(response->body)["eventId"] == "" && Json::parse(response->body)["retryable"] == false && calls == 2,
+        "A rejected editor observation was reported as accepted.");
+    retryable = true;
+    response = post(saved);
+    Check(response && response->status == 409 && Json::parse(response->body)["retryable"] == true && calls == 3,
+        "A transient busy observation lost its host-owned retry signal.");
+    fail = true;
+    response = post(saved);
+    Check(response && response->status == 503 && !Contains(response->body, "PRIVATE_EXCEPTION_CANARY") && calls == 4 && llama.Requests().empty(),
+        "An editor callback failure disclosed diagnostics or generated a model request.");
+    api.Stop();
+}
 } // namespace
 
 void RunLocalApiTests()
 {
     TestSettingsShipOff();
     TestTokenIsKeptPerInstall();
+    TestEditorObservationsRequireTrustedCallback();
+    TestEditorObservationsAreBoundedAndDoNotGenerate();
     TestBoundaryRefusesBeforeReadingTheBody();
     TestRepliesStreamAndStayShared();
     TestTrustedModeIsAnOwnerTurn();

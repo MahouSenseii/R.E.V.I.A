@@ -437,6 +437,8 @@ class ReviaWindow final : public QMainWindow
     // The shell's custom choices, number rows and permission panel, read again when Settings opens.
     void RefreshSettingsExtras();
     void RefreshPreferenceSpins();
+    void RefreshInitiativeMode();
+    void WriteInitiativeMode(int index);
     void RefreshDelegationMode();
     void WriteDelegationMode(int index);
     // Saves a number row through the settings worker, but only when it changed since it was read:
@@ -612,6 +614,7 @@ class ReviaWindow final : public QMainWindow
     QCheckBox* speakWhenAwayCheck = nullptr;
     QCheckBox* aiFilterCheck = nullptr;
     QSpinBox* initiativeMaxSpin = nullptr;
+    QComboBox* initiativeModeCombo = nullptr;
     QComboBox* delegationModeCombo = nullptr;
     QSpinBox* resourceSampleSpin = nullptr;
     // What the two number rows last read or wrote.

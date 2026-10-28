@@ -1575,6 +1575,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // immediately; explicit/complex technical turns may opt into the same model's deep
     // mode without loading a second brain.
     requestBody["chat_template_kwargs"] = {{"enable_thinking", activeReasoning}};
+    requestBody["reasoning_budget_tokens"] = thinkingAllowance;
     // The configured Qwen model can otherwise fall into a fluent phrase loop and run
     // all the way to the response ceiling. DRY penalizes repeated token sequences while
     // leaving short, intentional emphasis alone.
@@ -1880,6 +1881,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
     if (finishReason == "length")
     {
+        output.reason = "backend_output_token_limit";
         // Never commit or speak the dangling clause created by a token ceiling. The
         // normal response budgets are large enough for ordinary answers now; if a turn
         // still exhausts one, retain every complete sentence and discard only its

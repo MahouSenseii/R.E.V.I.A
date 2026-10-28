@@ -3977,6 +3977,7 @@ void ReviaWindow::ApplyUserPreferences()
     if (settingsDialog)
         settingsDialog->Refresh();
     RefreshPreferenceSpins();
+    RefreshInitiativeMode();
     RefreshCloudUseFor();
     RefreshDelegationMode();
     RefreshPresenceUi();

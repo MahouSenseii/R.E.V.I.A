@@ -1,6 +1,7 @@
 #include "Initiative/initiativeSettings.h"
 #include "Initiative/initiativeController.h"
 #include "Core/speechAttribution.h"
+#include "Audit/contentDigest.h"
 
 #include <algorithm>
 #include <cctype>
@@ -269,6 +270,11 @@ bool InitiativeController::BuildConversationProposal(const std::vector<StarterCu
     outProposal.message = strongest->messageIntent;
     outProposal.evidence = strongest->evidence;
     outProposal.confidence = strongest->confidence;
+    outProposal.observedAt = strongest->occurredAt;
+    outProposal.admission = strongest->admission;
+    outProposal.optionalObservation = strongest->optionalObservation;
+    if (outProposal.optionalObservation)
+        outProposal.subject = "saved:" + audit::ContentDigest(strongest->evidence);
     return true;
 }
 
@@ -335,6 +341,13 @@ InitiativeController::Consideration InitiativeController::Consider(const Evidenc
     candidate.createdAt = context.now;
     lastSubject = SubjectOf(candidate);
     proposals.emplace_back(candidate, ProposalOutcome::Pending);
+    if (candidate.optionalObservation)
+    {
+        // The returned nomination owns the transient model evidence. The outcome
+        // ledger keeps only a digest and metadata, never a second source snapshot.
+        proposals.back().first.evidence = "An authorized saved-file revision was considered.";
+        proposals.back().first.admission = {};
+    }
 
     consideration.hasProposal = true;
     consideration.proposal = candidate;

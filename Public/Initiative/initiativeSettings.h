@@ -1,9 +1,14 @@
 #pragma once
 
+#include <string>
+
 // Evidence-based interruption thresholds and proposal backoff; silence is the default.
 struct initiativeSettings
 {
     bool bEnabled = false;
+    // Pacing only: normal preserves configured gates, talkative shortens the ordinary
+    // cooldown, and focus suppresses optional openings. None grants observation or action.
+    std::string mode = "normal";
     // Curiosity nominates from evidence; timers create no topics or permission to interrupt.
     // AttentionPolicy retains the final gate.
     bool bCuriosityEnabled = true;

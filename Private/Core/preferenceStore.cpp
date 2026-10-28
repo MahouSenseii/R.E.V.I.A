@@ -154,6 +154,7 @@ const std::array PreferenceFields = {
     Flag<&appSettings::speechRecognition, &speechRecognitionSettings::bRequireWakeWord>("speechRecognition.requireWakeWord"),
     Flag<&appSettings::bargeIn, &bargeInSettings::bEnabled>("bargeIn.enabled"),
     Flag<&appSettings::initiative, &initiativeSettings::bEnabled>("initiative.enabled"),
+    Value<&appSettings::initiative, &initiativeSettings::mode>("initiative.mode"),
     Flag<&appSettings::initiative, &initiativeSettings::bCuriosityEnabled>("initiative.curiosityEnabled"),
     Flag<&appSettings::initiative, &initiativeSettings::bSpontaneousSpeechEnabled>("initiative.spontaneousSpeechEnabled"),
     Flag<&appSettings::initiative, &initiativeSettings::bSpeakWhenUserAway>("initiative.speakWhenUserAway"),
@@ -233,6 +234,8 @@ const std::vector<PreferenceKey>& PreferenceStore::Writable()
             "Let speaking over Revia interrupt her.", 0, 0, {}},
         {"initiative.enabled", PreferenceType::Boolean,
             "Allow Revia to start a conversation.", 0, 0, {}},
+        {"initiative.mode", PreferenceType::Text,
+            "Optional conversation pacing: normal, talkative, or focus.", 0, 0, {"normal", "talkative", "focus"}},
         {"initiative.curiosityEnabled", PreferenceType::Boolean,
             "Let Revia form evidence-based topics from conversation and affect.", 0, 0, {}},
         {"initiative.spontaneousSpeechEnabled", PreferenceType::Boolean,
@@ -306,6 +309,9 @@ bool PreferenceStore::IsAuthoritySetting(const std::string& name)
         "permission", "root", "application", "control", "sandbox", "goal.scope"
     };
     const std::string lowered = Lower(name);
+    // This exact mode is pacing only; other mode-like keys remain authority settings.
+    if (lowered == "initiative.mode")
+        return false;
     return std::any_of(authorityPrefixes.begin(), authorityPrefixes.end(),
         [&lowered](const std::string& prefix)
         {
@@ -567,6 +573,9 @@ void PreferenceStore::Apply(appSettings& settings) const
     boolean("speechRecognition.requireWakeWord", settings.speechRecognition.bRequireWakeWord);
     boolean("bargeIn.enabled", settings.bargeIn.bEnabled);
     boolean("initiative.enabled", settings.initiative.bEnabled);
+    const auto initiativeMode = values.find("initiative.mode");
+    if (initiativeMode != values.end())
+        settings.initiative.mode = initiativeMode->second;
     boolean("initiative.curiosityEnabled", settings.initiative.bCuriosityEnabled);
     boolean("initiative.spontaneousSpeechEnabled",
         settings.initiative.bSpontaneousSpeechEnabled);

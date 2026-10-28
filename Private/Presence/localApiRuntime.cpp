@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace revia::presence
@@ -34,6 +35,11 @@ constexpr auto RequestDeadline = 120s;
 long long UnixSeconds()
 {
     return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+long long UnixMilliseconds()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 void Respond(httplib::Response& response, const Json& body, const int status = 200)
@@ -185,6 +191,7 @@ struct LocalApiRuntime::Impl
     llmSettings model;
     std::function<bool()> ownerBusy;
     PrivateTurn privateTurn;
+    EditorObservation editorObservation;
     messageRouter router;
     httplib::Server server;
     std::jthread listener;
@@ -416,6 +423,87 @@ struct LocalApiRuntime::Impl
             [release](bool) { release(); });
     }
 
+    void EditorSavedFile(const httplib::Request& request, httplib::Response& response)
+    {
+        if (!privateTurn || !editorObservation)
+        {
+            Error(response, 403, "Trusted editor observations are not enabled.", "invalid_request_error", "forbidden");
+            return;
+        }
+        const auto contentType = request.get_header_value("Content-Type");
+        if (request.body.size() > MaximumEditorBodyBytes ||
+            (contentType != "application/json" && contentType.find("application/json;") != 0))
+        {
+            Error(response, 400, "A bounded application/json saved-file observation is required.", "invalid_request_error", "invalid_request");
+            return;
+        }
+        Json body;
+        bool duplicate = false;
+        std::set<std::string> keys;
+        try
+        {
+            body = Json::parse(request.body,
+                [&](const int depth, const Json::parse_event_t event, Json& value)
+                {
+                    if (depth == 1 && event == Json::parse_event_t::key && !keys.insert(value.get<std::string>()).second)
+                        duplicate = true;
+                    return true;
+                });
+        }
+        catch (...)
+        {
+            Error(response, 400, "The saved-file observation is not valid JSON.", "invalid_request_error", "invalid_json");
+            return;
+        }
+        const auto pathText = [](const Json& value)
+        {
+            if (!value.is_string())
+                return false;
+            const auto& text = value.get_ref<const std::string&>();
+            return !text.empty() && text.size() <= 1024 && utf8::IsValid(text) &&
+                   std::none_of(text.begin(), text.end(), [](const unsigned char c) { return c < 32 || c == 127; });
+        };
+        bool valid = !duplicate && body.is_object() && body.size() == 5 && body.contains("source") && body["source"] == "saved_file" &&
+                     body.contains("projectRoot") && pathText(body["projectRoot"]) && body.contains("path") && pathText(body["path"]) &&
+                     body.contains("revision") && body["revision"].is_string() && body.contains("occurredAtUnixMs") &&
+                     body["occurredAtUnixMs"].is_number_integer();
+        EditorObservationRequest saved;
+        if (valid)
+        {
+            saved.revision = body["revision"].get<std::string>();
+            valid = saved.revision.size() == 64 && std::all_of(saved.revision.begin(), saved.revision.end(),
+                [](const unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
+            const auto& time = body["occurredAtUnixMs"];
+            const auto now = UnixMilliseconds();
+            // Compare unsigned input before narrowing, including JSON's full uint64 range.
+            valid = valid && (!time.is_number_unsigned() || time.get<std::uint64_t>() <= static_cast<std::uint64_t>(now + 60000));
+            if (valid)
+            {
+                saved.occurredAtUnixMs = time.get<std::int64_t>();
+                valid = saved.occurredAtUnixMs >= now - 300000 && saved.occurredAtUnixMs <= now + 60000;
+            }
+        }
+        if (!valid)
+        {
+            Error(response, 400, "The saved-file observation has an invalid schema, path, digest or timestamp.", "invalid_request_error", "invalid_request");
+            return;
+        }
+        saved.projectRoot = body["projectRoot"].get<std::string>();
+        saved.path = body["path"].get<std::string>();
+        try
+        {
+            const auto result = editorObservation(saved);
+            Respond(response, {{"accepted", result.accepted}, {"reason", utf8::Prefix(utf8::Sanitize(result.reason), 512)},
+                                  {"eventId", result.accepted ? utf8::Prefix(utf8::Sanitize(result.eventId), 128) : std::string{}},
+                                  {"retryable", !result.accepted && result.retryable}},
+                result.accepted ? 202 : 409);
+        }
+        catch (...)
+        {
+            Error(response, 503, "The editor observation could not be accepted.", "server_error", "unavailable");
+        }
+    }
+
     void Routes()
     {
         server.set_payload_max_length(MaximumBodyBytes);
@@ -443,6 +531,12 @@ struct LocalApiRuntime::Impl
                 }
                 if (!Authenticate(request, response))
                     return Outcome::Handled;
+                const bool editor = request.path == "/v1/editor/observations";
+                if (editor && (!privateTurn || !editorObservation))
+                {
+                    Error(response, 403, "Trusted editor observations are not enabled.", "invalid_request_error", "forbidden");
+                    return Outcome::Handled;
+                }
                 if (request.method == "POST")
                 {
                     if (request.has_header("Transfer-Encoding") || !request.has_header("Content-Length"))
@@ -453,9 +547,10 @@ struct LocalApiRuntime::Impl
                     const std::string length = request.get_header_value("Content-Length");
                     const bool digits = !length.empty() && length.size() <= 7 &&
                                         std::all_of(length.begin(), length.end(), [](const unsigned char c) { return c >= '0' && c <= '9'; });
-                    if (!digits || std::stoul(length) > MaximumBodyBytes)
+                    if (!digits || std::stoul(length) > (editor ? MaximumEditorBodyBytes : MaximumBodyBytes))
                     {
-                        Error(response, 413, "The body is larger than 64 KiB.", "invalid_request_error", "payload_too_large");
+                        Error(response, 413, editor ? "The body is larger than 8 KiB." : "The body is larger than 64 KiB.",
+                            "invalid_request_error", "payload_too_large");
                         return Outcome::Handled;
                     }
                 }
@@ -468,6 +563,7 @@ struct LocalApiRuntime::Impl
                                       {"data", Json::array({{{"id", ModelId}, {"object", "model"}, {"created", started}, {"owned_by", "revia"}}})}});
             });
         server.Post("/v1/chat/completions", [this](const httplib::Request& request, httplib::Response& response) { Completions(request, response); });
+        server.Post("/v1/editor/observations", [this](const httplib::Request& request, httplib::Response& response) { EditorSavedFile(request, response); });
         server.set_error_handler(
             [](const httplib::Request&, httplib::Response& response)
             {
@@ -509,11 +605,17 @@ aiProfile LocalApiRuntime::SharedProfile()
 
 bool LocalApiRuntime::Start(const int requestedPort, const std::string& token, PrivateTurn privateTurn)
 {
+    return Start(requestedPort, token, std::move(privateTurn), {});
+}
+
+bool LocalApiRuntime::Start(const int requestedPort, const std::string& token, PrivateTurn privateTurn, EditorObservation editorObservation)
+{
     if (impl->listener.joinable() || requestedPort < 0 || requestedPort > 65535 || !core::IsLocalApiToken(token) ||
         (impl->model.host != "127.0.0.1" && impl->model.host != "localhost" && impl->model.host != "::1"))
         return false;
     impl->token = token;
     impl->privateTurn = std::move(privateTurn);
+    impl->editorObservation = impl->privateTurn ? std::move(editorObservation) : EditorObservation{};
     impl->Routes();
     const int bound = requestedPort != 0 ? (impl->server.bind_to_port("127.0.0.1", requestedPort) ? requestedPort : 0)
                                          : impl->server.bind_to_any_port("127.0.0.1");

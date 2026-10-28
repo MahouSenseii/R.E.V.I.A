@@ -961,6 +961,11 @@ bool ReadSettings(json& data, appSettings& outSettings)
         if (data.contains("initiative"))
         {
             const json& initiativeData = data["initiative"];
+            if (initiativeData.contains("mode") && initiativeData["mode"].is_string())
+            {
+                const std::string mode = Lowercase(initiativeData["mode"].get<std::string>());
+                outSettings.initiative.mode = mode == "talkative" || mode == "focus" ? mode : "normal";
+            }
             if (initiativeData.contains("enabled"))
             {
                 outSettings.initiative.bEnabled = initiativeData["enabled"].get<bool>();

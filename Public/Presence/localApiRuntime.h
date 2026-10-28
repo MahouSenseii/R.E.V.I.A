@@ -5,6 +5,7 @@
 #include "Runtime/sessionResult.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <stop_token>
@@ -12,6 +13,22 @@
 
 namespace revia::presence
 {
+
+struct EditorObservationRequest
+{
+    std::string projectRoot;
+    std::string path;
+    std::string revision;
+    std::int64_t occurredAtUnixMs = 0;
+};
+
+struct EditorObservationResult
+{
+    bool accepted = false;
+    std::string reason;
+    std::string eventId;
+    bool retryable = false;
+};
 
 // A loopback OpenAI-compatible endpoint, so other programs on this PC can talk to Revia:
 // GET /v1/models and POST /v1/chat/completions, streamed or not. Every request needs the
@@ -28,6 +45,9 @@ class LocalApiRuntime
     // Runs one owner turn and returns the delivered reply. Only set when the owner
     // explicitly trusts the API with the private audience.
     using PrivateTurn = std::function<runtime::SessionResult(const std::string& input, std::stop_token stopToken)>;
+    // Reports a saved-file identity only. The session must recheck current awareness,
+    // pause, source and approved-root authority before reading the named file.
+    using EditorObservation = std::function<EditorObservationResult(const EditorObservationRequest&)>;
 
     // `ownerBusy` is true while the owner's own turn runs; shared requests yield to it.
     LocalApiRuntime(const llmSettings& model, std::function<bool()> ownerBusy);
@@ -38,6 +58,7 @@ class LocalApiRuntime
     // Binds 127.0.0.1:`port` (0 picks a free port). False when the token is malformed,
     // the model is not on this PC, or the port is taken.
     [[nodiscard]] bool Start(int port, const std::string& token, PrivateTurn privateTurn = {});
+    [[nodiscard]] bool Start(int port, const std::string& token, PrivateTurn privateTurn, EditorObservation editorObservation);
     void Stop();
     // Cancels a shared request in flight, because the owner needs Revia.
     void Preempt();
@@ -49,6 +70,7 @@ class LocalApiRuntime
     // The model id /v1/models lists.
     static constexpr const char* ModelId = "revia";
     static constexpr std::size_t MaximumBodyBytes = 65536;
+    static constexpr std::size_t MaximumEditorBodyBytes = 8192;
 
   private:
     struct Impl;

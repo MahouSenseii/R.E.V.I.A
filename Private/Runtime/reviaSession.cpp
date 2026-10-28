@@ -552,6 +552,7 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                 audience.kind == identity::AudienceKind::Private && current.kind == audience.kind && current.revision == audience.revision;
         };
     });
+    conversationRuntime.SetEditorContextProvider([this] { return CurrentEditorContext(); });
     speechCoordinator.SetAdmissionFactory([this] { return CaptureSpeechAdmission(Audience(), Stamp()); });
     goalRunner.SetProgressHandler([this](const goals::GoalProgress& progress) { PublishGoalProgress(progress); });
     // A goal step that needs confirmation asks the same handler an interactive action
@@ -1927,7 +1928,7 @@ std::string ReviaSession::CurrentScreenContext() const
 {
     // Only while the awareness that produced it is switched on, whatever is still cached.
     const visionSettings vision = VisionSnapshot();
-    if (!vision.bEnabled || !vision.bContinuousAwareness)
+    if (!PerceptionEnabledNow() || windowEventMonitor.IsPaused() || !vision.bEnabled || !vision.bContinuousAwareness)
     {
         return {};
     }
@@ -2274,7 +2275,10 @@ void ReviaSession::StartInitiativeLoop()
                             continue;
                         }
 
+                        const auto proposalInputGeneration = userInteractionGeneration.load();
+                        const auto proposalAwarenessEpoch = editorObservationEpoch.load();
                         const auto proposalAudience = Audience();
+                        const auto proposalMemoryScope = CapturePrivateMemoryScope();
                         const auto proposalOrigin = Stamp();
                         initiative::AttentionContext context = SampleAttention();
                         initiative::InitiativeController::Evidence evidence;
@@ -2288,10 +2292,14 @@ void ReviaSession::StartInitiativeLoop()
                         // from the click that caused the event lost every one of them for good.
                         if (!consideration.hasProposal && consideration.verdict == initiative::AttentionVerdict::UserIsBusy)
                         {
-                            context = AwaitInputPause(stopToken, userInteractionGeneration.load());
+                            context = AwaitInputPause(stopToken, proposalInputGeneration);
                             consideration = initiativeController.Consider(evidence, context);
                         }
                         initiative::Proposal candidate;
+                        const auto describeEvidence = [](const initiative::Proposal& proposal)
+                        {
+                            return proposal.optionalObservation ? std::string("an authorized saved C/C++ revision") : proposal.evidence;
+                        };
                         if (consideration.hasProposal)
                         {
                             lastLoggedInitiative.clear();
@@ -2304,7 +2312,7 @@ void ReviaSession::StartInitiativeLoop()
                             if (reason != lastLoggedInitiative)
                             {
                                 lastLoggedInitiative = reason;
-                                appLogger.Log("Initiative stayed quiet (" + reason + ") about: " + candidate.evidence);
+                                appLogger.Log("Initiative stayed quiet (" + reason + ") about: " + describeEvidence(candidate));
                             }
                         }
                         PublishComponent("Initiative", consideration.hasProposal ? "Triggered" : "Suppressed",
@@ -2316,8 +2324,9 @@ void ReviaSession::StartInitiativeLoop()
                         {
                             continue;
                         }
-                        if (!Admits(proposalOrigin) || proposalAudience.kind != identity::AudienceKind::Private ||
-                            Audience().revision != proposalAudience.revision)
+                        auto openingAdmitted = CaptureInitiativeAdmission(consideration.proposal,
+                            proposalOrigin, proposalAudience, proposalInputGeneration, proposalAwarenessEpoch);
+                        if (!openingAdmitted())
                         {
                             initiativeController.Expire(consideration.proposal.id);
                             continue;
@@ -2326,6 +2335,7 @@ void ReviaSession::StartInitiativeLoop()
                         if (consideration.proposal.kind == initiative::Proposal::Kind::ConversationStarter)
                         {
                             SessionResult opening;
+                            bool openingPublished = false;
                             {
                                 std::unique_lock operationLock(operationMutex, std::defer_lock);
                                 while (!operationLock.try_lock())
@@ -2341,11 +2351,11 @@ void ReviaSession::StartInitiativeLoop()
                                 {
                                     continue;
                                 }
-                                if (!started.load() || busy.load() || stopToken.stop_requested() || !Admits(proposalOrigin) ||
-                                    Audience().revision != proposalAudience.revision)
+                                if (busy.load() || stopToken.stop_requested() || !openingAdmitted())
                                 {
                                     PublishComponent(
                                         "Initiative", "Suppressed", "The opportunity passed before the conversation could start.");
+                                    initiativeController.Expire(consideration.proposal.id);
                                     continue;
                                 }
                                 // A turn like any other: guarded, so a throw fails this opening rather
@@ -2355,37 +2365,86 @@ void ReviaSession::StartInitiativeLoop()
                                     {
                                         busy.store(true);
                                         const std::stop_token operationToken = BeginOperation();
+                                        // Spare compute admits a new optional turn. Once it owns
+                                        // this operation, its own inference may make the GPU busy.
+                                        openingAdmitted = CaptureInitiativeAdmission(consideration.proposal,
+                                            proposalOrigin, proposalAudience, proposalInputGeneration, proposalAwarenessEpoch, false);
+                                        if (consideration.proposal.optionalObservation)
+                                        {
+                                            std::lock_guard lock(cancellationMutex);
+                                            editorOpeningStop.store(std::make_shared<std::stop_source>(activeStopSource));
+                                        }
                                         if (!llmAvailable || (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning()))
                                         {
                                             PublishComponent("Language model", "Restarting",
                                                 "The local model stopped; Revia is restarting it before speaking.");
                                             llmAvailable = EnsureLLMAvailable(operationToken);
                                         }
-                                        opening = conversationRuntime.StartConversation(consideration.proposal.message,
+                                        std::function<bool(const SessionResult&)> deliver;
+                                        if (consideration.proposal.optionalObservation)
+                                        {
+                                            deliver = [&](const SessionResult& reply)
+                                            {
+                                                if (!openingAdmitted() || operationToken.stop_requested()) return false;
+                                                RuntimeEvent event;
+                                                event.kind = RuntimeEventKind::AssistantMessage;
+                                                event.stamp = proposalOrigin;
+                                                event.audienceRevision = proposalAudience.revision;
+                                                event.state = state.load();
+                                                event.component = "Initiative";
+                                                event.phase = consideration.proposal.id;
+                                                event.message = reply.text;
+                                                event.detail = reply.reasoning;
+                                                eventBus.Publish(std::move(event));
+                                                openingPublished = true;
+                                                return true;
+                                            };
+                                        }
+                                        if (consideration.proposal.optionalObservation && !PreparePrivateContext(proposalMemoryScope, openingAdmitted))
+                                        {
+                                            opening.succeeded = false;
+                                            opening.reason = "The private observation context changed before the opening.";
+                                        }
+                                        else
+                                            opening = conversationRuntime.StartConversation(consideration.proposal.message,
                                             consideration.proposal.evidence, profile, llmAvailable, ShouldSpeakOnCurrentChannel(),
                                             operationToken, proposalAudience.revision,
-                                            CaptureSpeechAdmission(proposalAudience, proposalOrigin));
-                                        if (opening.succeeded && !opening.text.empty())
+                                            openingAdmitted, consideration.proposal.optionalObservation, std::move(deliver));
+                                        if (opening.succeeded && !opening.text.empty() &&
+                                            (openingPublished || (!operationToken.stop_requested() && openingAdmitted())))
                                         {
                                             (void)initiativeController.Commit(consideration.proposal.id, context.now);
-                                            ArchiveTurn("assistant", opening.text);
+                                            ArchiveTurn("assistant", opening.text, proposalMemoryScope, openingAdmitted);
                                         }
+                                        else if (!openingPublished && !opening.text.empty())
+                                        {
+                                            opening.succeeded = false;
+                                            opening.text.clear();
+                                            opening.reason = "The observation was retired before delivery.";
+                                        }
+                                        if (consideration.proposal.optionalObservation)
+                                            RetireOptionalOpeningLocked(operationToken, proposalOrigin, proposalAudience);
                                         busy.store(false);
                                         return opening;
                                     });
                             }
 
-                            PublishComponent("Initiative", opening.succeeded ? "Started" : "Error",
-                                opening.succeeded ? consideration.proposal.evidence : opening.reason, -1.0, 0, 0, {},
+                            if (consideration.proposal.optionalObservation)
+                                editorOpeningStop.store({});
+                            const bool choseSilence = opening.succeeded && opening.text.empty();
+                            PublishComponent("Initiative", choseSilence ? "Silent" : opening.succeeded ? "Started" : "Suppressed",
+                                choseSilence ? "No optional comment was worth an interruption." :
+                                    opening.succeeded ? describeEvidence(consideration.proposal) : opening.reason, -1.0, 0, 0, {},
                                 proposalAudience.revision, proposalOrigin);
-                            if (!opening.succeeded)
+                            if (!opening.succeeded || opening.text.empty())
                             {
                                 initiativeController.Expire(consideration.proposal.id);
                             }
-                            if (!opening.spokenAsFragments && !opening.text.empty())
+                            if (!openingPublished && !opening.spokenAsFragments && !opening.text.empty() && openingAdmitted())
                             {
                                 RuntimeEvent event;
                                 event.kind = RuntimeEventKind::AssistantMessage;
+                                event.stamp = proposalOrigin;
                                 event.audienceRevision = opening.audienceRevision;
                                 event.state = state.load();
                                 event.component = "Initiative";
@@ -2395,8 +2454,9 @@ void ReviaSession::StartInitiativeLoop()
                                 event.turnId = opening.speechPending ? opening.utteranceId : 0;
                                 eventBus.Publish(std::move(event));
                             }
-                            appLogger.Log(opening.succeeded ? "Conversation started from event evidence: " + consideration.proposal.evidence
-                                                            : "Conversation opening failed: " + opening.reason);
+                            appLogger.Log(choseSilence ? "Saved-file observation considered; chose silence."
+                                : opening.succeeded ? "Conversation started from event evidence: " + describeEvidence(consideration.proposal)
+                                                    : "Conversation opening suppressed: " + opening.reason);
                             continue;
                         }
 
@@ -3638,7 +3698,7 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     // Applied to the running session where that is safe to do live, so a preference is not
     // a promise about the next start. Worker startup settings remain next-start.
     static const std::set<std::string> appliedNow = {"speech.enabled", "bargein.enabled", "speechrecognition.handsfree",
-        "speechrecognition.requirewakeword", "initiative.enabled", "initiative.maxperhour", "initiative.curiosityenabled",
+        "speechrecognition.requirewakeword", "initiative.enabled", "initiative.mode", "initiative.maxperhour", "initiative.curiosityenabled",
         "initiative.spontaneousspeechenabled", "initiative.speakwhenuseraway", "initiative.autonomouslearningenabled",
         "initiative.suppresswhenfullscreen", "resources.usagesampleseconds", "responsefilter.aireviewenabled",
         "presence.avatarbridgeenabled", "presence.externaladaptersenabled", "presence.enabled",
@@ -3750,6 +3810,11 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
             std::lock_guard snapshotLock(preferenceSnapshotMutex);
             initiative = settings.initiative;
         }
+        // A comfort change retires pending optional turns without discarding the
+        // saved source a direct question may still need. Resuming cannot revive one.
+        userInteractionGeneration.fetch_add(1);
+        conversationStarter.Clear();
+        if (auto attempt = editorOpeningStop.load()) attempt->request_stop();
         if (liveWorkersOpen && curiosityWorker.joinable())
         {
             StopCuriosityLoop();
@@ -3841,6 +3906,7 @@ UserPreferenceSnapshot ReviaSession::UserPreferences() const
     snapshot.initiativeMaxPerHour = settings.initiative.maxUtterancesPerHour;
     snapshot.resourceSampleSeconds = settings.resources.usageSampleSeconds;
     snapshot.delegation = agents::ToString(delegationMode.load());
+    snapshot.initiativeMode = settings.initiative.mode;
     return snapshot;
 }
 
@@ -4578,12 +4644,11 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         }
         return finish(std::move(result));
     }
-    if (privateContextParticipant != captured.participantId || privateContextAudience != captured.audience.audienceId)
+    if (!PreparePrivateContext(memoryScope, admission))
     {
-        conversationRuntime.ResetParticipantContinuity();
-        privateContextParticipant = captured.participantId;
-        privateContextAudience = captured.audience.audienceId;
-        RestoreConversationContext(memoryScope, admission);
+        result.succeeded = false;
+        result.reason = "The captured private conversation context is no longer current.";
+        return finish(std::move(result));
     }
     if (router.IsExitCommand(acceptedInput))
     {
@@ -4705,6 +4770,7 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
 
 void ReviaSession::PollBackgroundEvents()
 {
+    ExpireEditorObservation();
     AdvanceAgentWorkflow();
     // Cheap and does nothing unless a managed role is both resident and genuinely idle.
     // Put here rather than on a timer of its own because this is what already ticks, and
@@ -4848,6 +4914,8 @@ void ReviaSession::Stop()
     CancelSpeakerEnrollment();
     const RuntimeStamp retiring = sessionIdentity.Stamp();
     sessionIdentity.Invalidate();
+    ClearEditorObservation();
+    conversationStarter.ClearSavedFiles();
     {
         std::lock_guard correctionLock(memoryCorrectionMutex);
         memoryCorrections.clear();
@@ -5198,6 +5266,9 @@ void ReviaSession::SetPerceptionPaused(const bool paused)
     if (paused)
     {
         CancelScreenAwarenessAttempt();
+        ClearEditorObservation();
+        conversationStarter.Clear();
+        screenAwareness.Clear();
     }
     else
     {
@@ -5251,6 +5322,7 @@ void ReviaSession::ForgetActivity()
     activityHistory.Clear();
     conversationStarter.Clear();
     screenAwareness.Clear();
+    ClearEditorObservation();
     appLogger.Log("Observation history cleared at the user's request.");
 }
 

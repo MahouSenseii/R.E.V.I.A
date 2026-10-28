@@ -86,6 +86,8 @@ public:
     // Reads live self-inquiry limits on the next turn.
     using SelfInquirySettingsProvider = std::function<agents::SelfInquiryLimits()>;
     using ScreenContextProvider = std::function<std::string()>;
+    // Bounded saved-source evidence, revalidated by its owner before each read.
+    using EditorContextProvider = std::function<std::string()>;
     // Reads the relationship for the current speaker.
     using RelationshipProvider = std::function<identity::RelationshipState()>;
     // Keeps appraisal and prompts aligned with current development.
@@ -174,6 +176,7 @@ public:
     void SetSongListProvider(SongListProvider provider);
     // Set once at startup. Without it, chat still offers the runtime-owned tools.
     void SetChatToolProvider(ChatToolProvider provider);
+    void SetEditorContextProvider(EditorContextProvider provider);
     void ResetParticipantContinuity();
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
@@ -216,6 +219,14 @@ public:
     // visible line joins conversation history so a natural user reply has context.
     SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
         bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0, std::function<bool()> admission = {});
+    // Saved-code observations may choose silence instead of manufacturing a comment.
+    SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
+        bool shouldSpeak, std::stop_token stopToken, std::uint64_t audienceRevision, std::function<bool()> admission, bool allowSilence);
+    // The publisher returns true only after the final text became visible. Speech is
+    // queued afterward; this callback does not yet carry a queued utterance binding.
+    SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
+        bool shouldSpeak, std::stop_token stopToken, std::uint64_t audienceRevision, std::function<bool()> admission, bool allowSilence,
+        std::function<bool(const SessionResult&)> delivery);
 
     SessionResult StartCuriosityConversation(const std::string& topic, const std::string& rationale, const std::string& researchGrounding,
         const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0,
@@ -254,10 +265,12 @@ private:
         bool allowInternetLookup = true;
         bool allowSelfInquiry = true;
         bool includePrivateHistory = true;
+        bool allowSilence = false;
         EvaluationPromptBlocks evaluationBlocks;
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
         std::function<bool()> deliveryAdmission;
+        std::function<bool(const SessionResult&)> openingDelivery;
         std::chrono::steady_clock::time_point acceptedAt{};
         std::uint64_t audienceRevision = 0;
         memory::MemoryScope memoryScope;
@@ -347,6 +360,7 @@ private:
     InternetLookupHandler internetLookup;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
+    EditorContextProvider editorContextProvider;
     RelationshipProvider relationshipProvider;
     DevelopmentProvider developmentProvider;
     PreferenceProvider preferenceProvider;

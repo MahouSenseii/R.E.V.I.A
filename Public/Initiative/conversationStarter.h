@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -19,7 +20,8 @@ enum class StarterCueKind
     ReturnedToApplication,
     ContextSwitching,
     SelfDirectedCuriosity,
-    VisualIssue
+    VisualIssue,
+    SavedFile
 };
 
 struct StarterCue
@@ -29,6 +31,8 @@ struct StarterCue
     std::string evidence;
     float confidence = 0.0f;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
+    std::function<bool()> admission;
+    bool optionalObservation = false;
 };
 
 // Turns admitted desktop transitions into bounded reasons to begin a conversation.
@@ -49,6 +53,8 @@ public:
     // Removes a queued visual cue once a later successful assessment shows that the
     // issue disappeared. Other desktop-transition cues are left alone.
     void ClearVisualIssue();
+    void ObserveSavedFile(std::string evidence, std::chrono::system_clock::time_point occurredAt, std::function<bool()> admission);
+    void ClearSavedFiles();
     // One-shot opportunities. Once the attention policy considers a cue, a timer cannot
     // revive it later after its conversational moment has passed.
     [[nodiscard]] std::vector<StarterCue> RecentCues(std::chrono::system_clock::time_point now);

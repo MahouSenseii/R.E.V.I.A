@@ -248,7 +248,7 @@ void EveryPreferenceCommitsOnlyItsOwnField()
     const appSettings defaults;
     const std::map<std::string, std::string> values = {{"speech.volume", "37"}, {"speech.rate", "3"}, {"initiative.maxPerHour", "7"},
         {"llm.temperature", "1.25"}, {"resources.usageSampleSeconds", "17"}, {"resources.voiceDevice", "cpu"},
-        {"conversation.delegation", "auto"}, {"activeProfile", "elsewhere"}};
+        {"conversation.delegation", "auto"}, {"initiative.mode", "talkative"}, {"activeProfile", "elsewhere"}};
     for (const revia::core::PreferenceKey& key : PreferenceStore::Writable())
     {
         const auto flag = revia::core::BooleanPreference(defaults, key.name);
@@ -275,6 +275,7 @@ void EveryPreferenceCommitsOnlyItsOwnField()
               copied.initiative.maxUtterancesPerHour == source.initiative.maxUtterancesPerHour &&
               copied.llm.temperature == source.llm.temperature && copied.resources.usageSampleSeconds == source.resources.usageSampleSeconds &&
               copied.resources.voice == source.resources.voice && copied.conversation.delegation == "auto" &&
+              copied.initiative.mode == "talkative" && source.initiative.mode != defaults.initiative.mode &&
               copied.activeProfile == source.activeProfile,
         "A numeric or text preference was not copied from its own field.");
     appSettings single;
@@ -428,7 +429,19 @@ void LiveOwnerSettingsReachTheirServices()
 
     // What continuous awareness last saw goes with the switch that allowed it.
     Access::RecordScreenObservation(session, "A text editor fills the left monitor.");
+    Check(!session.IsPerceptionEnabled() && !Access::CachedScreenObservation(session).empty() && Access::ScreenContext(session).empty(),
+        "Cached screen text was offered while global app awareness was off.");
+    Access::SetSyntheticPerceptionEnabled(session, true);
+    Check(!Access::ScreenAwarenessRunning(session), "The synthetic screen-cache fixture started a capture worker.");
     Check(!Access::ScreenContext(session).empty(), "The screen observation fixture was not offered.");
+    session.SetPerceptionPaused(true);
+    Check(session.IsPerceptionPaused() && Access::ScreenContext(session).empty() && Access::CachedScreenObservation(session).empty(),
+        "Pausing synthetic awareness retained or offered its screen observation.");
+    session.SetPerceptionPaused(false);
+    Check(Access::ScreenContext(session).empty() && !Access::ScreenAwarenessRunning(session),
+        "Resuming synthetic awareness revived old text or started capture.");
+    Access::RecordScreenObservation(session, "A text editor fills the left monitor.");
+    Check(!Access::ScreenContext(session).empty(), "The resumed synthetic screen observation was not offered.");
     Check(session.SetOwnerSetting("vision.enabled", false).succeeded && !session.BooleanSettings().at("vision.enabled").running,
         "Turning vision off did not reach the running session.");
     Check(Access::ScreenContext(session).empty() && Access::CachedScreenObservation(session).empty(),
@@ -556,6 +569,8 @@ void TheScreenIsWithheldOnceVisionIsOffBeforeItsApplierRuns()
     ReviaSession session;
     Access::UsePreferences(session, directory.root);
     Check(session.Start(), "Screen withholding session did not start.");
+    Access::SetSyntheticPerceptionEnabled(session, true);
+    Check(!Access::ScreenAwarenessRunning(session), "The synthetic withholding fixture started a capture worker.");
     Access::RecordScreenObservation(session, "A spreadsheet fills the left monitor.");
     Check(!Access::ScreenContext(session).empty(), "The screen withholding fixture was not offered.");
 

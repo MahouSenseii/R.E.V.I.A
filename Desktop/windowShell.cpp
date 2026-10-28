@@ -269,6 +269,20 @@ void ReviaWindow::BuildSettingsDialog()
     aiFilterCheck = settingsDialog->Switch("responseFilter.aiReviewEnabled");
 
     // Rows without a switch, in the sections their old controls belong to.
+    initiativeModeCombo = new QComboBox();
+    initiativeModeCombo->setObjectName("initiativeModeCombo");
+    initiativeModeCombo->setAccessibleName("Conversation mode");
+    initiativeModeCombo->addItem(QStringLiteral("Normal"), QStringLiteral("normal"));
+    initiativeModeCombo->addItem(QStringLiteral("Talkative"), QStringLiteral("talkative"));
+    initiativeModeCombo->addItem(QStringLiteral("Focus"), QStringLiteral("focus"));
+    const QString initiativeModeHelp = QStringLiteral(
+        "Normal uses your usual conversation pacing. Talkative may speak up sooner within your hourly limit. "
+        "Focus keeps optional comments quiet; replies and runtime warnings continue.");
+    initiativeModeCombo->setToolTip(initiativeModeHelp);
+    settingsDialog->AddCustomRow(SettingsSection::Chat, QStringLiteral("Starting conversations"), QStringLiteral("Conversation mode"),
+        initiativeModeHelp, initiativeModeCombo, QStringLiteral("initiativeModeRow"));
+    connect(initiativeModeCombo, &QComboBox::activated, this, [this](const int index) { WriteInitiativeMode(index); });
+
     initiativeMaxSpin = new QSpinBox();
     initiativeMaxSpin->setObjectName("initiativeMaxSpin");
     initiativeMaxSpin->setRange(0, 30);
@@ -435,6 +449,7 @@ void ReviaWindow::RefreshSettingsExtras()
     if (switchingCompanion)
         return;
     RefreshPreferenceSpins();
+    RefreshInitiativeMode();
     RefreshCloudUseFor();
     RefreshDelegationMode();
     // /internet, /set and capability changes from elsewhere reach the hosted panel here, so a
@@ -457,6 +472,49 @@ void ReviaWindow::RefreshPreferenceSpins()
     };
     show(initiativeMaxSpin, snapshot.initiativeMaxPerHour, initiativeMaxStored);
     show(resourceSampleSpin, snapshot.resourceSampleSeconds, resourceSampleStored);
+}
+
+void ReviaWindow::RefreshInitiativeMode()
+{
+    if (initiativeModeCombo == nullptr)
+        return;
+    const QString value = QString::fromStdString(Session().UserPreferences().initiativeMode);
+    const int index = initiativeModeCombo->findData(value);
+    const QSignalBlocker blocker(initiativeModeCombo);
+    initiativeModeCombo->setCurrentIndex(index < 0 ? 0 : index);
+}
+
+void ReviaWindow::WriteInitiativeMode(const int index)
+{
+    if (initiativeModeCombo == nullptr || index < 0 || index >= initiativeModeCombo->count() || switchingCompanion || shuttingDown.load() ||
+        !settingsWorker)
+        return;
+    const std::string value = initiativeModeCombo->itemData(index).toString().toStdString();
+    if (value == Session().UserPreferences().initiativeMode)
+        return;
+    revia::runtime::ReviaSession* session = &Session();
+    const std::uint64_t epoch = sessionUiEpoch.load();
+    settingsWorker->Post(
+        [this, session, value, epoch]()
+        {
+            revia::core::PreferenceResult result;
+            try
+            {
+                result = session->SetPreference("initiative.mode", value);
+            }
+            catch (const std::exception& error)
+            {
+                result = {false, error.what()};
+            }
+            QMetaObject::invokeMethod(this,
+                [this, result, epoch]()
+                {
+                    if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    RefreshInitiativeMode();
+                    ShowPreferenceResult(result);
+                }, Qt::QueuedConnection);
+        });
 }
 
 void ReviaWindow::RefreshDelegationMode()

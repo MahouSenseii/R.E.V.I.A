@@ -55,6 +55,7 @@
 #include "Improvement/selfDevelopment.h"
 #include "Learning/selfAssessment.h"
 #include "Perception/activityHistory.h"
+#include "Perception/savedFileObservation.h"
 #include "Perception/screenAwarenessSchedule.h"
 #include "Perception/clipboardText.h"
 #include "Perception/windowEventMonitor.h"
@@ -177,6 +178,7 @@ struct UserPreferenceSnapshot
     int resourceSampleSeconds = 0;
     // conversation.delegation: "off", "on_request" or "auto".
     std::string delegation = "on_request";
+    std::string initiativeMode = "normal";
 };
 
 // Where a task Revia delegated from chat is in its life. The workflow snapshot says what
@@ -570,6 +572,8 @@ class ReviaSession
     // Tier 0 evidence alone, with no model and no capture.
     [[nodiscard]] std::string RecentActivity(std::chrono::minutes window) const;
     void ForgetActivity();
+    // A trusted local adapter reports a saved revision; policy still owns every file read.
+    [[nodiscard]] presence::EditorObservationResult ObserveEditorFile(const presence::EditorObservationRequest& observation);
 
     // Where Revia is talking. Composing into another application is text; only the local
     // channel is read aloud, unless that executable is explicitly opted in.
@@ -852,6 +856,25 @@ class ReviaSession
     void StartInitiativeLoop();
     void StopInitiativeLoop();
     void SignalInitiative(const std::string& reason);
+    struct EditorObservationRecord
+    {
+        perception::SavedFileObservation source;
+        agents::InputContext input;
+        std::uint64_t epoch = 0;
+        std::uint64_t inputGeneration = 0;
+    };
+    [[nodiscard]] bool EditorObservationCurrent(const EditorObservationRecord& observation) const;
+    [[nodiscard]] std::string CurrentEditorContext() const;
+    void ClearEditorObservation();
+    void ExpireEditorObservation(std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
+    // Called with operationMutex held before private history is read or extended.
+    [[nodiscard]] bool PreparePrivateContext(const memory::MemoryScope& scope, const std::function<bool()>& admission);
+    // Called with operationMutex held after an optional opening has finished.
+    void RetireOptionalOpeningLocked(std::stop_token token, const RuntimeStamp& origin, const identity::AudienceContext& audience);
+    [[nodiscard]] std::function<bool()> CaptureInitiativeAdmission(const initiative::Proposal& proposal,
+        const RuntimeStamp& origin, const identity::AudienceContext& audience, std::uint64_t inputGeneration,
+        std::uint64_t awarenessEpoch, bool requireSpareResources = true,
+        std::function<initiative::AttentionContext()> sampleAttention = {}) const;
     void StartCuriosityLoop();
     void StopCuriosityLoop();
     // Her review of her own code. Off without a source tree beside the build.
@@ -1082,6 +1105,11 @@ class ReviaSession
     initiative::InitiativeController initiativeController;
     initiative::InputRhythm inputRhythm;
     initiative::ConversationStarter conversationStarter;
+    mutable std::mutex editorObservationMutex;
+    std::shared_ptr<const EditorObservationRecord> editorObservation;
+    std::deque<std::string> editorSeenRevisions;
+    std::atomic<std::uint64_t> editorObservationEpoch{0};
+    std::atomic<std::shared_ptr<std::stop_source>> editorOpeningStop;
     initiative::CuriosityJournal curiosityJournal;
     agents::CuriosityAgent curiosityAgent;
     vision::ScreenCaptureService screenCaptureService;

@@ -1502,6 +1502,21 @@ struct ReviaWindowStopTests
         window.Session().SetPreference("initiative.maxPerHour", std::to_string(shown));
         window.RefreshPreferenceSpins();
 
+        const std::string originalInitiativeMode = window.Session().UserPreferences().initiativeMode;
+        expect(window.Session().SetPreference("initiative.mode", "focus").succeeded,
+            "the read-back fixture could not change conversation mode");
+        window.RefreshSettingsExtras();
+        expect(window.initiativeModeCombo->currentData().toString() == QStringLiteral("focus"),
+            "the conversation mode did not follow a preference changed elsewhere");
+        const int talkative = window.initiativeModeCombo->findData(QStringLiteral("talkative"));
+        window.initiativeModeCombo->setCurrentIndex(talkative);
+        emit window.initiativeModeCombo->activated(talkative);
+        drainWrites();
+        expect(window.Session().UserPreferences().initiativeMode == "talkative",
+            "the conversation mode was not saved by the Settings worker");
+        window.Session().SetPreference("initiative.mode", originalInitiativeMode);
+        window.RefreshInitiativeMode();
+
         const std::string originalDelegation = window.Session().UserPreferences().delegation;
         const std::string outsideDelegation = originalDelegation == "off" ? "on_request" : "off";
         expect(window.Session().SetPreference("conversation.delegation", outsideDelegation).succeeded,

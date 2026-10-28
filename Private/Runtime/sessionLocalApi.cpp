@@ -20,14 +20,16 @@ void ReviaSession::StartLocalApi()
     }
     auto api = std::make_shared<presence::LocalApiRuntime>(settings.llm, [this] { return !started.load() || busy.load(); });
     presence::LocalApiRuntime::PrivateTurn privateTurn;
+    presence::LocalApiRuntime::EditorObservation editorObservation;
     if (settings.localApi.bTrustedPrivate)
     {
         // The owner chose this: each request is typed into her own conversation, with
         // memory, tools and approvals exactly as at the keyboard.
         privateTurn = [this](const std::string& input, std::stop_token) { return Submit(input); };
+        editorObservation = [this](const presence::EditorObservationRequest& request) { return ObserveEditorFile(request); };
     }
     const std::string address = "http://127.0.0.1:" + std::to_string(settings.localApi.port) + "/v1";
-    if (!api->Start(settings.localApi.port, token, std::move(privateTurn)))
+    if (!api->Start(settings.localApi.port, token, std::move(privateTurn), std::move(editorObservation)))
     {
         PublishComponent("Local API", "Disabled", "The local API could not listen on " + address + ".");
         return;

@@ -47,6 +47,9 @@ struct Proposal
     std::string resumeGoalId;
     std::chrono::system_clock::time_point createdAt = std::chrono::system_clock::now();
     Kind kind = Kind::ActionOffer;
+    std::chrono::system_clock::time_point observedAt{};
+    std::function<bool()> admission;
+    bool optionalObservation = false;
 };
 
 enum class ProposalOutcome

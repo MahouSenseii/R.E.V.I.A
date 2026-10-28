@@ -151,6 +151,7 @@ std::string ToString(const AttentionVerdict value)
         case AttentionVerdict::Speak: return "speak";
         case AttentionVerdict::BelowConfidence: return "below confidence";
         case AttentionVerdict::Disabled: return "disabled";
+        case AttentionVerdict::FocusMode: return "focus mode";
         case AttentionVerdict::Cooldown: return "cooldown";
         case AttentionVerdict::DismissalCooldown: return "dismissal cooldown";
         case AttentionVerdict::HourlyBudget: return "hourly budget";
@@ -198,7 +199,7 @@ bool AttentionPolicy::IsRateReduced() const
 int AttentionPolicy::EffectiveHourlyBudget() const
 {
     const int configured = std::max(0, configuration.maxUtterancesPerHour);
-    if (!IsRateReduced())
+    if (configured == 0 || !IsRateReduced())
     {
         return configured;
     }
@@ -212,6 +213,10 @@ AttentionVerdict AttentionPolicy::Evaluate(const float confidence, const Attenti
     if (!configuration.bEnabled)
     {
         return AttentionVerdict::Disabled;
+    }
+    if (configuration.mode == "focus")
+    {
+        return AttentionVerdict::FocusMode;
     }
     // Confidence first. Everything below is about whether now is a good moment; this is
     // about whether the thing is worth saying at all, and it is the one the roadmap
@@ -246,8 +251,10 @@ AttentionVerdict AttentionPolicy::Evaluate(const float confidence, const Attenti
     {
         return AttentionVerdict::DismissalCooldown;
     }
-    if (hasSpoken &&
-        context.now - lastSpoken < std::chrono::seconds(configuration.cooldownSeconds))
+    const int ordinaryCooldown = configuration.mode == "talkative"
+        ? std::max(1, configuration.cooldownSeconds / 2)
+        : configuration.cooldownSeconds;
+    if (hasSpoken && context.now - lastSpoken < std::chrono::seconds(ordinaryCooldown))
     {
         return AttentionVerdict::Cooldown;
     }

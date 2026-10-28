@@ -24,6 +24,90 @@ namespace revia::runtime
 
 struct ReviaSessionTestAccess
 {
+    static void ConfigureEditorFixture(ReviaSession& session)
+    {
+        session.settings.localApi.bEnabled = session.settings.localApi.bTrustedPrivate = true;
+        session.settings.perception.bEnabled = true;
+        session.settings.initiative.bEnabled = true;
+        session.settings.initiative.cooldownSeconds = 0;
+        session.settings.initiative.quietInputSeconds = 0;
+        session.settings.initiative.bSuppressWhenFullScreen = false;
+        session.initiativeController.Configure(session.settings.initiative);
+        session.conversationStarter.Configure(session.settings.initiative);
+        session.started.store(true);
+        session.actionRuntime.BindAuthority(session.companionAuthority, session.Stamp());
+        session.InitializeTaskContracts();
+    }
+    static std::vector<initiative::StarterCue> EditorCues(ReviaSession& session)
+    { return session.conversationStarter.RecentCues(std::chrono::system_clock::now()); }
+    static std::string EditorContext(const ReviaSession& session) { return session.CurrentEditorContext(); }
+    static bool PrepareEditorOpeningContext(ReviaSession& session, const bool admitted = true)
+    {
+        std::lock_guard lock(session.operationMutex);
+        const auto scope = session.CapturePrivateMemoryScope();
+        const auto origin = session.Stamp();
+        return session.PreparePrivateContext(scope, [&]
+            { return admitted && session.started.load() && session.sessionIdentity.IsCurrent(origin); });
+    }
+    static void RecordDeliveredEditorOpening(ReviaSession& session, const std::string& text)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.context.AddMessage("assistant", text);
+    }
+    static void RetireEditorInput(ReviaSession& session) { ++session.userInteractionGeneration; }
+    static void EditorFocusMode(ReviaSession& session) { session.settings.initiative.mode = "focus"; }
+    static std::stop_token ArmOptionalEditorAttempt(ReviaSession& session)
+    {
+        auto source = std::make_shared<std::stop_source>();
+        session.editorOpeningStop.store(source);
+        session.busy.store(true);
+        return source->get_token();
+    }
+    static void ReleaseOptionalEditorAttempt(ReviaSession& session)
+    { session.editorOpeningStop.store({}); session.busy.store(false); }
+    static void ExpireEditorSnapshot(ReviaSession& session)
+    { session.ExpireEditorObservation(std::chrono::system_clock::now() + std::chrono::seconds{121}); }
+    static void ExpireEditorSnapshotAt(ReviaSession& session, const std::chrono::system_clock::time_point now)
+    { session.ExpireEditorObservation(now); }
+    static std::stop_token BeginEditorRetirementFixture(ReviaSession& session, const RuntimeState state)
+    {
+        std::lock_guard lock(session.operationMutex);
+        const auto token = session.BeginOperation();
+        session.state.store(state);
+        return token;
+    }
+    static void RetireEditorOpening(ReviaSession& session, const std::stop_token token,
+        const RuntimeStamp& origin, const identity::AudienceContext& audience)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.RetireOptionalOpeningLocked(token, origin, audience);
+    }
+    static void ChangeEditorRetirementAudience(ReviaSession& session)
+    { std::lock_guard lock(session.audienceMutex); ++session.configuredAudience.revision; }
+    static void RestartEditorRetirementSession(ReviaSession& session) { session.sessionIdentity.BeginSession(); }
+    static initiative::InitiativeController::Consideration ReserveEditorCue(ReviaSession& session, const initiative::StarterCue& cue)
+    {
+        initiative::InitiativeController::Evidence evidence;
+        evidence.conversationCues.push_back(cue);
+        return session.initiativeController.Consider(evidence, {});
+    }
+    static void SetEditorLoadAdjustment(ReviaSession& session, const resources::LoadState state, const bool allowNewWork)
+    {
+        std::lock_guard lock(session.loadMutex);
+        session.currentLoad.state = state;
+        session.currentLoad.allowOptionalBackgroundWork = allowNewWork;
+    }
+    static std::function<bool()> EditorDeliveryAdmission(ReviaSession& session, const initiative::StarterCue& cue,
+        const bool requireSpareResources = true, const initiative::AttentionContext attention = {})
+    {
+        initiative::Proposal proposal;
+        proposal.kind = initiative::Proposal::Kind::ConversationStarter;
+        proposal.admission = cue.admission;
+        proposal.optionalObservation = cue.optionalObservation;
+        return session.CaptureInitiativeAdmission(proposal, session.Stamp(), session.Audience(),
+            session.userInteractionGeneration.load(), session.editorObservationEpoch.load(), requireSpareResources,
+            [attention] { return attention; });
+    }
     static SessionResult RunAcceptedTurn(ReviaSession& session, const agents::InputBatch& batch)
     {
         std::lock_guard lock(session.operationMutex);
@@ -310,6 +394,12 @@ struct ReviaSessionTestAccess
 
     static void UsePreferences(ReviaSession& session, const std::filesystem::path& root)
     { session.preferenceStore = core::PreferenceStore(root / "preferences.json"); }
+    // State-only screen-cache fixture: no window monitor or capture worker is started.
+    static void SetSyntheticPerceptionEnabled(ReviaSession& session, const bool enabled)
+    {
+        std::lock_guard lock(session.preferenceSnapshotMutex);
+        session.settings.perception.bEnabled = enabled;
+    }
     static void RecordScreenObservation(ReviaSession& session, const std::string& text) { session.screenAwareness.Record(text); }
     static std::string CachedScreenObservation(const ReviaSession& session) { return session.screenAwareness.LatestObservation().text; }
     static std::string ScreenContext(const ReviaSession& session) { return session.CurrentScreenContext(); }

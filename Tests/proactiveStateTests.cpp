@@ -8,6 +8,7 @@
 #include "Memory/memoryScope.h"
 #include "testSupport.h"
 #include "promptLayoutTestSupport.h"
+#include "speechServiceTestAccess.h"
 #include "Runtime/conversationRuntime.h"
 #include "LLM/LLamaCPP/llamaCppEmbeddingService.h"
 
@@ -85,9 +86,17 @@ public:
                 response.set_content(R"({"choices":[{"message":{"content":"A metadata fixture response."},"finish_reason":"stop"}]})", "application/json");
                 return;
             }
+            std::string reply, finishReason;
+            {
+                std::lock_guard lock(mutex);
+                reply = conversationReply;
+                finishReason = conversationFinishReason;
+            }
+            if (onConversation)
+                onConversation();
             const json chunk = {{"choices", json::array({{
-                {"delta", {{"content", "That leaf pattern has a surprisingly orderly structure."}}},
-                {"finish_reason", "stop"}}})}};
+                {"delta", {{"content", reply}}},
+                {"finish_reason", finishReason}}})}};
             response.set_content("data: " + chunk.dump() + "\n\ndata: [DONE]\n\n", "text/event-stream");
         });
         server.Post("/v1/embeddings", [this](const auto&, auto& response)
@@ -116,6 +125,8 @@ public:
         return requests.back();
     }
     std::size_t Count() { std::lock_guard lock(mutex); return requests.size(); }
+    void SetReply(std::string reply) { std::lock_guard lock(mutex); conversationReply = std::move(reply); }
+    void SetFinishReason(std::string reason) { std::lock_guard lock(mutex); conversationFinishReason = std::move(reason); }
     std::vector<json> RequestsSince(std::size_t start)
     {
         std::lock_guard lock(mutex);
@@ -125,10 +136,13 @@ public:
     std::atomic<int> embeddingRequests{0};
     std::atomic<bool> rejectNext{false};
     std::atomic<bool> holdBackgroundVision{false}, backgroundVisionStarted{false}, foregroundVisionStarted{false};
+    std::function<void()> onConversation;
 private:
     httplib::Server server;
     std::mutex mutex;
     std::vector<json> requests;
+    std::string conversationReply = "That leaf pattern has a surprisingly orderly structure.";
+    std::string conversationFinishReason = "stop";
     std::jthread thread;
 };
 
@@ -186,7 +200,7 @@ struct Fixture
                   if (cancelAtDelivery && state == RuntimeState::Responding)
                       cancellation.request_stop();
               },
-              [](const AffectSnapshot&) {},
+              [this](const AffectSnapshot&) { ++affectPublications; },
               []
               {
                   actions::CapabilitySettings::InternetAccess access;
@@ -222,6 +236,8 @@ struct Fixture
               {
                   if (stimulus.eventType != "reply_delivered" && stimulus.eventType != "reply_failed")
                       ++inputAppraisals;
+                  else
+                      ++outcomeAppraisals;
               },
               [this]
               {
@@ -268,6 +284,7 @@ struct Fixture
         events.Subscribe([this](const RuntimeEvent& event)
         {
             if (event.component == "Memory" && event.phase == "Queued") ++memorySubmissions;
+            if (event.kind == RuntimeEventKind::ReplyFragment) ++replyFragments;
         });
     }
     ~Fixture() { coordinator.Stop(); }
@@ -285,10 +302,292 @@ struct Fixture
     aiProfile profile;
     int lookups = 0, captures = 0, cachedReads = 0, recalls = 0, inquiries = 0;
     int inputAppraisals = 0, memorySubmissions = 0;
+    int outcomeAppraisals = 0, affectPublications = 0, replyFragments = 0;
     bool cancelAtDelivery = false;
     std::stop_source cancellation;
     ConversationRuntime runtime;
 };
+
+template <class Runtime>
+SessionResult OptionalEditorOpening(Runtime& runtime, const aiProfile& profile, const std::stop_token token = {},
+    std::function<bool()> admission = {})
+{
+    if constexpr (requires { runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE", profile, true, true,
+                               token, 7, admission, true); })
+        return runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE", profile, true, true, token, 7,
+            std::move(admission), true);
+    else
+        return runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE", profile, true, true, token, 7,
+            std::move(admission));
+}
+
+template <class Runtime>
+void SetEditorProvider(Runtime& runtime, std::function<std::string()> provider)
+{
+    if constexpr (requires { runtime.SetEditorContextProvider(provider); })
+        runtime.SetEditorContextProvider(std::move(provider));
+}
+
+void TestNativeReasoningBudgetMatchesItsReservedAllowance()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.SetReply("A complete transport fixture answer.");
+    llamaCppService service;
+    auto settings = MetadataSettings(backend.port, "proactive-fixture");
+    settings.bVisionEnabled = false;
+    settings.contextSize = 8192;
+    settings.maxTokens = 384;
+    aiProfile profile;
+    struct BudgetCase { int configured; bool deep; bool jsonReply; int expected; };
+    for (const auto budget : {BudgetCase{256, true, false, 256}, BudgetCase{3072, true, false, 2048},
+        BudgetCase{0, true, false, 0}, BudgetCase{256, false, false, 0}, BudgetCase{256, true, true, 0}})
+    {
+        settings.thinkingTokens = budget.configured;
+        service.ApplySettings(settings, MetadataEmbeddings(backend.port), profile);
+        const std::string input = budget.jsonReply ? R"(Return JSON with exactly keys "answer".)" : "Explain this function.";
+        (void)service.GenerateResponse({{"user", input}}, {}, {}, budget.deep, llm::PrivateMemoryAccess::Denied);
+        const auto request = backend.Last();
+        Check(request.contains("reasoning_budget_tokens") && request["reasoning_budget_tokens"].is_number_integer() &&
+            request["reasoning_budget_tokens"].get<int>() == budget.expected,
+            "The native request did not bound reasoning to its configured, clamped thinking allowance.");
+        Check(request.value("max_tokens", 0) == settings.maxTokens + budget.expected &&
+            request.value("chat_template_kwargs", json::object()).value("enable_thinking", false) ==
+                (budget.deep && !budget.jsonReply),
+            "The native reasoning budget disagreed with the combined output reserve or the turn's thinking mode.");
+        Check(!budget.jsonReply || request.contains("response_format"), "The zero-reasoning JSON control was not a structured turn.");
+    }
+}
+
+void TestOptionalEditorTokenLimitNeverDeliversAnIncompleteOpening()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.SetFinishReason("length");
+    for (const std::string reply : {std::string{}, std::string{"The source has a complete observation. An unfinished clause"}})
+    {
+        backend.SetReply(reply);
+        Fixture fixture(backend.port);
+        speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+        fixture.context.AddMessage("user", "An earlier genuine question.");
+        const auto history = History(fixture.context);
+        RuntimeStamp origin;
+        origin.companionId = "proactive-fixture";
+        origin.sessionId = "optional-editor-token-limit";
+        fixture.runtime.ResetResponseLatency(origin);
+        int deliveries = 0, latencyEvents = 0;
+        fixture.events.Subscribe([&](const RuntimeEvent& event)
+            { if (event.component == "Response latency") ++latencyEvents; });
+        const auto optional = fixture.runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE",
+            fixture.profile, true, true, {}, 7, [] { return true; }, true,
+            [&](const SessionResult&) { ++deliveries; return true; });
+        Check(!optional.succeeded && optional.text.empty() && !optional.speechPending && deliveries == 0 &&
+            optional.reason.find("output token limit") != std::string::npos,
+            "A token-limited optional opening was delivered as a warning or a partial comment.");
+        Check(History(fixture.context) == history && fixture.replyFragments == 0 && !fixture.speech.HasPendingSpeech() &&
+            fixture.memorySubmissions == 0 && fixture.coordinator.Memory().Depths().interactive == 0 &&
+            fixture.inputAppraisals == 0 && fixture.outcomeAppraisals == 0 && fixture.affectPublications == 0 &&
+            latencyEvents == 0 && fixture.runtime.ResponseLatencies().turnId == 0,
+            "A token-limited optional opening changed history, speech, memory, affect or delivered-response latency.");
+
+        const auto direct = fixture.runtime.Reply("Explain this function.", fixture.profile, true, false);
+        Check(direct.succeeded && (reply.empty()
+            ? direct.text.find("I ran out of room before I could finish that answer.") != std::string::npos
+            : direct.text == "The source has a complete observation."),
+            "Token-limit suppression changed the existing warning or complete-prefix behavior of a direct reply.");
+    }
+}
+
+void TestOptionalEditorSilenceHasNoDeliverySideEffects()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.SetReply(" \n[[SILENT]]\t");
+    Fixture fixture(backend.port);
+    speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+    RuntimeStamp origin;
+    origin.companionId = "proactive-fixture";
+    origin.sessionId = "optional-editor-silence";
+    fixture.runtime.ResetResponseLatency(origin);
+    fixture.context.AddMessage("user", "A real earlier question.");
+    const auto original = History(fixture.context);
+    const auto silent = OptionalEditorOpening(fixture.runtime, fixture.profile);
+    Check(silent.succeeded && silent.text.empty() && !silent.speechPending && !silent.spokenAsFragments &&
+        silent.reason.find("silence") != std::string::npos,
+        "An optional saved-code silence marker was delivered as a reply instead of choosing silence.");
+    Check(History(fixture.context) == original && fixture.replyFragments == 0 && !fixture.speech.HasPendingSpeech() &&
+        fixture.memorySubmissions == 0 && fixture.coordinator.Memory().Depths().interactive == 0 &&
+        fixture.inputAppraisals == 0 && fixture.outcomeAppraisals == 0 &&
+        fixture.affectPublications == 0, "An optional silence changed dialogue, speech, memory or affect delivery state.");
+    Check(fixture.runtime.ResponseLatencies().turnId == 0 && fixture.runtime.ResponseLatencies().text.samples == 0,
+        "An optional silence replaced delivered-response latency with an unfinished turn.");
+    const auto prompt = SystemText(backend.Last());
+    Check(prompt.find("SAVED_OPENING_EVIDENCE") != std::string::npos && prompt.find("[[SILENT]]") != std::string::npos &&
+        prompt.find("saved file") != std::string::npos && prompt.find("untrusted") != std::string::npos &&
+        fixture.cachedReads == 0, "A saved-code opening lost its source boundary or read unrelated screen context.");
+    backend.SetReply("[[SILENT]] Actually, here is a comment.");
+    const auto malformed = OptionalEditorOpening(fixture.runtime, fixture.profile);
+    Check(!malformed.succeeded && malformed.text.empty() && History(fixture.context) == original &&
+        !fixture.speech.HasPendingSpeech() && fixture.replyFragments == 0 && fixture.outcomeAppraisals == 0 &&
+        fixture.coordinator.Memory().Depths().interactive == 0,
+        "A malformed optional silence response leaked its marker or changed conversation state.");
+}
+
+void TestEditorCommentAndCurrentFollowupKeepTheConversationPipeline()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.SetReply("That bounds check looks fragile: an empty vector still reaches index zero.");
+    Fixture fixture(backend.port);
+    speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+    int editorReads = 0;
+    SetEditorProvider(fixture.runtime, [&]
+    {
+        ++editorReads;
+        return std::string("SAVED_EDITOR_CONTEXT_SENTINEL: current authorized saved file fixture.cpp, line 8: return values[0];");
+    });
+    const auto comment = OptionalEditorOpening(fixture.runtime, fixture.profile);
+    Check(backend.Last().value("chat_template_kwargs", json::object()).value("enable_thinking", false),
+        "A saved-code review used the instant social-opening route without native reasoning.");
+    Check(comment.succeeded && !comment.text.empty() && comment.speechPending && fixture.speech.HasPendingSpeech() &&
+        fixture.replyFragments == 0 && fixture.memorySubmissions == 0 && fixture.coordinator.Memory().Depths().interactive == 0 &&
+        fixture.outcomeAppraisals == 1 &&
+        History(fixture.context) == json::array({json::array({"assistant", comment.text})}),
+        "An admitted saved-code comment bypassed ordinary history, voice or outcome handling.");
+    Check(editorReads == 0, "A proactive opening polled follow-up editor context.");
+    fixture.speech.StopSpeaking();
+    const auto followup = fixture.runtime.Reply("Explain that bounds check.", fixture.profile, true, false);
+    Check(followup.succeeded && editorReads == 1 &&
+        SystemText(backend.Last()).find("SAVED_EDITOR_CONTEXT_SENTINEL") != std::string::npos,
+        "A direct follow-up did not receive revalidated saved-code evidence through the existing prompt.");
+    for (const auto& message : fixture.context.GetRecentMessages())
+        Check(message.content.find("SAVED_EDITOR_CONTEXT_SENTINEL") == std::string::npos &&
+            message.content.find("SAVED_OPENING_EVIDENCE") == std::string::npos,
+            "Saved source evidence was stored as dialogue rather than turn-local context.");
+    fixture.runtime.Reply("Thanks.", fixture.profile, true, false);
+    Check(editorReads == 1, "A brief social turn read saved-code evidence.");
+    fixture.runtime.ReplyPublic("Explain that bounds check.", {}, "PUBLIC", {}, fixture.profile, true, false);
+    Check(editorReads == 1 && backend.Last().dump().find("SAVED_EDITOR_CONTEXT_SENTINEL") == std::string::npos,
+        "A public turn inherited saved-code evidence.");
+}
+
+void TestRevokedEditorOpeningCannotDeliver()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Fixture fixture(backend.port);
+    speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+    std::atomic<bool> admitted = false;
+    const auto before = OptionalEditorOpening(fixture.runtime, fixture.profile, {}, [&] { return admitted.load(); });
+    Check(!before.succeeded && before.text.empty() && backend.Count() == 0, "A revoked saved-code opening reached the backend.");
+    admitted = true;
+    backend.onConversation = [&] { admitted = false; };
+    const auto during = OptionalEditorOpening(fixture.runtime, fixture.profile, {}, [&] { return admitted.load(); });
+    Check(!during.succeeded && during.text.empty() && History(fixture.context).empty() &&
+        fixture.replyFragments == 0 && !fixture.speech.HasPendingSpeech() && fixture.memorySubmissions == 0 &&
+        fixture.coordinator.Memory().Depths().interactive == 0 && fixture.outcomeAppraisals == 0 && fixture.affectPublications == 0,
+        "Admission revoked during a saved-code opening still delivered or changed conversation state.");
+}
+
+template <class Runtime>
+SessionResult DeliverEditorOpening(Runtime& runtime, const aiProfile& profile, std::function<bool()> admission,
+    std::function<bool(const SessionResult&)> delivery)
+{
+    if constexpr (requires { runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE", profile, true, true,
+                               std::stop_token{}, 7, admission, true, delivery); })
+        return runtime.StartConversation("saved code changed", "SAVED_OPENING_EVIDENCE", profile, true, true, {}, 7,
+            std::move(admission), true, std::move(delivery));
+    else
+        return OptionalEditorOpening(runtime, profile, {}, std::move(admission));
+}
+
+void TestEditorPublisherRejectsBeforeHistoryAndSpeech()
+{
+    for (const bool throws : {false, true})
+    {
+        tests::ScopedTestDirectory directory;
+        WorkingDirectory cwd(directory.root);
+        Backend backend;
+        Fixture fixture(backend.port);
+        speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+        int attempts = 0;
+        const auto result = DeliverEditorOpening(fixture.runtime, fixture.profile, [] { return true; },
+            [&](const SessionResult& candidate)
+            {
+                ++attempts;
+                Check(!candidate.text.empty() && History(fixture.context).empty() && !fixture.speech.HasPendingSpeech(),
+                    "The optional publisher ran after history or speech had already committed.");
+                if (throws) throw std::runtime_error("publisher fixture refusal");
+                return false;
+            });
+        Check(attempts == 1 && !result.succeeded && result.text.empty() && History(fixture.context).empty() &&
+            !fixture.speech.HasPendingSpeech() && fixture.coordinator.Memory().Depths().interactive == 0 &&
+            fixture.outcomeAppraisals == 0 && fixture.affectPublications == 0,
+            "A rejected or throwing optional publisher still committed conversation side effects.");
+    }
+}
+
+void TestEditorPublisherCommitsOnlyActuallyVisibleText()
+{
+    for (const bool revokeAfterPublication : {false, true})
+    {
+        tests::ScopedTestDirectory directory;
+        WorkingDirectory cwd(directory.root);
+        Backend backend;
+        Fixture fixture(backend.port);
+        speech::SpeechServiceTestAccess::ConfigureWithoutWorkers(fixture.speech, directory.root / "voice");
+        std::atomic<bool> admitted = true;
+        int attempts = 0, visible = 0;
+        std::string shown;
+        fixture.events.Subscribe([&](const RuntimeEvent& event)
+        {
+            if (event.kind == RuntimeEventKind::AssistantMessage && event.component == "Initiative")
+            {
+                ++visible;
+                shown = event.message;
+                if (revokeAfterPublication) admitted = false;
+            }
+        });
+        const auto result = DeliverEditorOpening(fixture.runtime, fixture.profile, [&] { return admitted.load(); },
+            [&](const SessionResult& candidate)
+            {
+                ++attempts;
+                RuntimeEvent event;
+                event.kind = RuntimeEventKind::AssistantMessage;
+                event.component = "Initiative";
+                event.message = candidate.text;
+                fixture.events.Publish(std::move(event));
+                return true;
+            });
+        Check(attempts == 1 && visible == 1 && result.succeeded && result.text == shown && !shown.empty() &&
+            History(fixture.context) == json::array({json::array({"assistant", shown})}) &&
+            fixture.coordinator.Memory().Depths().interactive == 0 &&
+            fixture.speech.HasPendingSpeech() == !revokeAfterPublication,
+            "Visible optional delivery was duplicated, forgotten or misreported after admission changed.");
+        fixture.speech.StopSpeaking();
+        if (!revokeAfterPublication)
+        {
+            const auto followup = fixture.runtime.Reply("Explain that code comment.", fixture.profile, true, false);
+            Check(followup.succeeded && attempts == 1 && backend.Last().dump().find(shown) != std::string::npos,
+                "An actually published opening was not retained for the next direct turn.");
+        }
+    }
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    backend.SetReply("[[SILENT]]");
+    Fixture fixture(backend.port);
+    int attempts = 0;
+    const auto silent = DeliverEditorOpening(fixture.runtime, fixture.profile, [] { return true; },
+        [&](const SessionResult&) { ++attempts; return false; });
+    Check(silent.succeeded && silent.text.empty() && attempts == 0,
+        "An optional silence was sent to the visible publisher.");
+}
 
 void CheckCanonicalState(const json& request)
 {
@@ -773,6 +1072,13 @@ void TestRepeatedEmbeddingsAreCached()
 
 void RunProactiveStateTests()
 {
+    TestOptionalEditorTokenLimitNeverDeliversAnIncompleteOpening();
+    TestNativeReasoningBudgetMatchesItsReservedAllowance();
+    TestOptionalEditorSilenceHasNoDeliverySideEffects();
+    TestEditorCommentAndCurrentFollowupKeepTheConversationPipeline();
+    TestRevokedEditorOpeningCannotDeliver();
+    TestEditorPublisherRejectsBeforeHistoryAndSpeech();
+    TestEditorPublisherCommitsOnlyActuallyVisibleText();
     TestRepeatedEmbeddingsAreCached();
     TestMainResponseReportsItsConfiguredModel();
     TestConfiguredModelMetadataFollowsAvailabilityFallbacks();

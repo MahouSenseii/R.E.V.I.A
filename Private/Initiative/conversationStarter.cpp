@@ -1,5 +1,6 @@
 #include "Initiative/initiativeSettings.h"
 #include "Initiative/conversationStarter.h"
+#include "Audit/contentDigest.h"
 
 #include <algorithm>
 #include <cctype>
@@ -44,11 +45,12 @@ std::string ConversationStarter::FriendlyApplication(const std::string& executab
 
 void ConversationStarter::RememberCue(StarterCue cue)
 {
-    if (cue.evidence.empty() || cue.evidence == lastCueEvidence)
+    const std::string key = cue.optionalObservation ? "saved:" + audit::ContentDigest(cue.evidence) : cue.evidence;
+    if (cue.evidence.empty() || key == lastCueEvidence)
     {
         return;
     }
-    lastCueEvidence = cue.evidence;
+    lastCueEvidence = key;
     cues.push_back(std::move(cue));
     while (cues.size() > 8)
     {
@@ -216,6 +218,31 @@ void ConversationStarter::ClearVisualIssue()
     }), cues.end());
 }
 
+void ConversationStarter::ObserveSavedFile(std::string evidence,
+    const std::chrono::system_clock::time_point occurredAt, std::function<bool()> admission)
+{
+    std::lock_guard lock(mutex);
+    // Related saves share one pending nomination; only the newest complete snapshot
+    // can survive the session's debounce and original-source admission check.
+    std::erase_if(cues, [](const StarterCue& cue) { return cue.kind == StarterCueKind::SavedFile; });
+    StarterCue cue;
+    cue.kind = StarterCueKind::SavedFile;
+    cue.messageIntent = "Consider the current saved code for one useful, brief observation, or choose silence.";
+    cue.evidence = std::move(evidence);
+    cue.confidence = 0.85F; // Confidence in the admitted source, not in a code finding.
+    cue.occurredAt = occurredAt;
+    cue.admission = std::move(admission);
+    cue.optionalObservation = true;
+    RememberCue(std::move(cue));
+}
+
+void ConversationStarter::ClearSavedFiles()
+{
+    std::lock_guard lock(mutex);
+    std::erase_if(cues, [](const StarterCue& cue) { return cue.kind == StarterCueKind::SavedFile; });
+    if (lastCueEvidence.starts_with("saved:")) lastCueEvidence.clear();
+}
+
 std::vector<StarterCue> ConversationStarter::RecentCues(const std::chrono::system_clock::time_point now)
 {
     std::lock_guard lock(mutex);
@@ -224,7 +251,10 @@ std::vector<StarterCue> ConversationStarter::RecentCues(const std::chrono::syste
     {
         cues.pop_front();
     }
-    std::vector<StarterCue> recent{cues.begin(), cues.end()};
+    std::vector<StarterCue> recent;
+    for (const auto& cue : cues)
+        if (now >= cue.occurredAt && now - cue.occurredAt <= maxAge && (!cue.admission || cue.admission()))
+            recent.push_back(cue);
     cues.clear();
     return recent;
 }

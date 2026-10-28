@@ -18,6 +18,7 @@ enum class AttentionVerdict
     Speak,
     BelowConfidence,
     Disabled,
+    FocusMode,
     Cooldown,
     DismissalCooldown,
     HourlyBudget,

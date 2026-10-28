@@ -546,6 +546,9 @@ void ReviaSession::ApplyOwnerSetting(const std::string& key)
         if (PerceptionEnabledNow())
             return;
         windowEventMonitor.Shutdown();
+        ClearEditorObservation();
+        conversationStarter.Clear();
+        screenAwareness.Clear();
         // Keeping track of the screen runs only while app awareness does.
         StopScreenAwareness();
         PublishComponent("Perception", "Off",
@@ -555,6 +558,7 @@ void ReviaSession::ApplyOwnerSetting(const std::string& key)
     }
     if (key.starts_with("localApi."))
     {
+        ClearEditorObservation();
         // Off, or no longer trusted: the running API stops, and only an API that is still on
         // listens again, as a shared audience. One that was not running stays stopped.
         if (const auto api = localApiRuntime.exchange({}))
