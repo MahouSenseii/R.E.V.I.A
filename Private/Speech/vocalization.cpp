@@ -383,13 +383,7 @@ std::string InlineTag(const VocalizationKind kind)
 
 namespace
 {
-// Decides whether an asterisk pair is emphasis-shaped at all, before anything is
-// deleted for not being a known sound.
-//
-// The multiplication sign is the reason this exists. "2 * 3 and 4 * 5" pairs the first
-// asterisk with the second, and a rule that only asked "is this a vocalization?" would
-// delete " 3 and 4 " out of the middle of a sum. Markdown's own rule settles it: an
-// emphasis span never begins or ends against whitespace.
+// Only recognizable acting phrases are stripped; ordinary emphasis is reply content.
 bool IsStageDirectionSpan(const std::string& inner)
 {
     // Long enough to be a deliberately italicised passage rather than a stage
@@ -399,17 +393,21 @@ bool IsStageDirectionSpan(const std::string& inner)
     {
         return false;
     }
-    const auto isSpace = [](const unsigned char character)
-    {
-        return std::isspace(character) != 0;
-    };
-    if (isSpace(static_cast<unsigned char>(inner.front())) ||
-        isSpace(static_cast<unsigned char>(inner.back())))
+    const auto isSpace = [](const unsigned char character) { return std::isspace(character) != 0; };
+    if (isSpace(static_cast<unsigned char>(inner.front())) || isSpace(static_cast<unsigned char>(inner.back())))
     {
         return false;
     }
-    // A nested asterisk means the pairing was a guess, not a span.
-    return inner.find('*') == std::string::npos;
+    if (inner.find('*') != std::string::npos)
+        return false;
+    const auto lowered = Lowered(inner);
+    for (const std::string_view action : {"smiles", "grins", "shrugs", "nods", "winks", "blushes", "frowns", "pouts", "softens",
+             "leans back", "leans forward", "rolls eyes", "tilts head", "crosses arms"})
+        if (lowered.starts_with(action) &&
+            (lowered.size() == action.size() || std::isspace(static_cast<unsigned char>(lowered[action.size()])) ||
+                std::string_view(",.!?;:").find(lowered[action.size()]) != std::string_view::npos))
+            return true;
+    return false;
 }
 }
 
@@ -424,10 +422,34 @@ VocalizationShaping ShapeVocalizations(const std::string& reply, const int maxim
     while (index < reply.size())
     {
         const char character = reply[index];
+        if (character == '`' || (character == '*' && index + 1 < reply.size() && reply[index + 1] == '*'))
+        {
+            const auto afterOpening = reply.find_first_not_of(character, index);
+            if (afterOpening == std::string::npos)
+            {
+                built += reply.substr(index);
+                break;
+            }
+            const auto delimiter = reply.substr(index, afterOpening - index);
+            const auto closing = reply.find(delimiter, afterOpening);
+            const auto after = closing == std::string::npos ? reply.size() : closing + delimiter.size();
+            built += reply.substr(index, after - index);
+            index = after;
+            continue;
+        }
         char closing = 0;
-        if (character == '[') { closing = ']'; }
-        else if (character == '<') { closing = '>'; }
-        else if (character == '*') { closing = '*'; }
+        if (character == '[')
+        {
+            closing = ']';
+        }
+        else if (character == '<')
+        {
+            closing = '>';
+        }
+        else if (character == '*')
+        {
+            closing = '*';
+        }
 
         if (closing == 0)
         {

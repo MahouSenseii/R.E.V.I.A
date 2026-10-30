@@ -186,6 +186,8 @@ void RunGuestLiveTests(const std::filesystem::path& runtimeRoot, const std::file
 void RunReminderTests();
 void RunClipboardTests();
 void RunAttachmentTests();
+void RunMediaSelectionTests();
+void RunImageTokenSettingsTests();
 void RunQuestionRelayTests();
 void RunSpeakerContinuityTests();
 void RunSpeechAttributionTests();

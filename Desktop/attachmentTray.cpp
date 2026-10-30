@@ -61,6 +61,7 @@ void AttachmentTray::SetStatus(const QString& text)
 {
     status->setText(text);
     status->setVisible(!text.isEmpty());
+    setVisible(!chips.empty() || !text.isEmpty());
 }
 
 void AttachmentTray::Rebuild()
@@ -120,7 +121,10 @@ PreparedImage PrepareImageForAttachment(const QImage& source, const int maxSide)
     }
     QImage image = source;
     if (image.width() > maxSide || image.height() > maxSide)
+    {
         image = image.scaled(maxSide, maxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        prepared.notice = QStringLiteral("Resized to %1 by %2 pixels for image understanding.").arg(image.width()).arg(image.height());
+    }
     // Transparency is kept; everything else becomes plain 8-bit RGB the model reads.
     image = image.convertToFormat(image.hasAlphaChannel() ? QImage::Format_ARGB32 : QImage::Format_RGB32);
     QBuffer buffer(&prepared.png);
@@ -146,7 +150,14 @@ std::optional<PreparedImage> PrepareImageFileForAttachment(const QString& path, 
     const QImage first = reader.read();
     if (first.isNull())
         return std::nullopt;
-    return PrepareImageForAttachment(first, maxSide);
+    PreparedImage prepared = PrepareImageForAttachment(first, maxSide);
+    if (!prepared.png.isEmpty() && (reader.supportsAnimation() || QFileInfo(path).suffix().compare("gif", Qt::CaseInsensitive) == 0))
+    {
+        const QString stillOnly =
+            QStringLiteral("Attached as a still image: first frame only. Animation and later frames are not included.");
+        prepared.notice = stillOnly + (prepared.notice.isEmpty() ? QString() : QStringLiteral(" ") + prepared.notice);
+    }
+    return prepared;
 }
 
 bool LooksLikeImageFile(const QString& path)

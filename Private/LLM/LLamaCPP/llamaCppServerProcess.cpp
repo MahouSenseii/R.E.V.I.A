@@ -253,6 +253,8 @@ std::vector<std::string> BuildLlamaServerArguments(
     // depend on it; recent llama.cpp builds default to it, and saying so keeps a build
     // with the older default from silently dropping tools.
     add({"--jinja"});
+    if (settings.bVisionEnabled && settings.imageMinTokens > 0)
+        add({"--image-min-tokens", std::to_string(std::min(settings.imageMinTokens, 4096))});
     if (!settings.device.empty() && settings.device != "auto")
     {
         add({"--device", settings.device, "--split-mode", settings.splitMode});

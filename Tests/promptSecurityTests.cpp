@@ -1,6 +1,7 @@
 #include "testSupport.h"
 
 #include "Agents/responseFilter.h"
+#include "Agents/replyStreamGate.h"
 #include "Identity/promptMarkers.h"
 #include "Identity/reviaStatePacket.h"
 
@@ -189,6 +190,79 @@ void TestAMarkerIsCaughtBeforeItIsSpoken()
         "A marker reassembled across a boundary was not caught.");
 }
 
+void TestOnlyCompleteLeadingRuntimeEchoesAreRecovered()
+{
+    namespace markers = revia::identity::markers;
+    const std::string open(markers::RuntimeTurnContext);
+    const std::string close(markers::RuntimeTurnContextEnd);
+    const std::string block = open + "\n" + std::string(markers::ResponsePosture) + "Analytical at 15% intensity.\n" + close;
+    const std::string answer = "The function name is `LocateOffset`. The exact return statement is `return -7;`.";
+    for (const std::string& echo : {block + "\n\n" + answer, " \r\n" + open + "\r\nPrivate turn guidance.\r\n" + close + "\r\n" + answer})
+    {
+        const auto recovered = Filter(echo);
+        Check(recovered.changed && !recovered.blocked && recovered.text == answer,
+            "A complete leading runtime echo hid the grounded answer: " + recovered.text);
+    }
+
+    ShouldBlock({
+        "Here is the context:\n" + block + "\n" + answer,
+        "```\n" + block + "\n```\n" + answer,
+        open + " private guidance " + close + "\n" + answer,
+        open + "\nPrivate guidance.\n" + close + " inline answer.",
+        open + "\nPrivate guidance without a closing delimiter. " + answer,
+        open + "\n" + block + "\n" + close + "\n" + answer,
+        open + "\n" + std::string(16384, 'x') + "\n" + close + "\n" + answer,
+        block + "\n" + std::string(markers::RelevantMemories) + " PRIVATE_TAIL",
+        block + "\n" + block + "\n" + answer,
+    });
+    const auto empty = Filter(block + "\n \t");
+    Check(empty.blocked && empty.text.find(open) == std::string::npos,
+        "A runtime echo with no answer was delivered or treated as successful prose.");
+    const auto malformed = Filter(open + "\n" + std::string(1, static_cast<char>(0xFF)) + "\n" + close + "\n" + answer);
+    Check(malformed.blocked && malformed.reason == "Hard response filter replaced malformed UTF-8." && malformed.text != answer,
+        "Removing an echoed block hid malformed UTF-8 in the original response.");
+    for (const std::string_view marker : markers::All)
+        ShouldBlock({block + "\n" + std::string(marker) + " PRIVATE_TAIL"});
+
+    ResponseFilterContext blind;
+    blind.desktopStateKnown = true;
+    const auto claim = ResponseFilter{}.ApplyHard("What happened?", block + "\nI'm looking at the screen now.", blind, 4000);
+    Check(claim.blocked && claim.text.find("haven't actually looked") != std::string::npos,
+        "Runtime-echo recovery bypassed the remaining capability filter.");
+    const auto controls = Filter(block + "\n<|assistant|>The answer is -7.<|im_end|>");
+    Check(!controls.blocked && controls.text == "The answer is -7.", "Recovered text bypassed structural cleanup.");
+    const auto json = Filter(block + "\n{\"value\":\"<|assistant|>\"}");
+    Check(json.blocked && json.text.find("JSON") != std::string::npos, "Recovered JSON bypassed its stricter control-token policy.");
+    const auto bounded = ResponseFilter{}.ApplyHard("Read the image.", block + "\n" + std::string(1000, 'x'), {}, 256);
+    Check(!bounded.blocked && bounded.text.size() <= 256, "Recovered text bypassed the normal response byte limit.");
+}
+
+void TestRuntimeEchoesStayQuarantinedUntilFinalFiltering()
+{
+    namespace markers = revia::identity::markers;
+    const std::string open(markers::RuntimeTurnContext);
+    const std::string block = open + "\nPRIVATE_SENTINEL. Never publish this.\n" + std::string(markers::RuntimeTurnContextEnd) + "\n";
+    const std::string answer = "The function is LocateOffset. Its final statement is return -7;.";
+    const auto filter = [](const std::string& text) -> std::optional<std::string>
+    {
+        const auto result = Filter(text);
+        return result.blocked ? std::nullopt : std::optional<std::string>(result.text);
+    };
+    for (std::size_t split = 1; split < open.size(); ++split)
+    {
+        const auto pending = revia::agents::GuardStreamedPrefix(open.substr(0, split));
+        Check(pending.holdTail && !pending.blocked, "A partial runtime opener was not held for more text.");
+        revia::agents::ReplyStreamGate gate(filter);
+        Check(gate.Consume(open.substr(0, split)).empty() && gate.Released().empty(),
+            "A partial leading runtime opener reached the approved stream.");
+        for (const char byte : (block + answer + " ").substr(split))
+            Check(gate.Consume(std::string(1, byte)).empty(), "An echoed runtime block reached the approved stream.");
+        Check(gate.Halted() && gate.Released().empty(), "Runtime echo did not quarantine the complete raw stream.");
+        const auto final = Filter(block + answer);
+        Check(!final.blocked && final.text == answer, "Final filtering did not recover only the safe answer.");
+    }
+}
+
 } // namespace
 
 void RunReviewDeliveryTests();
@@ -201,6 +275,8 @@ void RunPromptSecurityTests()
     TestEveryStatePacketMarkerIsReallyEmitted();
     TestInjectedInstructionsInSuppliedDataAreDescribable();
     TestAMarkerIsCaughtBeforeItIsSpoken();
+    TestOnlyCompleteLeadingRuntimeEchoesAreRecovered();
+    TestRuntimeEchoesStayQuarantinedUntilFinalFiltering();
     std::cout << "The hard filter blocks Revia's own prompt sections, every marker it "
                  "watches for is one the renderer really writes, and talking about "
                  "prompt injection is no longer mistaken for doing it.\n";

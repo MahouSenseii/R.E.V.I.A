@@ -8,18 +8,57 @@ whether an admitted observation merits a later, bounded comment.
 
 ## Validation status and moving to another computer
 
-This Stage A integration is partially verified. Native/script regressions cover
-admission, modes, cancellation, silence and private follow-up continuity. Earlier
-real-model trials connected the saved-file watcher to a comment and follow-up, but
-the code assessment was incorrect. The latest reasoning-budget and continuity
-repairs still need fresh real-model qualification. Passing tests or receiving HTTP
-202 does not establish useful code review.
+The saved-file opening now uses conservative native C++ checks for a declared
+source subset. Twelve real-watcher trials on the RTX 5070 on 2026-10-29 produced
+seven correct source-specific comments and follow-ups, plus five explicit
+no-supported-diagnostic silences. These include renamed functions and variables,
+another vector element type, checked and unchecked access, local references,
+corrected code, a boundary guard, hostile source instructions and unsupported
+division. The seven comments took 5.229–5.358 s from actual save, including normal
+watcher debounce and attention admission; follow-ups took 0.082–0.098 s. The
+four-second attention stability interval remains in force.
 
-The last live preflight used an RTX 3070 Laptop GPU with 8 GiB VRAM and 16 GiB RAM.
+These results qualify the declared native checks, not arbitrary C++ correctness
+or general model code-review accuracy. An empty check result makes no safety
+claim. The normal model and authored profile remain unchanged. One ordinary
+story control falsely denied creative-writing ability; a captured repeat and
+six bounded paired provider controls supplied proper stories. Both prompt
+variants passed those pairs, so the capability-scope clarification is not claimed
+as a demonstrated cause of improvement. A later controlled tool-workflow pair
+reproduced the denial at the same seed and supplied a proper story through plain
+model generation. Bounded self-contained composition now skips irrelevant tool
+definitions and extra source context, while attachment, source, reminder and other
+dependent requests retain their existing paths. Sixty-four intent cases and the
+runtime boundaries have separate regression coverage.
+
+Fresh final bounds/lifetime confirmations took 5.217–5.274 s from save and
+68–77 ms for their factual follow-ups. All six final ordinary story, poem and
+opinion controls produced answers without false capability denials at unchanged
+temperature 0.75. One opinion chose a third alternative; general personality and
+creative quality remain unqualified. Final delivery-regression verification
+and these ordinary-conversation controls are recorded in the
+[continuation record](COMPANION_UPGRADE_PROGRESS.md). Passing tests or receiving
+HTTP 202 alone does not establish useful code review.
+
+The owner-approved 5.63 GB Qwen3.5-9B Q4_K_M candidate was subsequently downloaded
+and checksum-verified. Ten real native trials, including a faster zero-thinking
+comparison, did not qualify it: bounds explanations still confused checked
+exceptions with undefined behavior/crashes, and one safe assessment was
+suppressed for an invalid none contract. Three other safe controls produced
+appropriate native silence. Default candidate comments took about 16.7–17.4 s
+from save; the 8.45 s zero-thinking trial remained incorrect. The normal model
+was not switched. Paired grammar removal, facts-first and actual-evidence-fed
+offline prototypes also failed semantic checks and were not integrated. The
+native boundary described below replaces model-generated factual deductions for
+the supported optional saved-file comments. Historical model failures remain
+retained as evidence; the installed 9B candidate was not selected.
+
+An earlier live preflight used an RTX 3070 Laptop GPU with 8 GiB VRAM and 16 GiB RAM.
 Windows reported other microphone use, and available RAM was about 1.4 GiB. The
 owner chose to record that test limit. No attention bypass or final model trial
-was performed. RTX 5070 behavior, physical voice, image/video generation and
-generation-time conversation performance are not qualified by this stage.
+was performed. The newer text-only RTX 5070 trials do not qualify physical voice,
+video, or generation-time conversation performance. The retained image provider's
+independent retest has its own evidence and limits in the continuation record.
 
 On another computer, pull main and build with `Tools/Build.ps1`. Verify that
 machine's actual model paths, hardware headroom and permissions before enabling
@@ -29,10 +68,12 @@ data. A Windows DPAPI token belongs to its original user/machine; let the existi
 local API owner provision a token on the destination instead of copying or
 exporting the old token as plaintext.
 
-The next live check is a meaningful saved edit, its unsolicited comment and a
-contextual direct follow-up, followed by a safe-code scenario where silence is
-appropriate. Run with an idle microphone and measured memory headroom. Inspect
-the actual model output before accepting Stage A; retain unsuccessful trials.
+The next live checks should qualify repeatable source judgment and faithful
+natural presentation with an authorized local model, including false silence,
+generation exhaustion and safe/instruction negatives, then live Focus and
+physical interruption. The downloaded 9B candidate remains unselected. Run
+with an idle microphone and measured memory headroom. Inspect actual model output before accepting Stage A;
+retain unsuccessful trials.
 
 ## Setup
 
@@ -90,6 +131,43 @@ The scripts require valid saved UTF-8 and limit the file to 16 KiB. The session
 accepts only its supported C/C++ extensions and may suppress stale, incomplete,
 sensitive or changed files. A rejection is an admission result, not a compiler
 diagnostic. No full-project understanding or build result is inferred from one file.
+The completeness filter recognizes numeric digit separators and raw string
+literals, including their prefixes and bounded delimiters. It remains a
+nomination filter rather than a C++ parser or a compilation check.
+
+An admitted source observation receives bounded native checks. The recognized
+subset covers simple standard-vector searches with an inclusive size boundary
+and returns of references to recognized automatic local objects. The diagnostic
+distinguishes checked `at()` exceptions from unchecked index-precondition
+violations, includes empty input and early successful returns, and describes
+lifetime misuse conditionally. Function names, quoted expressions and minimal
+corrections come from the current source. No watched source is compiled or run.
+
+Unknown preprocessing, types, surrounding structure, additional control flow,
+malformed or incomplete input, and oversized renderings are conservatively
+declined. No supported finding means silence, not certification that the code is
+safe. Native factual text is bounded and cannot be rewritten by model inference.
+It still uses ordinary admission, publication, history, affect, speech and
+cancellation owners. A relevant private factual follow-up recomputes from the
+fresh typed saved-source context; unrelated, creative, structured and action
+requests keep their normal routes. The legacy model-review API remains available
+for its separate callers and evaluations, with its original accuracy limits.
+
+The opt-in `ReviaCompanionAwarenessLive` executable accepts a fresh isolated
+runtime directory, a new JSONL report path and one approved saved source file.
+Its preflight requires a local owned model and disables memory, audio, cloud,
+screenshots, auxiliary models and effectful tools. `--external-editor` waits for
+the exact-file watcher to deliver a real saved revision. `--expect-silence`
+requires an actual native silence decision and zero initiative comments
+through shutdown; a timeout, suppressed reply or HTTP 202 cannot satisfy it.
+The ordinary mode requires a comment and successful contextual follow-up.
+Both modes retain actual output for separate semantic and personality review.
+`--conversation-control` additionally submits ordinary story, poem and opinion
+requests to the real model. Its route/transport checks do not replace semantic
+review of those answers. Reports distinguish `native_cpp_subset` from a model
+assessment and retain broad qualification flags as pending.
+See [the continuation record](COMPANION_UPGRADE_PROGRESS.md) for current evidence
+and outstanding acceptance work.
 
 ## Conversation and privacy controls
 
@@ -108,8 +186,8 @@ turn or automatically classified into permanent memory. Only a delivered comment
 joins the normal dialogue. A substantive private follow-up may use the snapshot
 after its source and authorization are revalidated.
 
-The model may choose silence. A 202 receipt does not promise an interruption or
-establish that its code assessment is correct. **Editor awareness** activity
+The native checks may find no supported diagnostic. A 202 receipt does not promise
+an interruption or establish general code correctness. **Editor awareness** activity
 appears in the existing runtime status feed; the ordinary app-awareness pause
 control also pauses this integration. New direct input retires pending comments,
 and a newer saved revision can cancel an older optional generation.

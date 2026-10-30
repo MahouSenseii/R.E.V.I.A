@@ -1,12 +1,16 @@
 #include "Attachments/documentStore.h"
 
 #include "Actions/actionTypes.h"
+#include "Core/utf8.h"
 #include "Memory/hybridRanking.h"
 
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <set>
 #include <system_error>
 #include <unordered_map>
 
@@ -16,9 +20,80 @@ namespace
 {
 struct StatementCloser
 {
-    void operator()(sqlite3_stmt* statement) const { sqlite3_finalize(statement); }
+    void operator()(sqlite3_stmt* statement) const
+    {
+        sqlite3_finalize(statement);
+    }
 };
 using Statement = std::unique_ptr<sqlite3_stmt, StatementCloser>;
+
+bool Identifier(const std::string& value)
+{
+    return !value.empty() && value.size() <= 128 &&
+           std::all_of(
+               value.begin(), value.end(), [](const unsigned char byte) { return std::isalnum(byte) || byte == '-' || byte == '_'; });
+}
+
+bool Digest(const std::string& value)
+{
+    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](const unsigned char byte) { return std::isxdigit(byte); });
+}
+
+bool ValidProvenance(const GeneratedArtifactProvenance& value)
+{
+    const bool reference = value.mode == "reference_to_image" || value.mode == "image_to_video";
+    const bool video = value.mode == "text_to_video" || value.mode == "image_to_video";
+    return value.version == 1 && Identifier(value.jobId) && value.provider == (video ? "local_diffusers_ltx" : "local_diffusers") &&
+           !value.model.empty() && value.model.size() <= 256 && utf8::IsValid(value.model) &&
+           std::none_of(value.model.begin(), value.model.end(), [](const unsigned char byte) { return byte < 32 || byte == 127; }) &&
+           (reference || value.mode == "text_to_image" || value.mode == "text_to_video") && Digest(value.settingsDigest) &&
+           value.createdAt > 0 && value.modelRevision.size() <= 128 && utf8::IsValid(value.modelRevision) &&
+           (!video || !value.modelRevision.empty()) &&
+           std::none_of(
+               value.modelRevision.begin(), value.modelRevision.end(), [](const unsigned char byte) { return byte < 32 || byte == 127; }) &&
+           (reference ? Identifier(value.sourceId) && Digest(value.sourceDigest) : value.sourceId.empty() && value.sourceDigest.empty());
+}
+
+std::string EncodeProvenance(const GeneratedArtifactProvenance& value)
+{
+    nlohmann::json encoded = {{"version", value.version}, {"jobId", value.jobId}, {"provider", value.provider}, {"model", value.model},
+        {"mode", value.mode}, {"seed", value.seed}, {"settingsDigest", value.settingsDigest}, {"sourceId", value.sourceId},
+        {"sourceDigest", value.sourceDigest}, {"createdAt", value.createdAt}};
+    if (!value.modelRevision.empty())
+        encoded["modelRevision"] = value.modelRevision;
+    return encoded.dump();
+}
+
+std::optional<GeneratedArtifactProvenance> DecodeProvenance(const std::string& encoded)
+{
+    if (encoded.empty() || encoded.size() > 4096)
+        return {};
+    try
+    {
+        std::set<std::string> keys;
+        bool duplicate = false;
+        const auto value = nlohmann::json::parse(encoded,
+            [&](int, const nlohmann::json::parse_event_t event, nlohmann::json& parsed)
+            {
+                if (event == nlohmann::json::parse_event_t::key && !keys.insert(parsed.get<std::string>()).second)
+                    duplicate = true;
+                return true;
+            });
+        if (duplicate || !value.is_object() || (value.size() != 10 && (value.size() != 11 || !value.contains("modelRevision"))) ||
+            !value.at("version").is_number_unsigned() || value.at("version") != 1 || !value.at("seed").is_number_unsigned() ||
+            value.at("seed").get<std::uint64_t>() > UINT32_MAX || !value.at("createdAt").is_number_integer())
+            return {};
+        GeneratedArtifactProvenance result{value.at("version").get<std::uint32_t>(), value.at("jobId").get<std::string>(),
+            value.at("provider").get<std::string>(), value.at("model").get<std::string>(), value.at("mode").get<std::string>(),
+            value.at("seed").get<std::uint32_t>(), value.at("settingsDigest").get<std::string>(), value.at("sourceId").get<std::string>(),
+            value.at("sourceDigest").get<std::string>(), value.at("createdAt").get<std::int64_t>(), value.value("modelRevision", "")};
+        return ValidProvenance(result) ? std::optional{std::move(result)} : std::nullopt;
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return {};
+    }
+}
 
 bool Execute(sqlite3* database, const char* sql)
 {
@@ -55,6 +130,8 @@ AttachmentKind KindFrom(const std::string& text)
 {
     if (text == "image")
         return AttachmentKind::Image;
+    if (text == "video")
+        return AttachmentKind::Video;
     if (text == "pdf")
         return AttachmentKind::Pdf;
     if (text == "docx")
@@ -119,7 +196,9 @@ constexpr const char* Schema =
     "  pages INTEGER NOT NULL,"
     "  chunk_count INTEGER NOT NULL,"
     "  stored_path TEXT NOT NULL,"
-    "  added_at INTEGER NOT NULL"
+    "  added_at INTEGER NOT NULL,"
+    "  origin INTEGER NOT NULL DEFAULT 0,"
+    "  generated_provenance TEXT NOT NULL DEFAULT ''"
     ");"
     // An explicit INTEGER PRIMARY KEY: VACUUM may renumber an implicit rowid, which
     // would detach the search index and the vectors from their chunks.
@@ -177,12 +256,47 @@ sqlite3* DocumentStore::Acquire() const
         sqlite3_close(opened);
         return nullptr;
     }
+    bool migrated = false;
+    {
+        Transaction migration(opened);
+        auto columns = Prepare(opened, "PRAGMA table_info(documents);");
+        std::set<std::string> names;
+        if (migration.IsActive() && columns)
+        {
+            while (sqlite3_step(columns.get()) == SQLITE_ROW)
+                names.insert(ColumnText(columns.get(), 1));
+            columns.reset();
+            migrated =
+                (names.contains("origin") || Execute(opened, "ALTER TABLE documents ADD COLUMN origin INTEGER NOT NULL DEFAULT 0;")) &&
+                (names.contains("generated_provenance") ||
+                    Execute(opened, "ALTER TABLE documents ADD COLUMN generated_provenance TEXT NOT NULL DEFAULT '';")) &&
+                migration.Commit();
+        }
+    }
+    if (!migrated)
+    {
+        sqlite3_close(opened);
+        return nullptr;
+    }
     database = opened;
     return database;
 }
 
 bool DocumentStore::Add(const StoredDocument& document, const std::vector<DocumentChunk>& chunks, std::string& error)
 {
+    if ((document.origin == MediaOrigin::UserAttachment && document.generated) ||
+        (document.origin == MediaOrigin::GeneratedArtifact &&
+            (!document.generated ||
+                !((document.kind == AttachmentKind::Image && document.mimeType == "image/png" &&
+                      (document.generated->mode == "text_to_image" || document.generated->mode == "reference_to_image")) ||
+                    (document.kind == AttachmentKind::Video && document.mimeType == "video/mp4" &&
+                        (document.generated->mode == "text_to_video" || document.generated->mode == "image_to_video"))) ||
+                !ValidProvenance(*document.generated))) ||
+        (document.origin != MediaOrigin::UserAttachment && document.origin != MediaOrigin::GeneratedArtifact))
+    {
+        error = "Invalid generated media provenance was not stored.";
+        return false;
+    }
     const std::lock_guard lock(mutex);
     sqlite3* const db = Acquire();
     if (db == nullptr)
@@ -191,17 +305,18 @@ bool DocumentStore::Add(const StoredDocument& document, const std::vector<Docume
         return false;
     }
     Transaction transaction(db);
-    Statement insert = Prepare(db,
-        "INSERT INTO documents(id, name, kind, mime, bytes, digest, pages, chunk_count, stored_path, added_at) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);");
+    Statement insert = Prepare(db, "INSERT INTO documents(id, name, kind, mime, bytes, digest, pages, chunk_count, stored_path, added_at, "
+                                   "origin, generated_provenance) "
+                                   "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);");
     if (!transaction.IsActive() || !insert)
     {
         error = "The document library is busy.";
         return false;
     }
-    const std::int64_t added = document.addedAt > 0 ? document.addedAt
-                                                    : std::chrono::duration_cast<std::chrono::seconds>(
-                                                          std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::int64_t added =
+        document.addedAt > 0
+            ? document.addedAt
+            : std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     BindText(insert.get(), 1, document.id);
     BindText(insert.get(), 2, document.name);
     BindText(insert.get(), 3, ToString(document.kind));
@@ -212,6 +327,8 @@ bool DocumentStore::Add(const StoredDocument& document, const std::vector<Docume
     sqlite3_bind_int64(insert.get(), 8, static_cast<sqlite3_int64>(chunks.size()));
     BindText(insert.get(), 9, revia::actions::PathToUtf8(document.storedPath));
     sqlite3_bind_int64(insert.get(), 10, added);
+    sqlite3_bind_int(insert.get(), 11, static_cast<int>(document.origin));
+    BindText(insert.get(), 12, document.generated ? EncodeProvenance(*document.generated) : std::string());
     if (sqlite3_step(insert.get()) != SQLITE_DONE)
     {
         error = "The document could not be recorded.";
@@ -392,11 +509,11 @@ std::vector<StoredDocument> DocumentStore::List(const std::string& embeddingMode
     sqlite3* const db = Acquire();
     if (db == nullptr)
         return documents;
-    Statement query = Prepare(db,
-        "SELECT d.id, d.name, d.kind, d.mime, d.bytes, d.digest, d.pages, d.chunk_count, d.stored_path, d.added_at, "
-        "  (SELECT COUNT(*) FROM document_chunks c JOIN document_embeddings e ON e.chunk_rowid = c.rowid "
-        "   WHERE c.document_id = d.id AND e.model = ?1) "
-        "FROM documents d ORDER BY d.added_at DESC, d.rowid DESC;");
+    Statement query =
+        Prepare(db, "SELECT d.id, d.name, d.kind, d.mime, d.bytes, d.digest, d.pages, d.chunk_count, d.stored_path, d.added_at, "
+                    "  (SELECT COUNT(*) FROM document_chunks c JOIN document_embeddings e ON e.chunk_rowid = c.rowid "
+                    "   WHERE c.document_id = d.id AND e.model = ?1), d.origin, d.generated_provenance "
+                    "FROM documents d ORDER BY d.added_at DESC, d.rowid DESC;");
     if (!query)
         return documents;
     BindText(query.get(), 1, embeddingModel);
@@ -414,6 +531,11 @@ std::vector<StoredDocument> DocumentStore::List(const std::string& embeddingMode
         document.storedPath = revia::actions::Utf8ToPath(ColumnText(query.get(), 8));
         document.addedAt = sqlite3_column_int64(query.get(), 9);
         document.embeddedChunks = static_cast<std::size_t>(sqlite3_column_int64(query.get(), 10));
+        const auto origin = sqlite3_column_int64(query.get(), 11);
+        document.origin = origin == 0   ? MediaOrigin::UserAttachment
+                          : origin == 1 ? MediaOrigin::GeneratedArtifact
+                                        : static_cast<MediaOrigin>(-1);
+        document.generated = DecodeProvenance(ColumnText(query.get(), 12));
         documents.push_back(std::move(document));
     }
     return documents;

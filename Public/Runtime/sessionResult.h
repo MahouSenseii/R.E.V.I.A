@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Runtime/runtimeStamp.h"
+#include "Core/conversationMediaReference.h"
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace revia::core
 {
@@ -41,6 +43,7 @@ struct SessionResult
     RuntimeStamp stamp;
     std::uint64_t audienceRevision = 0;
     std::shared_ptr<const core::TaskContract> taskContract;
+    std::vector<conversationMediaReference> generatedMediaReferences;
 };
 
 } // namespace revia::runtime

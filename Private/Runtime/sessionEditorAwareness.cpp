@@ -166,8 +166,13 @@ bool ReviaSession::EditorObservationCurrent(const EditorObservationRecord& recor
 
 std::string ReviaSession::CurrentEditorContext() const
 {
+    return CurrentSavedFileContext().text;
+}
+
+perception::SavedFileReference ReviaSession::CurrentSavedFileContext() const
+{
     if (windowEventMonitor.IsPaused())
-        return "Saved-file awareness is paused. No current saved or unsaved editor content is available through this integration.";
+        return {false, "Saved-file awareness is paused. No current saved or unsaved editor content is available through this integration."};
     std::shared_ptr<const EditorObservationRecord> record;
     {
         std::lock_guard lock(editorObservationMutex);
@@ -175,9 +180,9 @@ std::string ReviaSession::CurrentEditorContext() const
     }
     if (!record) return {};
     if (!EditorObservationCurrent(*record))
-        return "The previous saved-file observation is no longer current or authorized. No current code is available from that "
-               "integration; do not claim to see unsaved edits or rely on the old source as a verified current revision.";
-    return perception::SavedFileContext(record->source);
+        return {false, "The previous saved-file observation is no longer current or authorized. No current code is available from that "
+                       "integration; do not claim to see unsaved edits or rely on the old source as a verified current revision."};
+    return {true, perception::SavedFileContext(record->source)};
 }
 
 void ReviaSession::ClearEditorObservation()

@@ -3,12 +3,14 @@
 #include "Runtime/affectTypes.h"
 #include "Runtime/runtimeStamp.h"
 #include "Speech/playbackEnvelope.h"
+#include "Core/conversationMediaReference.h"
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -133,6 +135,8 @@ struct RuntimeEvent
     bool usageMeasured = false;
     std::chrono::system_clock::time_point occurredAt = std::chrono::system_clock::now();
     std::shared_ptr<const speech::PlaybackEnvelope> playbackEnvelope;
+    std::optional<conversationMediaReference> generatedMediaReference;
+    std::uint64_t conversationMediaEpoch = 0;
 };
 
 std::string ToString(RuntimeState state);

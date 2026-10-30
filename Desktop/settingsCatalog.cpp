@@ -605,6 +605,18 @@ std::vector<SettingDescriptor> BuildCatalog()
         .requiresAll = {"llm.cloud.enabled"},
         .defaultValue = true,
         .keywords = {"cloud", "session", "pause"}});
+    rows.push_back({.key = "video.enabled",
+        .objectName = "sw_video_enabled",
+        .section = S::Models,
+        .group = "Videos",
+        .label = "Local short-video generation",
+        .description = "Requires the pinned local LTX setup. Uses a conservative 384 x 256, 1.96-second preset on the secondary GPU. "
+                       "Enabling this does not download models.",
+        .store = Store::SettingsFile,
+        .apply = Apply::Restart,
+        .allCompanions = true,
+        .defaultValue = false,
+        .keywords = {"video", "local", "LTX", "generate", "secondary GPU"}});
     rows.push_back({.key = "image.enabled",
         .objectName = "sw_image_enabled",
         .section = S::Models,

@@ -47,6 +47,7 @@ std::string ToString(ActionType value)
         case ActionType::WriteTextFile: return "write_text_file";
         case ActionType::ExecuteProcess: return "execute_process";
         case ActionType::GenerateImage: return "generate_image";
+        case ActionType::GenerateVideo: return "generate_video";
         case ActionType::BrowserNavigate: return "browser_navigate";
         case ActionType::BrowserObserve: return "browser_observe";
         case ActionType::BrowserClick: return "browser_click";
@@ -253,6 +254,7 @@ ActionType ActionTypeFromString(const std::string& value)
     if (normalized == "vm_write_text_file") return ActionType::VmWriteTextFile;
     if (normalized == "vm_execute_process") return ActionType::VmExecuteProcess;
     if (normalized == "generate_image") return ActionType::GenerateImage;
+    if (normalized == "generate_video") return ActionType::GenerateVideo;
     if (normalized == "browser_navigate") return ActionType::BrowserNavigate;
     if (normalized == "browser_observe") return ActionType::BrowserObserve;
     if (normalized == "browser_click") return ActionType::BrowserClick;
@@ -392,6 +394,7 @@ RiskLevel RiskForAction(ActionType value)
         case ActionType::CreateDirectory:
         case ActionType::WriteTextFile:
         case ActionType::GenerateImage:
+        case ActionType::GenerateVideo:
         case ActionType::CopyFile:
         case ActionType::MoveFile:
         case ActionType::RenamePath:

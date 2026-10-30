@@ -88,6 +88,7 @@
 #include "Windows/desktopObserver.h"
 #include "Windows/visionUiaResolver.h"
 #include "Visual/imageGenerator.h"
+#include "Visual/videoGenerator.h"
 #include "Visual/svgCanvas.h"
 #include "Windows/applicationControlDiscovery.h"
 #include "Workspace/virtualMachineRuntime.h"
@@ -303,13 +304,16 @@ class ReviaSession
     // Each is read once, checked, and copied into this companion's private store; it
     // waits there until it is sent with a message or removed. A shared or public
     // audience refuses them.
-    attachments::IntakeResult AttachFile(const std::filesystem::path& path);
+    attachments::IntakeResult AttachFile(const std::filesystem::path& path, std::stop_token stopToken = {});
     attachments::IntakeResult AttachImageData(const std::string& name, const std::string& bytes);
     bool RemoveAttachment(const std::string& id);
     // Submit with the staged files the ids name. With no ids this is Submit.
     SessionResult SubmitWithAttachments(const std::string& input, const std::vector<std::string>& attachmentIds);
     // The documents kept from earlier messages, newest first.
     [[nodiscard]] std::vector<attachments::StoredDocument> Documents();
+    [[nodiscard]] std::optional<conversationImage> DocumentImagePreview(const std::string& id);
+    [[nodiscard]] std::optional<attachments::VideoPlaybackSource> DocumentVideoPreview(const std::string& id, std::stop_token stopToken = {});
+    [[nodiscard]] std::uint64_t MediaPresentationRevision();
     [[nodiscard]] std::string DocumentPreview(const std::string& id);
     bool ForgetDocument(const std::string& id, std::string& outError);
     // The search_documents tool body: cited passages from kept documents, or why none.
@@ -554,6 +558,8 @@ class ReviaSession
     // substitute for each other: a language model emitting SVG draws boxes and arrows and
     // cannot draw a scene, and an image model draws a scene and cannot lay out a panel.
     SessionResult GenerateImage(const std::string& prompt, std::stop_token stopToken = {}, std::function<bool()> admission = {});
+    [[nodiscard]] std::uint64_t ConversationMediaEpoch() const { return conversationEpoch.load(); }
+    [[nodiscard]] visual::VideoJobSnapshot VideoGenerationSnapshot() const { return videoGenerator.Snapshot(); }
 
     // The working document. Generation is wholesale and says so; an edit reaches exactly
     // one block, because ReplaceBlock is the only mutation the edit path can express.
@@ -617,6 +623,13 @@ class ReviaSession
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
   private:
+    SessionResult GenerateImageRequest(const visual::ImageRequest& request, std::optional<conversationMediaReference> source,
+        std::stop_token stopToken, std::function<bool()> admission, bool publishTurnStates = true);
+    void DiscardGeneratedMedia(const std::vector<conversationMediaReference>& references);
+    bool PublishGeneratedMedia(const std::vector<conversationMediaReference>& references, const std::function<bool()>& admission,
+        std::uint64_t mediaEpoch);
+    SessionResult StartVideoGeneration(const std::string& input, const std::vector<conversationMediaReference>& references,
+        const agents::InputContext& captured);
     bool InitializeLearningStudio(std::string& outError);
     bool InitializeDevelopmentStudio(std::string& outError);
     bool CollectLearningCandidates(std::string& outError);
@@ -705,8 +718,8 @@ class ReviaSession
     bool TryHandleOperateInput(const std::string& input, SessionResult& result);
     bool RunOperateGoal(const std::string& request, SessionResult& result);
     // Centralizes archive enablement and sensitive-content refusal.
-    void ArchiveTurn(
-        const std::string& role, const std::string& content, const memory::MemoryScope& scope = {}, std::function<bool()> admission = {});
+    void ArchiveTurn(const std::string& role, const std::string& content, const memory::MemoryScope& scope = {},
+        std::function<bool()> admission = {}, const std::vector<conversationMediaReference>& mediaReferences = {});
     // Applies bounded subject evidence and reports changed preferences.
     void RecordPreferenceEvidence(const std::vector<identity::PreferenceObservation>& observations);
     std::string ResolveLocalSpeaker(const std::string& input, agents::InputContext& captured);
@@ -790,6 +803,10 @@ class ReviaSession
         std::string contextUser;
         std::string contextAssistant;
         std::string archivedAssistant;
+        std::vector<conversationMediaReference> mediaReferences;
+        std::vector<conversationMediaReference> generatedMediaReferences;
+        bool hasAssistant = true;
+        std::uint64_t conversationEpoch = 0;
     };
     std::optional<RetractableExchange> lastExchange;
     void RememberExchange(const agents::InputBatch& batch, const SessionResult& result, bool privateContext);
@@ -807,14 +824,17 @@ class ReviaSession
     void ReportVoiceBackend(const speech::VoiceOperationResult& prepared);
     // Shared by the immediate typed path and the merged voice path. Callers hold
     // operationMutex; the arbiter has already decided what the turn's text is.
-    SessionResult RunTurnLocked(const agents::InputBatch& batch);
+    SessionResult SubmitTurn(const std::string& input, agents::InputSource source, std::vector<attachments::StagedAttachment> files = {},
+        std::vector<conversationMediaReference> replayMedia = {}, std::function<bool()> originAdmission = {});
+    SessionResult RunTurnLocked(const agents::InputBatch& batch, std::vector<attachments::StagedAttachment> files = {},
+        std::vector<conversationMediaReference> replayMedia = {}, std::function<bool()> originAdmission = {});
     void InitializeTaskContracts();
     [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildTurnTaskContract(const agents::InputBatch& batch);
-    [[nodiscard]] std::shared_ptr<const core::TaskContract> CaptureOwnedTaskContract(const RuntimeStamp& stamp,
-        const std::string& goal, const std::string& parentTaskId = {});
+    [[nodiscard]] std::shared_ptr<const core::TaskContract> CaptureOwnedTaskContract(
+        const RuntimeStamp& stamp, const std::string& goal, const std::string& parentTaskId = {});
     [[nodiscard]] bool TaskContextCurrent(const core::TaskContract& task) const;
-    [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(const actions::ActionRequest& request,
-        const RuntimeStamp& stamp, std::stop_token stopToken);
+    [[nodiscard]] std::shared_ptr<const core::TaskContract> BuildActionTaskContract(
+        const actions::ActionRequest& request, const RuntimeStamp& stamp, std::stop_token stopToken);
     [[nodiscard]] std::string TaskContractRefusal(const core::TaskContract& task, std::stop_token stopToken) const;
     // The owner's allowlisted MCP tools for one private turn, behind the confirmation
     // handler and the action audit. Empty when no server is enabled or the audit is down.
@@ -836,7 +856,8 @@ class ReviaSession
     // voice drain and adapter loops have no one above them to catch it, and every caller
     // would otherwise be left with busy set and nothing ever clearing it.
     SessionResult GuardTurn(const std::function<SessionResult()>& turn);
-    SessionResult RunTurnUnguarded(const agents::InputBatch& batch);
+    SessionResult RunTurnUnguarded(const agents::InputBatch& batch, std::vector<attachments::StagedAttachment> turnFiles = {},
+        std::vector<conversationMediaReference> replayMedia = {}, std::function<bool()> originAdmission = {});
     SessionResult ActOnScreenLocked(const std::string& instruction);
     // Runs a background worker's loop until stop is requested. Nothing thrown may leave
     // a worker thread -- an exception escaping a std::jthread ends the process -- so a
@@ -865,6 +886,7 @@ class ReviaSession
     };
     [[nodiscard]] bool EditorObservationCurrent(const EditorObservationRecord& observation) const;
     [[nodiscard]] std::string CurrentEditorContext() const;
+    [[nodiscard]] perception::SavedFileReference CurrentSavedFileContext() const;
     void ClearEditorObservation();
     void ExpireEditorObservation(std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
     // Called with operationMutex held before private history is read or extended.
@@ -896,7 +918,8 @@ class ReviaSession
 
     // Background tasks. One runs at a time on its own thread with its own stop source,
     // so she can keep talking while she works and a new message never cancels it.
-    bool LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage);
+    bool LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage,
+        bool videoGeneration = false);
     struct TaskContext
     {
         identity::AudienceContext audience;
@@ -925,11 +948,12 @@ class ReviaSession
     // one: a turn only searches documents when the user has attached some.
     attachments::AttachmentLibrary& Attachments();
     attachments::AttachmentLibrary* AttachmentsIfPresent();
+    void DrainForgottenMedia();
     [[nodiscard]] std::optional<std::string> AttachmentRefusal() const;
     // This turn's attached files and any passages from earlier ones, as the turn
     // reference and the pictures for the newest message.
     attachments::TurnAttachments PrepareTurnAttachments(const std::string& input, std::vector<attachments::StagedAttachment> files,
-        std::stop_token stopToken);
+        std::stop_token stopToken, const std::vector<conversationMediaReference>& references = {});
     // The goal runner serves one goal at a time: work that needs it while a task holds
     // it is refused here, with a way out. Returns true when it refused.
     bool RefuseWhileTaskRuns(SessionResult& result);
@@ -1179,6 +1203,7 @@ class ReviaSession
     improvement::ImprovementAgent improvementAgent;
     visual::DiagramStore diagramStore;
     visual::ImageGenerator imageGenerator;
+    visual::VideoGenerator videoGenerator;
     // Declared after borrowed collaborators so it is destroyed first.
     DocumentWorkshop documentWorkshop;
     // The guest code tools' projects and generated files. Outlives every turn's tool executors.
@@ -1282,6 +1307,9 @@ class ReviaSession
         std::string progress;
         RuntimeStamp stamp;
         TaskContext context;
+        bool videoGeneration = false;
+        std::optional<conversationMediaReference> generatedMedia;
+        std::uint64_t mediaEpoch = 0;
     };
     struct TaskReport
     {
@@ -1297,8 +1325,7 @@ class ReviaSession
     // Before the library: its embedding worker calls this, so it must be destroyed after.
     llamaCppEmbeddingService documentEmbeddings;
     std::unique_ptr<attachments::AttachmentLibrary> attachmentLibrary;
-    // Files handed from SubmitWithAttachments to the typed turn it starts.
-    std::vector<attachments::StagedAttachment> pendingTurnAttachments;
+    std::vector<std::string> forgottenMedia;
     // Documents attached a turn or two ago, which a short follow-up is probably about.
     std::vector<std::string> recentDocumentIds;
     int recentDocumentTurns = 0;

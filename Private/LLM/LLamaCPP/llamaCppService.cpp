@@ -12,6 +12,10 @@
 #include "Identity/promptMarkers.h"
 
 #include "LLM/tokenEstimate.h"
+#include "LLM/imageTokenBudget.h"
+#include "LLM/imagePromptGuidance.h"
+#include "LLM/videoFrameReply.h"
+#include "Attachments/videoSelection.h"
 #include "Memory/memoryAttribution.h"
 #include "Memory/sensitiveContent.h"
 #include "Agents/conversationStylePolicy.h"
@@ -870,19 +874,18 @@ namespace
         return ImageDataUrl("image/png", bytes);
     }
 
-    // Tokens a picture costs the vision projector, from its size: Qwen-VL projectors
-    // spend one token per 28x28 patch after merging. An estimate, used to keep room in
-    // the context; the server still reports a real overflow.
-    std::size_t ImageTokenAllowance(const conversationImage& image)
+    void AppendImageGuidance(json& messages)
     {
-        const std::size_t width = std::max<std::uint32_t>(image.width, 28);
-        const std::size_t height = std::max<std::uint32_t>(image.height, 28);
-        return std::min<std::size_t>(((width + 27) / 28) * ((height + 27) / 28) + 16, 4096);
+        for (auto message = messages.rbegin(); message != messages.rend(); ++message)
+        {
+            if (!message->is_object() || message->value("role", "") != "user" || !(*message)["content"].is_string())
+                continue;
+            (*message)["content"].get_ref<std::string&>() += "\n\n" + revia::llm::UploadedImageGuidance(true);
+            break;
+        }
     }
 
-    // The newest user message carries this turn's pictures as image_url parts beside
-    // its text, the way AnalyzeImage sends a screen capture. Fitting and token counting
-    // run on the text-only messages first; the pictures are attached last.
+    // Fit and count the text first, then attach this turn's pixels to the newest user message.
     json WithImageParts(json messages, const std::vector<conversationImage>& images, const std::string& unsentNote)
     {
         for (auto message = messages.rbegin(); message != messages.rend(); ++message)
@@ -898,9 +901,15 @@ namespace
                 break;
             }
             json parts = json::array({{{"type", "text"}, {"text", text}}});
+            std::size_t imageIndex = 0;
             for (const conversationImage& image : images)
                 if (image.bytes && !image.bytes->empty())
+                {
+                    // Consecutive equal-sized images can be fused as video frames by Qwen-VL backends.
+                    if (images.size() > 1)
+                        parts.push_back({{"type", "text"}, {"text", "Image " + std::to_string(++imageIndex) + ":"}});
                     parts.push_back({{"type", "image_url"}, {"image_url", {{"url", ImageDataUrl(image.mimeType, *image.bytes)}}}});
+                }
             (*message)["content"] = std::move(parts);
             break;
         }
@@ -951,7 +960,7 @@ namespace
 
     std::optional<std::size_t> CountBackendPrompt(const std::string& host, const int port, const std::string& apiKey,
         const std::string& model, const json& messages, const bool thinking, const std::stop_token stopToken,
-        const json& tools = json::array())
+        const json& tools = json::array(), const json& responseFormat = json::object())
     {
         if (!messages.is_array() || messages.empty() || stopToken.stop_requested())
             return std::nullopt;
@@ -1008,6 +1017,8 @@ namespace
             // The template renders the tool list into the prompt, so it is counted too.
             if (tools.is_array() && !tools.empty())
                 body["tools"] = tools;
+            if (!responseFormat.empty())
+                body["response_format"] = responseFormat;
             const auto rendered = post("/apply-template", body);
             if (!rendered || !rendered->contains("prompt") || !(*rendered)["prompt"].is_string())
                 return std::nullopt;
@@ -1310,6 +1321,7 @@ void llamaCppService::ApplySettings(const llmSettings& settings, const embedding
     apiKey = settings.apiKey;
     bVerifyServerKey = settings.bVerifyServerKey;
     bVisionExpected = settings.bVisionEnabled;
+    imageMinTokens = std::clamp(settings.imageMinTokens, 0, 4096);
     bStablePromptPrefix = settings.bStablePromptPrefix;
     bAllowPromptCache = settings.bAllowPromptCache;
     configuredContextTokens = std::max(1, settings.contextSize);
@@ -1449,10 +1461,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
     std::string posture;
     std::string replyNote;
+    bool sourceExplanation = false;
     {
         std::lock_guard postureLock(postureMutex);
         posture = activePosture;
         replyNote = activeReplyNote;
+        sourceExplanation = activeSourceExplanation;
     }
 
     const auto priorityParagraphs = CaptureTurnPriorityParagraphs(posture);
@@ -1470,22 +1484,63 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                               ", but this model was not started with image support, so it was not sent. Say so plainly and do not "
                               "guess what it shows.]";
     }
+    const bool factualImageInspection =
+        latestUser != context.rend() &&
+        std::any_of(turnImages.begin(), turnImages.end(), [](const auto& image) { return image.bytes && !image.bytes->empty(); }) &&
+        revia::llm::UseFactualImageInspection(latestUser->content);
+    const bool currentVideoInspection =
+        factualImageInspection && !offerTools && latestUser == context.rbegin() && latestUser->mediaReferences.size() == 1 &&
+        (latestUser->mediaReferences.front().mimeType == "video/mp4" || latestUser->mediaReferences.front().mimeType == "video/webm");
+    const bool boundedFrameReply = currentVideoInspection && !jsonReply && revia::llm::AllowsVideoFrameReplyFormat(latestUser->content) &&
+                                   !revia::attachments::RequestsVideoTranscript(latestUser->content);
+    revia::llm::VideoFrameReplyOptions frameReplyOptions;
+    nlohmann::ordered_json frameResponseFormat = nlohmann::ordered_json::object();
+    int schemaAllowance = 0;
+    if (boundedFrameReply)
+    {
+        frameReplyOptions.requestedRegions = revia::llm::RequestedVideoFrameRegions(latestUser->content);
+        frameReplyOptions.includeLiteralText = revia::llm::RequestsVideoFrameLiteralText(latestUser->content);
+        frameReplyOptions.includeVisibleFacts = revia::llm::RequestsVideoFrameOverview(latestUser->content);
+        std::string schemaError;
+        const auto schema = revia::llm::BuildVideoFrameReplySchema(turnImages, frameReplyOptions.requestedRegions, schemaError);
+        if (schema.empty())
+        {
+            output.response = "Sampled video review is unavailable: " + schemaError;
+            output.reason = schemaError;
+            return output;
+        }
+        frameResponseFormat = {{"type", "json_schema"},
+            {"json_schema", {{"name", "sampled_video_frames"}, {"strict", true}, {"schema", nlohmann::ordered_json::parse(schema)}}}};
+        // Reserve the schema conservatively even when backend grammar is outside its text template.
+        schemaAllowance = static_cast<int>(revia::llm::EstimateTokens(frameResponseFormat.dump()));
+        output.timings.push_back({"video_schema_allowance", static_cast<double>(schemaAllowance), false, "tok"});
+    }
     int imageTokens = 0;
     for (const conversationImage& image : turnImages)
-        imageTokens += static_cast<int>(ImageTokenAllowance(image));
+        imageTokens += static_cast<int>(revia::llm::AttachmentImageTokenAllowance(image.width, image.height, imageMinTokens));
     json requestBody;
-    json messages = builder.BuildMessages(
-        activeProfile,
-        context,
-        queryEmbedding.values,
-        queryEmbedding.bSuccess ? queryEmbedding.model : "",
-        &output.timings,
-        posture,
-        &output.promptSections,
-        memoryAccess,
-        replyNote,
-        bStablePromptPrefix,
-        stopToken);
+    json messages =
+        builder.BuildMessages(activeProfile, context, queryEmbedding.values, queryEmbedding.bSuccess ? queryEmbedding.model : "",
+            &output.timings, posture, &output.promptSections, memoryAccess, replyNote, bStablePromptPrefix, stopToken);
+    const auto inputMessageCount = messages.size();
+    bool omittedVideoHistory = false;
+    if (currentVideoInspection && messages.size() > 2 && messages.front().value("role", "") == "system" &&
+        messages.back().value("role", "") == "user" &&
+        std::all_of(messages.begin() + 1, messages.end() - 1,
+            [](const auto& message) { return message.value("role", "") == "user" || message.value("role", "") == "assistant"; }))
+    {
+        std::size_t omittedCharacters = 0;
+        for (auto message = messages.begin() + 1; message != messages.end() - 1; ++message)
+            omittedCharacters += message->at("content").get_ref<const std::string&>().size();
+        // Earlier answers can anchor sampled-frame observations to an obsolete template. Stored dialogue stays with its owner.
+        messages = json::array({messages.front(), messages.back()});
+        omittedVideoHistory = true;
+        for (auto& section : output.promptSections)
+            if (section.name == "history")
+                section.characters -= std::min(section.characters, omittedCharacters);
+    }
+    if (!turnImages.empty() && replyNote.find(revia::llm::ImageReferenceGuard) == std::string::npos)
+        AppendImageGuidance(messages);
 
     const auto requestPreparationStarted = std::chrono::steady_clock::now();
 
@@ -1493,7 +1548,10 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // use their configured budget so a normal answer is not chopped off at 256 tokens.
     const int activeContextTokens = effectiveContextTokens.load();
     // Room for the pictures is taken from the text's share of the context.
-    const int contextTokens = std::max(1, (activeContextTokens > 0 ? activeContextTokens : configuredContextTokens) - imageTokens);
+    const int contextTokens =
+        std::max(1, (activeContextTokens > 0 ? activeContextTokens : configuredContextTokens) - imageTokens - schemaAllowance);
+    if (boundedFrameReply)
+        output.timings.push_back({"video_image_allowance", static_cast<double>(imageTokens), false, "tok"});
     const int requestedResponse = briefSocial ? std::min(128, ResponseTokenLimit()) : ResponseTokenLimit();
     const int answerTokens = std::clamp(requestedResponse, 1, std::max(1, contextTokens / 4));
     // Thinking tokens count against max_tokens. Sharing the answer's budget let a long
@@ -1522,16 +1580,16 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                                           : 0;
 
     const json originalMessages = messages;
-    auto measured =
-        CountBackendPrompt(host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions);
+    auto measured = CountBackendPrompt(
+        host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions, frameResponseFormat);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
         messages = BoundMessagesForContext(messages, contextTokens, responseTokens + fittingReserve, priorityParagraphs);
         if (measured && !messages.empty())
         {
-            measured =
-                CountBackendPrompt(host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions);
+            measured = CountBackendPrompt(
+                host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions, frameResponseFormat);
             if (measured && *measured > static_cast<std::size_t>(std::max<long long>(0, usableTokens)))
                 messages = json::array();
         }
@@ -1542,11 +1600,18 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         output.reason = "Conversation generation was cancelled during token accounting.";
         return output;
     }
+    std::string fitReason =
+        omittedVideoHistory
+            ? (messages == originalMessages
+                      ? "Earlier dialogue omitted for the current sampled-video inspection; stored conversation is unchanged."
+                      : "Earlier dialogue omitted for the current sampled-video inspection; the prepared prompt was compacted.")
+            : (messages == originalMessages ? "Full admitted prompt retained."
+                                            : "Prompt compacted to preserve the latest request and bounded recent dialogue.");
+    if (boundedFrameReply)
+        fitReason += " Native frame images and the bounded response schema have separate conservative token allowances.";
     output.contextFit = {true, measured.has_value(), measured.value_or(ConservativePromptCost(messages)),
-        static_cast<std::size_t>(contextTokens), static_cast<std::size_t>(responseTokens), ContextReserveTokens, originalMessages.size(),
-        messages.size(),
-        messages == originalMessages ? "Full admitted prompt retained."
-                                     : "Prompt compacted to preserve the latest request and bounded recent dialogue."};
+        static_cast<std::size_t>(contextTokens), static_cast<std::size_t>(responseTokens), ContextReserveTokens, inputMessageCount,
+        messages.size(), fitReason};
     if (messages.empty())
     {
         output.response = "The model context is too small for this request.";
@@ -1556,9 +1621,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const json textMessages = messages;
     requestBody["model"] = modelName;
     // Pictures ride on the newest user message; earlier tool steps follow it.
-    requestBody["messages"] = withTranscript(turnImages.empty() && unsentImageNote.empty()
-            ? std::move(messages)
-            : WithImageParts(std::move(messages), turnImages, unsentImageNote));
+    requestBody["messages"] =
+        withTranscript(turnImages.empty() && unsentImageNote.empty() ? std::move(messages)
+                                                                     : WithImageParts(std::move(messages), turnImages, unsentImageNote));
     if (offerTools)
     {
         requestBody["tools"] = toolDefinitions;
@@ -1567,7 +1632,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         // the model wants together can then run together.
         requestBody["parallel_tool_calls"] = true;
     }
-    requestBody["temperature"] = temperature;
+    requestBody["temperature"] = factualImageInspection ? 0.0F : sourceExplanation ? std::min(temperature, 0.2F) : temperature;
     requestBody["max_tokens"] = responseTokens;
     requestBody["stream"] = true;
     requestBody["cache_prompt"] = bAllowPromptCache;
@@ -1585,7 +1650,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             {"type", "json_schema"},
             {"json_schema", {{"name", "requested_reply"}, {"strict", true}, {"schema", json::parse(replyContract.schemaJson)}}}};
     }
-    else
+    else if (boundedFrameReply)
+        requestBody["response_format"] = frameResponseFormat;
+    else if (!factualImageInspection)
     {
         requestBody["dry_multiplier"] = 0.8;
         requestBody["dry_base"] = 1.75;
@@ -1611,6 +1678,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
     int responseStatus = 0;
     std::string errorBody;
+    bool completeStream = false;
+    bool frameReplyLimitExceeded = false;
     constexpr std::size_t MaximumErrorBodyBytes = 4096;
     // A bounded lookahead lets the final byte cut recognize an incomplete code point
     // at the capture limit, including when transport chunks split that character.
@@ -1619,6 +1688,14 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     httplib::Request req;
     req.method = "POST";
     req.path = "/v1/chat/completions";
+    const auto serializeRequest = [&]()
+    {
+        if (!boundedFrameReply)
+            return requestBody.dump();
+        nlohmann::ordered_json ordered = requestBody;
+        ordered["response_format"] = frameResponseFormat;
+        return ordered.dump();
+    };
     // Serialization can fail, and a failed turn is not a reason to end the process.
     //
     // nlohmann throws on text that is not valid UTF-8. Compaction no longer produces
@@ -1628,7 +1705,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // reported failure instead of an exception travelling up a worker thread.
     try
     {
-        req.body = requestBody.dump();
+        req.body = serializeRequest();
     }
     catch (const std::exception& error)
     {
@@ -1644,11 +1721,19 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
     req.content_receiver = [&](const char* data, size_t length, uint64_t /*offset*/, uint64_t /*total*/) -> bool
     {
+        if (boundedFrameReply && stopToken.stop_requested())
+            return false;
         if (responseStatus != 200)
         {
             if (errorBody.size() < ErrorCaptureBytes)
                 errorBody.append(data, std::min(length, ErrorCaptureBytes - errorBody.size()));
             return true;
+        }
+        constexpr std::size_t MaximumFrameStreamLineBytes = revia::llm::MaximumVideoFrameReplyBytes * 2 + 16384;
+        if (boundedFrameReply && length > MaximumFrameStreamLineBytes - buffer.size())
+        {
+            frameReplyLimitExceeded = true;
+            return false;
         }
         buffer.append(data, length);
 
@@ -1661,11 +1746,17 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             if (!line.empty() && line.back() == '\r')
                 line.pop_back();
 
-            if (line.empty()) continue;
-            if (line.rfind("data: ", 0) != 0) continue;
+            if (line.empty())
+                continue;
+            if (line.rfind("data: ", 0) != 0)
+                continue;
 
             const std::string jsonStr = line.substr(6);
-            if (jsonStr == "[DONE]") continue;
+            if (jsonStr == "[DONE]")
+            {
+                completeStream = true;
+                continue;
+            }
 
             StreamEvent event = ParseStreamEvent(line);
             if (!event.finishReason.empty())
@@ -1674,8 +1765,13 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                 backendTimings = std::move(event.timings);
             if (!event.reasoning.empty())
             {
+                if (boundedFrameReply && event.reasoning.size() > revia::llm::MaximumVideoFrameReplyBytes - nativeReasoning.size())
+                {
+                    frameReplyLimitExceeded = true;
+                    return false;
+                }
                 nativeReasoning += event.reasoning;
-                if (onReasoning)
+                if (onReasoning && !boundedFrameReply)
                     onReasoning(event.reasoning);
             }
             for (const auto& fragment : event.toolCalls)
@@ -1704,15 +1800,21 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                     call.arguments += fragment.arguments.substr(0, MaximumToolArgumentBytes - call.arguments.size());
             }
             const std::string& token = event.content;
-            if (token.empty()) continue;
+            if (token.empty())
+                continue;
 
             if (!firstTokenAt)
             {
                 firstTokenAt = std::chrono::steady_clock::now();
             }
 
+            if (boundedFrameReply && token.size() > revia::llm::MaximumVideoFrameReplyBytes - fullResponse.size())
+            {
+                frameReplyLimitExceeded = true;
+                return false;
+            }
             fullResponse += token;
-            if (jsonReply)
+            if (jsonReply || boundedFrameReply)
                 continue;
 
             // An unterminated <think> keeps its content out of visibleResponse, so nothing
@@ -1774,10 +1876,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         // generation reservation unchanged and halve the already bounded prompt.
         std::size_t promptCost = 0;
         for (const auto& message : textMessages)
-            promptCost += message["content"].get_ref<const std::string&>().size() +
-                revia::llm::ChatTemplateTokensPerMessage;
-        auto retryMessages =
-            BoundMessagesForContext(textMessages, contextTokens, responseTokens, priorityParagraphs, promptCost / 2);
+            promptCost += message["content"].get_ref<const std::string&>().size() + revia::llm::ChatTemplateTokensPerMessage;
+        auto retryMessages = BoundMessagesForContext(textMessages, contextTokens, responseTokens, priorityParagraphs, promptCost / 2);
         if (!retryMessages.empty())
         {
             const std::size_t retryCost = ConservativePromptCost(retryMessages);
@@ -1788,7 +1888,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             output.contextFit.promptTokens = retryCost;
             output.contextFit.retainedMessages = requestBody["messages"].size();
             output.contextFit.reason = "Backend context overflow; one smaller byte-conservative retry.";
-            req.body = requestBody.dump(); // Valid UTF-8 was established by the first serialization.
+            req.body = serializeRequest(); // Valid UTF-8 was established by the first serialization.
             buffer.clear();
             errorBody.clear();
             finishReason.clear();
@@ -1797,25 +1897,30 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             requestedCalls.clear();
             requestedIndexes.clear();
             responseStatus = 0;
+            completeStream = false;
             result = client.send(req);
         }
     }
     const double requestMilliseconds = ElapsedMilliseconds(requestStarted);
     inferenceLease = {};
-    const double firstTokenMilliseconds = firstTokenAt
-        ? std::chrono::duration<double, std::milli>(*firstTokenAt - requestStarted).count()
-        : requestMilliseconds;
+    const double firstTokenMilliseconds =
+        firstTokenAt ? std::chrono::duration<double, std::milli>(*firstTokenAt - requestStarted).count() : requestMilliseconds;
     output.timings.push_back({"llama_wait_first_token", firstTokenMilliseconds});
-    output.timings.push_back({
-        "llama_decode_after_first_token",
-        std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
+    output.timings.push_back({"llama_decode_after_first_token", std::max(0.0, requestMilliseconds - firstTokenMilliseconds)});
     output.timings.push_back({"llama_request_total", requestMilliseconds, true});
     AppendBackendTimings(output.timings, backendTimings);
 
-    std::string cleanedResponse = jsonReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
-    if (const std::string separated = TrimWhitespace(nativeReasoning); !separated.empty())
+    std::string cleanedResponse =
+        jsonReply || boundedFrameReply ? TrimWhitespace(fullResponse) : VisibleReplyText(fullResponse, &output.reasoning);
+    if (const std::string separated = boundedFrameReply ? std::string() : TrimWhitespace(nativeReasoning); !separated.empty())
         output.reasoning = output.reasoning.empty() ? separated : separated + "\n" + output.reasoning;
 
+    if (boundedFrameReply && frameReplyLimitExceeded)
+    {
+        output.response = "The local model exceeded the bounded frame review response limit. No partial review was delivered.";
+        output.reason = "Sampled-video response exceeded its capture bounds.";
+        return output;
+    }
     if (!result)
     {
         output.bSuccess = false;
@@ -1831,7 +1936,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     if (result->status != 200)
     {
         output.bSuccess = false;
-        output.response = "My local llama.cpp backend returned an error.";
+        output.response = boundedFrameReply ? "Sampled video review is unavailable because the local backend refused its bounded request."
+                                            : "My local llama.cpp backend returned an error.";
         const std::string boundedError = revia::utf8::Prefix(errorBody.empty() ? result->body : errorBody, MaximumErrorBodyBytes);
         if (offerTools && RejectsTools(result->status, boundedError))
         {
@@ -1845,10 +1951,34 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         }
         const std::string preview =
             revia::utf8::IsValid(boundedError) ? revia::utf8::Prefix(boundedError, 1024) : "[backend error body contained malformed UTF-8]";
-        output.reason = "llama.cpp server returned HTTP status " + std::to_string(result->status) + ": " + preview;
+        output.reason = (boundedFrameReply ? "Bounded sampled-video request failed (HTTP " : "llama.cpp server returned HTTP status ") +
+                        std::to_string(result->status) + (boundedFrameReply ? "): " : ": ") + preview;
         output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
+    }
+
+    if (boundedFrameReply)
+    {
+        if (stopToken.stop_requested())
+        {
+            output.response = "I stopped that frame review.";
+            output.reason = "Sampled-video review was cancelled before delivery.";
+            return output;
+        }
+        if (finishReason != "stop" || !completeStream)
+        {
+            output.response = "The local model did not finish a complete bounded frame review. No partial review was delivered.";
+            output.reason = "Sampled-video response stream was incomplete or truncated.";
+            return output;
+        }
+        const auto rendered = revia::llm::ParseVideoFrameReply(cleanedResponse, turnImages, frameReplyOptions);
+        if (!rendered.ok)
+        {
+            output.response = output.reason = rendered.error;
+            return output;
+        }
+        cleanedResponse = rendered.text;
     }
 
     if (jsonReply && (finishReason == "length" || !revia::agents::MatchesReplyContract(cleanedResponse, replyContract)))
@@ -1907,6 +2037,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     // it mid-word. Emitted here rather than beside the terminal flush so a cancelled or
     // failed request, which returns above, never delivers a tail for a reply that is not
     // going to be used.
+    if (boundedFrameReply && stopToken.stop_requested())
+    {
+        output.response = "I stopped that frame review.";
+        output.reason = "Sampled-video review was cancelled before delivery.";
+        return output;
+    }
     if (onDelta && cleanedResponse.size() > printedLength)
     {
         onDelta(cleanedResponse.substr(printedLength));
@@ -1931,12 +2067,19 @@ void llamaCppService::SetPosture(std::string posture)
     // A note belongs to the turn its posture was set for. Cleared here so a turn that
     // sets a posture and no note cannot inherit the previous turn's conclusion.
     activeReplyNote.clear();
+    activeSourceExplanation = false;
 }
 
 void llamaCppService::SetReplyNote(std::string note)
 {
     std::lock_guard postureLock(postureMutex);
     activeReplyNote = std::move(note);
+}
+
+void llamaCppService::SetSourceExplanation(const bool enabled)
+{
+    std::lock_guard postureLock(postureMutex);
+    activeSourceExplanation = enabled;
 }
 
 responseOutput llamaCppService::GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken) const
@@ -2122,9 +2265,12 @@ responseOutput llamaCppService::GenerateGoalPlan(const std::string& userRequest)
         revia::planning::GoalPlanner::PlannerPrompt(), userRequest, 1536);
 }
 
-responseOutput llamaCppService::GenerateCodeReview(const std::string& instructions,
-    const std::string& material, const std::string& schema, const std::stop_token stopToken) const
+responseOutput llamaCppService::GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
+    const std::stop_token stopToken, const revia::llm::CodeReviewPurpose purpose) const
 {
+    if (purpose == revia::llm::CodeReviewPurpose::SavedObservation)
+        return GeneratePlannerResponse(instructions, material, 384, true, stopToken, revia::llm::InferencePriority::Background, 0.6F,
+            "saved source review", schema, std::min(768, thinkingTokens));
     // Room for a forty-line replacement and the prose that justifies it. Low temperature:
     // this is judgement about code, and a creative answer is a wrong one.
     return GeneratePlannerResponse(
@@ -2258,7 +2404,7 @@ Preserve the answer's useful content and Revia's voice when replacing it. Do not
 
 responseOutput llamaCppService::GeneratePlannerResponse(const std::string& systemPrompt, const std::string& userRequest,
     const int maxTokens, const bool structuredJson, const std::stop_token stopToken, const revia::llm::InferencePriority priority,
-    const float requestTemperature, const std::string& operation, const std::string& responseSchema) const
+    const float requestTemperature, const std::string& operation, const std::string& responseSchema, const int reasoningBudget) const
 {
     responseOutput output;
     output.bShouldSpeak = false;
@@ -2278,40 +2424,47 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
     // by the two-minute limit every other planning call is comfortable inside.
     client.set_read_timeout(operation == "self code review" ? 360 : 120);
 
-    json requestBody = {
-        {"model", modelName},
-        {"messages", json::array({
-            {{"role", "system"}, {"content", systemPrompt}},
-            {{"role", "user"}, {"content", userRequest}}
-        })},
+    nlohmann::ordered_json requestBody = {{"model", modelName},
+        {"messages", json::array({{{"role", "system"}, {"content", systemPrompt}}, {{"role", "user"}, {"content", userRequest}}})},
         {"temperature", std::clamp(requestTemperature, 0.0F, 2.0F)},
-        {"max_tokens", std::clamp(maxTokens, 32, 4096)},
+        {"max_tokens", std::clamp(maxTokens, 32, 4096) + std::clamp(reasoningBudget, 0, 768)},
         // Streamed only so a cancelled request frees the server at once; the text is
         // assembled locally and nothing is delivered until it is complete.
-        {"stream", true},
-        {"stream_options", {{"include_usage", true}}}
-    };
+        {"stream", true}, {"stream_options", {{"include_usage", true}}}};
     if (operation == "private creation")
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
     if (structuredJson)
     {
         requestBody["response_format"] = {{"type", "json_object"}};
+        // Saved review generates evidence before its verdict; other planners retain their existing sorted schema order.
         if (!responseSchema.empty())
-            requestBody["response_format"] = {
-                {"type", "json_schema"}, {"json_schema", {
-                    {"name", "bounded_planning"}, {"strict", true},
-                    {"schema", json::parse(responseSchema)}}}};
+            requestBody["response_format"] = {{"type", "json_schema"},
+                {"json_schema",
+                    {{"name", "bounded_planning"}, {"strict", true},
+                        {"schema", operation == "saved source review" ? nlohmann::ordered_json::parse(responseSchema)
+                                                                     : nlohmann::ordered_json(json::parse(responseSchema))}}}};
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
         // Not for a code review. DRY penalises repeating text that is already in the
         // context, and a review's whole job is to repeat the code it replaces exactly
         // and then most of it again as the replacement. With it on, she shortened the
         // lines she meant with "...", dropped their indentation, and replies ended
         // mid-string, and the edit could never be found in the file.
-        if (operation != "self code review")
+        if (operation != "self code review" && operation != "saved source review")
         {
             requestBody["dry_multiplier"] = 0.8;
             requestBody["dry_penalty_last_n"] = 4096;
         }
+    }
+
+    if (operation == "saved source review")
+    {
+        requestBody["chat_template_kwargs"] = {{"enable_thinking", reasoningBudget > 0}};
+        requestBody["reasoning_budget_tokens"] = std::clamp(reasoningBudget, 0, 768);
+        requestBody["top_k"] = 20;
+        requestBody["top_p"] = 0.95;
+        requestBody["min_p"] = 0.0;
+        requestBody["presence_penalty"] = 0.0;
+        requestBody["dry_multiplier"] = 0.0;
     }
 
     // Encoded before the queue, and caught, as the conversation path does. nlohmann
@@ -2382,6 +2535,11 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
         {
             output.reason = operation +
                 " response was missing choices[0].message.content.";
+            return output;
+        }
+        if (operation == "saved source review" && response["choices"][0].value("finish_reason", "") == "length")
+        {
+            output.reason = "The saved-source assessment reached its output token limit.";
             return output;
         }
 

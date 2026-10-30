@@ -38,16 +38,18 @@ int VectorCount(const std::string& path)
     sqlite3* database = nullptr;
     Check(sqlite3_open(path.c_str(), &database) == SQLITE_OK, "Archive fixture count did not open.");
     sqlite3_stmt* statement = nullptr;
-    const bool prepared = sqlite3_prepare_v2(database, "SELECT COUNT(*) FROM conversation_embeddings;", -1, &statement, nullptr) == SQLITE_OK;
+    const bool prepared =
+        sqlite3_prepare_v2(database, "SELECT COUNT(*) FROM conversation_embeddings;", -1, &statement, nullptr) == SQLITE_OK;
     const int result = prepared && sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_int(statement, 0) : -1;
-    if (statement) sqlite3_finalize(statement);
+    if (statement)
+        sqlite3_finalize(statement);
     sqlite3_close(database);
     Check(result >= 0, "Archive embedding count failed.");
     return result;
 }
 
-ArchivedTurn Add(ConversationArchive& archive, const std::string& session, const std::string& content,
-    const MemoryScope& scope, const std::string& role = "user")
+ArchivedTurn Add(ConversationArchive& archive, const std::string& session, const std::string& content, const MemoryScope& scope,
+    const std::string& role = "user")
 {
     std::string error;
     Check(archive.BeginSession(session, error) && archive.Record(session, role, content, error, scope),
@@ -82,8 +84,8 @@ void TestArchiveHybridRecallKeepsGates()
     Check(lexicalOnly.size() == 1 && lexicalOnly.front().id == lexical.id, "Lexical archive fallback changed.");
     const auto hybrid = archive.SearchHybrid(request, 2, alice, {1.0F, 0.0F}, "fixture-model");
     Check(hybrid.size() == 2 && hybrid.front().id == semantic.id, "Archive hybrid did not recover the paraphrased turn.");
-    Check(std::all_of(hybrid.begin(), hybrid.end(), [&](const auto& turn)
-        { return turn.scope.participantId == alice.participantId; }), "Semantic archive recall crossed participant scope.");
+    Check(std::all_of(hybrid.begin(), hybrid.end(), [&](const auto& turn) { return turn.scope.participantId == alice.participantId; }),
+        "Semantic archive recall crossed participant scope.");
     Check(archive.SearchHybrid({}, 2, alice, {1.0F, 0.0F}, "fixture-model").empty(),
         "An unrequested archive lookup admitted semantic results.");
     auto shared = alice;
@@ -97,8 +99,8 @@ void TestArchiveHybridRecallKeepsGates()
     for (const auto& vector : std::vector<std::vector<float>>{{1.0F}, {0.0F, 0.0F}, {std::numeric_limits<float>::quiet_NaN(), 0.0F}})
     {
         const auto fallback = archive.SearchHybrid(request, 2, alice, vector, "fixture-model");
-        Check(fallback.size() == 1 && fallback.front().id == lexical.id,
-            "Invalid or wrong-dimension query did not retain lexical fallback.");
+        Check(
+            fallback.size() == 1 && fallback.front().id == lexical.id, "Invalid or wrong-dimension query did not retain lexical fallback.");
     }
     Check(archive.SearchHybrid(request, 2, alice, {1.0F, 0.0F}, "wrong-model").size() == 1,
         "Archive compared vectors from different models.");
@@ -119,7 +121,7 @@ void TestArchiveTimeAndVoiceGates()
     voiceScope.consentRevision = 9;
     Add(archive, "voice", "Another porcelain bowl.", voiceScope);
     Sql(path, "UPDATE conversation_turns SET created_at=CASE session_id "
-        "WHEN 'older' THEN '100' WHEN 'recent' THEN '200' WHEN 'voice' THEN '220' ELSE '400' END;");
+              "WHEN 'older' THEN '100' WHEN 'recent' THEN '200' WHEN 'voice' THEN '220' ELSE '400' END;");
     for (const auto& session : {"older", "recent", "future", "voice"})
     {
         const auto turn = archive.LoadSession(session).front();
@@ -160,25 +162,25 @@ void TestArchiveEmbeddingPersistenceAndRetraction()
     const auto next = archive.ScanMissingEmbeddings("fixture-model", page.nextRowId, 1, &scope);
     Check(next.entries.size() == 1 && !next.hasMore && next.entries.front().id != page.entries.front().id,
         "Archive backfill cursor repeated or skipped its next row.");
-    Check(!archive.SaveEmbedding(first, "", {1.0F, 0.0F}) &&
-        !archive.SaveEmbedding(first, "fixture-model", {0.0F, 0.0F}) &&
-        !archive.SaveEmbedding(first, "fixture-model", {std::numeric_limits<float>::infinity(), 0.0F}),
+    Check(!archive.SaveEmbedding(first, "", {1.0F, 0.0F}) && !archive.SaveEmbedding(first, "fixture-model", {0.0F, 0.0F}) &&
+              !archive.SaveEmbedding(first, "fixture-model", {std::numeric_limits<float>::infinity(), 0.0F}),
         "Archive accepted a malformed vector or absent model.");
     int admissions = 0;
     Check(!archive.SaveEmbedding(first, "fixture-model", {1.0F, 0.0F}, [&]() { return ++admissions == 1; }) &&
-        archive.NeedsEmbedding(first.id, "fixture-model"), "Expired archive write admission committed a vector.");
-    Check(archive.SaveEmbedding(first, "fixture-model", {1.0F, 0.0F}) &&
-        !archive.NeedsEmbedding(first.id, "fixture-model") && archive.NeedsEmbedding(first.id, "next-model"),
+              archive.NeedsEmbedding(first.id, "fixture-model"),
+        "Expired archive write admission committed a vector.");
+    Check(archive.SaveEmbedding(first, "fixture-model", {1.0F, 0.0F}) && !archive.NeedsEmbedding(first.id, "fixture-model") &&
+              archive.NeedsEmbedding(first.id, "next-model"),
         "Archive vector model tracking failed.");
     Check(ConversationArchive(path).SearchHybrid(Topic("ceramics"), 2, scope, {1.0F, 0.0F}, "fixture-model").size() == 1,
         "A persisted archive vector did not survive reopening.");
-    Check(archive.RemoveLastTurnIf("replace", "user", first.content) && VectorCount(path) == 0,
-        "Retraction left its archive vector behind.");
+    Check(
+        archive.RemoveLastTurnIf("replace", "user", first.content) && VectorCount(path) == 0, "Retraction left its archive vector behind.");
     const auto replacement = Add(archive, "replace", "I chose a glass cup.", scope);
     Check(replacement.id == first.id && !archive.SaveEmbedding(first, "fixture-model", {1.0F, 0.0F}),
         "A delayed vector was attached to a regenerated turn with a reused ID.");
-    Check(archive.SaveEmbedding(replacement, "fixture-model", {1.0F, 0.0F}) &&
-        archive.SaveEmbedding(second, "fixture-model", {1.0F, 0.0F}), "Replacement vectors failed.");
+    Check(archive.SaveEmbedding(replacement, "fixture-model", {1.0F, 0.0F}) && archive.SaveEmbedding(second, "fixture-model", {1.0F, 0.0F}),
+        "Replacement vectors failed.");
     Check(archive.ForgetSession("replace") == 1 && VectorCount(path) == 1, "Session forgetting left archive vectors behind.");
     Check(!archive.SaveEmbedding(replacement, "fixture-model", {1.0F, 0.0F}), "Forgotten turn was resurrected by vector backfill.");
     Check(archive.Forget() == 1 && VectorCount(path) == 0, "Full archive forgetting left vectors behind.");
@@ -191,15 +193,14 @@ void TestLegacyArchiveMigrationAndRetention()
 {
     ScopedTestDirectory directory;
     const auto path = (directory.root / "legacy.db").string();
-    Sql(path,
-        "CREATE TABLE conversation_sessions(session_id TEXT PRIMARY KEY,started_at TEXT NOT NULL,ended_at TEXT);"
-        "CREATE TABLE conversation_turns(id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,turn_index INTEGER NOT NULL,"
-        "role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);"
-        "INSERT INTO conversation_sessions VALUES('legacy','100','200');"
-        "INSERT INTO conversation_turns VALUES('legacy:0','legacy',0,'user','The legacy pottery mug.','100');"
-        "CREATE VIRTUAL TABLE conversation_search USING fts5(content,content='conversation_turns',content_rowid='rowid',"
-        "tokenize='unicode61 remove_diacritics 2');"
-        "INSERT INTO conversation_search(conversation_search) VALUES('rebuild');");
+    Sql(path, "CREATE TABLE conversation_sessions(session_id TEXT PRIMARY KEY,started_at TEXT NOT NULL,ended_at TEXT);"
+              "CREATE TABLE conversation_turns(id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,turn_index INTEGER NOT NULL,"
+              "role TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL);"
+              "INSERT INTO conversation_sessions VALUES('legacy','100','200');"
+              "INSERT INTO conversation_turns VALUES('legacy:0','legacy',0,'user','The legacy pottery mug.','100');"
+              "CREATE VIRTUAL TABLE conversation_search USING fts5(content,content='conversation_turns',content_rowid='rowid',"
+              "tokenize='unicode61 remove_diacritics 2');"
+              "INSERT INTO conversation_search(conversation_search) VALUES('rebuild');");
     const auto scope = PrivateScope();
     for (int pass = 0; pass < 2; ++pass)
     {
@@ -226,4 +227,44 @@ void RunConversationArchiveHybridTests()
     TestArchiveTimeAndVoiceGates();
     TestArchiveEmbeddingPersistenceAndRetraction();
     TestLegacyArchiveMigrationAndRetention();
+    ScopedTestDirectory directory;
+    const std::string path = (directory.root / "media.db").string();
+    const auto scope = PrivateScope();
+    const std::vector<conversationMediaReference> refs = {{"media-one", std::string(64, 'a'), "001.png", "image/png", 40, 30},
+        {"media-two", std::string(64, 'b'), "002.png", "image/png", 50, 20}};
+    std::string error;
+    {
+        ConversationArchive archive(path);
+        Check(archive.BeginSession("images", error) && archive.Record("images", "user", "Compare these images.", error, scope, {}, refs),
+            "Could not archive image associations: " + error);
+        Check(archive.LoadSession("images").front().mediaReferences == refs, "Archived image associations lost their order or identity.");
+    }
+    ConversationArchive restored(path);
+    Check(restored.LoadSessionTail("images", 10, scope).front().mediaReferences == refs,
+        "Reopening an archive lost the user's image associations.");
+    Check(restored.LoadSessionTail("images", 10, PrivateScope("bob")).empty(), "Another participant restored image associations.");
+    Check(restored.Search("images").front().mediaReferences == refs, "An archive query omitted image associations.");
+    Check(restored.Record("images", "assistant", "sentinel_private_image_analysis", error, scope) &&
+              restored.InvalidateMediaAnalysis(refs.front().id),
+        "Forgotten image analysis was not invalidated.");
+    const auto cleared = restored.LoadSession("images");
+    Check(cleared.front().mediaReferences == refs && cleared.back().content.find("sentinel_private_image_analysis") == std::string::npos &&
+              restored.Search("sentinel_private_image_analysis").empty(),
+        "Forgotten media left derived analysis in archive recall.");
+    Check(restored.RemoveLastTurnIf("images", "assistant", cleared.back().content), "Could not retract the invalidated analysis notice.");
+    Check(restored.RemoveLastTurnIf("images", "user", "Compare these images.") && restored.LoadSession("images").empty(),
+        "Retracting a media turn retained its old association.");
+    Check(restored.Record("images", "user", "A replacement without media.", error, scope) &&
+              restored.LoadSession("images").front().mediaReferences.empty(),
+        "A reused archive index resurrected retracted media.");
+    auto invalid = refs;
+    invalid.front().digest = "not-a-digest";
+    Check(!restored.Record("images", "user", "Invalid metadata.", error, scope, {}, invalid),
+        "Invalid media identity was archived as an authorized association.");
+    auto gif = refs;
+    gif.front().mimeType = "image/gif";
+    gif.front().name = "001.gif";
+    Check(restored.Record("images", "user", "Inspect this still frame.", error, scope, {}, gif) &&
+              restored.LoadSession("images").back().mediaReferences == gif,
+        "A supported native GIF still-frame association was lost from the archive.");
 }

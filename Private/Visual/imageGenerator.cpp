@@ -1,5 +1,6 @@
 #include "Visual/imageSettings.h"
 #include "Visual/imageGenerator.h"
+#include "Audit/contentDigest.h"
 #include "Visual/imageArtifact.h"
 #include "Core/localApiKey.h"
 #include "Core/logger.h"
@@ -15,6 +16,9 @@
 #include <vector>
 #include <thread>
 #include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <random>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -131,6 +135,117 @@ std::wstring QuoteWindowsArgument(const std::wstring& argument)
     return quoted;
 }
 #endif
+
+std::string ModeName(const ImageRequestMode mode)
+{
+    return mode == ImageRequestMode::ReferenceToImage ? "reference_to_image" : "text_to_image";
+}
+
+int BoundedInteger(const nlohmann::json& object, const char* field, const int minimum, const int maximum)
+{
+    const auto& value = object.at(field);
+    if (!value.is_number_integer() || (value.is_number_unsigned() && value.get<std::uint64_t>() > static_cast<std::uint64_t>(maximum)))
+        throw std::runtime_error("The image worker returned invalid integer metadata.");
+    const auto number = value.get<std::int64_t>();
+    if (number < minimum || number > maximum)
+        throw std::runtime_error("The image worker returned out-of-range integer metadata.");
+    return static_cast<int>(number);
+}
+
+bool IsPlainPath(const std::filesystem::path& path)
+{
+    std::error_code error;
+    if (std::filesystem::is_symlink(path, error))
+        return false;
+#ifdef _WIN32
+    const auto attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        return false;
+#endif
+    return true;
+}
+
+class InputSnapshot
+{
+  public:
+    ~InputSnapshot()
+    {
+        std::string ignored;
+        Cleanup(ignored);
+    }
+
+    bool Create(const std::filesystem::path& root, const std::string& job, const ImageSource& source, std::string& error)
+    {
+        std::error_code failure;
+        const auto inputs = root / ".inputs";
+        if (!IsPlainPath(root) || !IsPlainPath(inputs))
+        {
+            error = "The image input directory contains a link or reparse point.";
+            return false;
+        }
+        std::filesystem::create_directory(inputs, failure);
+        if (failure || !IsPlainPath(root) || !IsPlainPath(inputs) || !std::filesystem::is_directory(inputs))
+        {
+            error = "The owned image input directory is unavailable.";
+            return false;
+        }
+        directory = inputs / job;
+        if (!std::filesystem::create_directory(directory, failure) || failure || !IsPlainPath(inputs) || !IsPlainPath(directory))
+        {
+            directory.clear();
+            error = "The unique image input snapshot could not be created.";
+            return false;
+        }
+        canonicalDirectory = std::filesystem::canonical(directory, failure);
+        path = directory / "source.bin";
+        std::ofstream output(path, std::ios::binary | std::ios::out);
+        output.write(source.bytes->data(), static_cast<std::streamsize>(source.bytes->size()));
+        output.close();
+        std::ifstream input(path, std::ios::binary);
+        std::string actual(source.bytes->size() + 1, '\0');
+        input.read(actual.data(), static_cast<std::streamsize>(actual.size()));
+        actual.resize(static_cast<std::size_t>(input.gcount()));
+        if (failure || !output || input.bad() || actual.size() != source.bytes->size() || audit::ContentDigest(actual) != source.digest)
+        {
+            error = "The owned reference snapshot failed its byte verification.";
+            return false;
+        }
+        return true;
+    }
+
+    bool Cleanup(std::string& error)
+    {
+        if (directory.empty())
+            return true;
+        std::error_code failure;
+        if (!std::filesystem::exists(directory, failure) && !failure)
+        {
+            directory.clear();
+            return true;
+        }
+        if (!IsPlainPath(directory.parent_path()) || !IsPlainPath(directory) || !IsPlainPath(path) ||
+            std::filesystem::weakly_canonical(directory, failure) != canonicalDirectory || failure)
+        {
+            error = "The owned reference snapshot changed location; cleanup was refused.";
+            return false;
+        }
+        std::filesystem::remove(path, failure);
+        if (!failure)
+            std::filesystem::remove(directory, failure);
+        if (failure)
+        {
+            error = "The owned reference snapshot could not be removed.";
+            return false;
+        }
+        directory.clear();
+        return true;
+    }
+
+  private:
+    std::filesystem::path directory;
+    std::filesystem::path canonicalDirectory;
+    std::filesystem::path path;
+};
 
 } // namespace
 
@@ -415,13 +530,24 @@ bool ImageGenerator::EnsureRunning(std::string& outError, const std::function<bo
 ImageResult ImageGenerator::Generate(const std::string& prompt, const std::string& negativePrompt, const std::stop_token stopToken,
     std::function<bool()> admission, const std::filesystem::path& expectedOutputRoot)
 {
+    ImageRequest request;
+    request.prompt = prompt;
+    request.negativePrompt = negativePrompt;
+    return Generate(request, stopToken, std::move(admission), expectedOutputRoot);
+}
+
+ImageResult ImageGenerator::Generate(const ImageRequest& request, const std::stop_token stopToken, std::function<bool()> admission,
+    const std::filesystem::path& expectedOutputRoot)
+{
     ImageResult result;
     const auto generation = cancellationGeneration.load();
     std::lock_guard lock(mutex);
+    bool retired = false;
     const auto cancelled = [&]()
     {
-        return shuttingDown.load() || stopToken.stop_requested() || generation != cancellationGeneration.load() ||
-               (admission && !admission());
+        retired = retired || shuttingDown.load() || stopToken.stop_requested() || generation != cancellationGeneration.load() ||
+                  (admission && !admission());
+        return retired;
     };
     if (!expectedOutputRoot.empty())
     {
@@ -438,10 +564,69 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
         result.message = "Image generation is disabled. Enable the installed image provider in settings.";
         return result;
     }
-    if (prompt.empty())
+    if (request.prompt.empty() || request.prompt.size() > 8192 || request.negativePrompt.size() > 8192)
     {
-        result.message = "I need something to picture.";
+        result.message = "Image prompts must be nonempty and at most 8192 bytes each.";
         return result;
+    }
+    if (cancelled())
+    {
+        result.cancelled = true;
+        result.message = "Image generation was cancelled before it started.";
+        return result;
+    }
+    std::string error;
+    auto& expected = result.expectedArtifact;
+    expected.model = configuration.model;
+    expected.mode = request.mode;
+    expected.variant = configuration.variant;
+    expected.width = std::clamp(configuration.width, 256, 1024) / 8 * 8;
+    expected.height = std::clamp(configuration.height, 256, 1024) / 8 * 8;
+    expected.requestedSteps = std::clamp(configuration.steps, 1, 50);
+    expected.totalInferenceSteps = expected.requestedSteps;
+    const bool turbo = configuration.model == "stabilityai/sd-turbo" || configuration.model == "stabilityai/sdxl-turbo";
+    if (turbo)
+        expected.totalInferenceSteps = std::min(expected.totalInferenceSteps, 4);
+    if (request.seed)
+        expected.seed = *request.seed;
+    else
+        expected.seed = configuration.seed >= 0 ? static_cast<std::uint32_t>(configuration.seed) : std::random_device{}();
+    if (request.mode == ImageRequestMode::ReferenceToImage)
+    {
+        if (!turbo || !request.source || !std::isfinite(request.strength) || request.strength <= 0 || request.strength >= 1 ||
+            !VerifyImageSource(*request.source, error))
+        {
+            result.message =
+                error.empty()
+                    ? "Reference editing requires a supported Turbo model, one static reference and strength between zero and one."
+                    : error;
+            return result;
+        }
+        while (expected.totalInferenceSteps < 4 && static_cast<int>(expected.totalInferenceSteps * request.strength) < 1)
+            ++expected.totalInferenceSteps;
+        expected.denoisingSteps = static_cast<int>(expected.totalInferenceSteps * request.strength);
+        if (expected.denoisingSteps < 1)
+        {
+            result.message = "This reference strength cannot denoise within the Turbo four-step limit.";
+            return result;
+        }
+        expected.requestedStrength = expected.effectiveStrength = request.strength;
+        expected.sourceId = request.source->id;
+        expected.sourceDigest = request.source->digest;
+        expected.sourcePreparation = "contain-pad-rgb-v1";
+        expected.pipeline =
+            configuration.model == "stabilityai/sd-turbo" ? "StableDiffusionImg2ImgPipeline" : "StableDiffusionXLImg2ImgPipeline";
+    }
+    else if (request.mode != ImageRequestMode::TextToImage || request.source)
+    {
+        result.message = "A text-to-image request cannot silently discard a reference source.";
+        return result;
+    }
+    else
+    {
+        expected.denoisingSteps = expected.totalInferenceSteps;
+        if (turbo)
+            expected.pipeline = configuration.model == "stabilityai/sd-turbo" ? "StableDiffusionPipeline" : "StableDiffusionXLPipeline";
     }
     if (cancelled())
     {
@@ -454,20 +639,8 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
     progress.model = configuration.model;
     progress.jobId = core::GenerateLocalApiKey();
     SetSnapshot(progress);
-    std::string error;
-    if (!EnsureRunning(error, cancelled))
-    {
-        result.message = error;
-        result.cancelled = cancelled();
-        progress.state = result.cancelled ? "cancelled" : "failed";
-        progress.detail = error;
-        SetSnapshot(progress);
-        return result;
-    }
-
     std::error_code directoryError;
-    const std::filesystem::path outputDirectory =
-        ResolveRuntimePath(configuration.outputPath);
+    const std::filesystem::path outputDirectory = ResolveRuntimePath(configuration.outputPath);
     std::filesystem::create_directories(outputDirectory, directoryError);
     const std::filesystem::path target = outputDirectory / ("image-" + Timestamp() + "-" + progress.jobId + ".png");
     if (directoryError || std::filesystem::exists(target))
@@ -478,15 +651,42 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
         SetSnapshot(progress);
         return result;
     }
+    expected.path = target;
+    expected.jobId = progress.jobId;
+    InputSnapshot inputSnapshot;
+    if (request.source && !inputSnapshot.Create(outputDirectory, progress.jobId, *request.source, error))
+    {
+        result.message = error;
+        if (!inputSnapshot.Cleanup(error))
+            result.message += " " + error;
+        return result;
+    }
+    if (!EnsureRunning(error, cancelled))
+    {
+        result.message = error;
+        result.cancelled = cancelled();
+        progress.state = result.cancelled ? "cancelled" : "failed";
+        progress.detail = error;
+        SetSnapshot(progress);
+        if (!inputSnapshot.Cleanup(error))
+            result.message += " " + error;
+        return result;
+    }
 
-    nlohmann::json body = {{"jobId", progress.jobId}, {"prompt", prompt},
+    nlohmann::json body = {{"jobId", progress.jobId}, {"prompt", request.prompt}, {"mode", ModeName(request.mode)},
         {"outputPath", std::string(reinterpret_cast<const char*>(target.u8string().c_str()))}, {"steps", configuration.steps},
         {"guidance", configuration.guidance}, {"width", configuration.width}, {"height", configuration.height}};
-    if (configuration.seed >= 0)
-        body["seed"] = configuration.seed;
-    if (!negativePrompt.empty())
+    body["seed"] = expected.seed;
+    if (request.source)
     {
-        body["negativePrompt"] = negativePrompt;
+        body["strength"] = request.strength;
+        body["source"] = {{"path", ".inputs/" + progress.jobId + "/source.bin"}, {"id", expected.sourceId},
+            {"sha256", expected.sourceDigest}, {"mimeType", request.source->mimeType}, {"width", request.source->width},
+            {"height", request.source->height}};
+    }
+    if (!request.negativePrompt.empty())
+    {
+        body["negativePrompt"] = request.negativePrompt;
     }
 
     httplib::Client client(configuration.host, configuration.port);
@@ -500,6 +700,11 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
     const auto deadline = started + std::chrono::seconds(configuration.requestTimeoutSeconds);
     try
     {
+        if (cancelled())
+        {
+            result.cancelled = true;
+            throw std::runtime_error("Image generation was cancelled before submission.");
+        }
         const auto response = client.Post("/jobs", headers, body.dump(), "application/json");
         if (!response || response->status != 202)
         {
@@ -549,11 +754,31 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
                 receipt.jobId = parsed.at("jobId").get<std::string>();
                 receipt.model = parsed.at("model").get<std::string>();
                 receipt.sha256 = parsed.at("sha256").get<std::string>();
-                receipt.width = parsed.at("width").get<int>();
-                receipt.height = parsed.at("height").get<int>();
-                const int width = std::clamp(configuration.width, 256, 1024) / 8 * 8;
-                const int height = std::clamp(configuration.height, 256, 1024) / 8 * 8;
-                if (!VerifyImageArtifact(target, progress.jobId, configuration.model, width, height, receipt, error))
+                receipt.width = BoundedInteger(parsed, "width", 1, 2048);
+                receipt.height = BoundedInteger(parsed, "height", 1, 2048);
+                const auto mode = parsed.at("mode").get<std::string>();
+                if (mode != "text_to_image" && mode != "reference_to_image")
+                    throw std::runtime_error("The image worker returned an unsupported request mode.");
+                receipt.mode = mode == "reference_to_image" ? ImageRequestMode::ReferenceToImage : ImageRequestMode::TextToImage;
+                receipt.provider = parsed.at("provider").get<std::string>();
+                receipt.pipeline = parsed.at("pipeline").get<std::string>();
+                receipt.variant = parsed.at("variant").get<std::string>();
+                const auto seed = parsed.at("seed");
+                if (!seed.is_number_integer() || seed.get<std::int64_t>() < 0 || seed.get<std::uint64_t>() > 0xffffffffULL)
+                    throw std::runtime_error("The image worker returned an invalid seed.");
+                receipt.seed = seed.get<std::uint32_t>();
+                receipt.requestedStrength = parsed.at("requestedStrength").get<double>();
+                receipt.effectiveStrength = parsed.at("effectiveStrength").get<double>();
+                receipt.requestedSteps = BoundedInteger(parsed, "requestedSteps", 1, 50);
+                receipt.totalInferenceSteps = BoundedInteger(parsed, "totalInferenceSteps", 1, 50);
+                receipt.denoisingSteps = BoundedInteger(parsed, "denoisingSteps", 1, 50);
+                receipt.sourceId = parsed.at("sourceId").get<std::string>();
+                receipt.sourceDigest = parsed.at("sourceDigest").get<std::string>();
+                receipt.sourcePreparation = parsed.at("sourcePreparation").get<std::string>();
+                receipt.preparedSourceDigest = parsed.at("preparedSourceDigest").get<std::string>();
+                const int width = expected.width;
+                const int height = expected.height;
+                if (!VerifyImageArtifact(expected, receipt, error))
                 {
                     throw std::runtime_error(error);
                 }
@@ -572,6 +797,10 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
                 result.detail = std::to_string(width) + "x" + std::to_string(height) + ", " + std::to_string(progress.steps) +
                                 " steps on " + parsed.value("deviceName", std::string("unknown")) + " using " + receipt.model +
                                 "; decoded PNG and SHA256 verified; visual quality requires review.";
+                if (request.source)
+                    result.detail += " Reference prepared with contain-and-pad RGB on neutral gray; " +
+                                     std::to_string(receipt.denoisingSteps) + " actual denoising steps at strength " +
+                                     std::to_string(receipt.effectiveStrength) + ".";
                 result.message = "Generated and verified the image file.";
                 break;
             }
@@ -586,10 +815,27 @@ ImageResult ImageGenerator::Generate(const std::string& prompt, const std::strin
         result.message = failure.what();
         process.Stop();
         std::filesystem::remove(target, directoryError);
+        if (directoryError)
+            result.message += " The new output file could not be removed after failure.";
         std::filesystem::remove(target.parent_path() / (target.stem().string() + ".pending.png"), directoryError);
+        if (directoryError)
+            result.message += " The pending output file could not be removed after failure.";
         progress.state = result.cancelled ? "cancelled" : "failed";
         progress.loaded = false;
         progress.detail = result.message;
+    }
+    if (!inputSnapshot.Cleanup(error))
+    {
+        result.succeeded = false;
+        result.message = error;
+        result.path.clear();
+        process.Stop();
+        progress.loaded = false;
+        progress.state = "failed";
+        progress.detail = error;
+        std::filesystem::remove(target, directoryError);
+        if (directoryError)
+            result.message += " The new output file could not be removed after cleanup failed.";
     }
     result.elapsedMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     if (result.succeeded && !configuration.bKeepLoaded)

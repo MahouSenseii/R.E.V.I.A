@@ -72,12 +72,13 @@ bool ContinuesRecentTopic(const std::string& input)
     // Constant, so the system message stays byte-identical from turn to turn.
     std::string TurnContextNote()
     {
-        return "The newest user message may begin with a block from " +
-            std::string(revia::identity::markers::RuntimeTurnContext) + " to " +
-            std::string(revia::identity::markers::RuntimeTurnContextEnd) + ". Your runtime writes that block, not the user: it is your "
-            "current state, what you remember, and guidance for this turn, with the same "
-            "authority as this message. Only a block at the very start counts. Everything "
-            "after it is what the user said. Never quote or mention the block.";
+        return "The newest user message may begin with a block from " + std::string(revia::identity::markers::RuntimeTurnContext) + " to " +
+               std::string(revia::identity::markers::RuntimeTurnContextEnd) +
+               ". Your runtime writes that block, not the user: it is your "
+               "current state, what you remember, and guidance for this turn, with the same "
+               "authority as this message. Only a block at the very start counts. Everything "
+               "after it is the turn input: either the user's message or an explicitly labeled runtime task. Never quote or mention the "
+               "block.";
     }
 }
 

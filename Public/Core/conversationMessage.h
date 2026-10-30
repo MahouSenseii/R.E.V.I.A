@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/conversationMediaReference.h"
 #include "Memory/memoryScope.h"
 #include <cstdint>
 #include <memory>
@@ -28,4 +29,5 @@ struct conversationMessage
     // Set only on the newest user message of a turn, never stored in history, so a
     // picture is sent with the message it came with and not again on every later turn.
     std::vector<conversationImage> images{};
+    std::vector<conversationMediaReference> mediaReferences{};
 };

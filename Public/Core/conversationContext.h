@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include "Core/conversationMessage.h"
 #include <cstdint>
 #include <string>
@@ -8,7 +7,7 @@
 
 class conversationContext
 {
-public:
+  public:
     conversationContext();
     ~conversationContext();
 
@@ -19,6 +18,7 @@ public:
     // or removed by content.
     [[nodiscard]] bool RemoveLastMessageIf(const std::string& role, const std::string& content);
     void Clear();
+    void InvalidateMediaAnalysis(const std::string& id);
     // The caller admits archive scope before reconstruction; this owner never reads disk.
     void RestoreMessages(const std::vector<conversationMessage>& source, std::size_t recentMessages);
 
@@ -28,9 +28,11 @@ public:
     void SetContextTokens(int contextTokens);
 
     std::vector<conversationMessage> GetRecentMessages() const;
+    // Metadata only for attachment selection; independent of text-budget trimming and never prompt history.
+    [[nodiscard]] std::vector<conversationMessage> GetMediaHistory() const;
     [[nodiscard]] std::string GetCompressedHistorySummary() const;
 
-private:
+  private:
     [[nodiscard]] std::size_t CharacterCount() const;
     [[nodiscard]] std::size_t MaximumRetainedMessageCharacters() const;
     void BoundRetainedMessage(conversationMessage& message) const;
@@ -41,12 +43,20 @@ private:
         std::string role;
         std::string content;
         int priority = 0;
+        std::vector<std::string> mediaIds;
+    };
+    struct MediaRecord
+    {
+        std::uint64_t source = 0;
+        conversationMessage message;
     };
     void CaptureContinuity(const conversationMessage& message, std::uint64_t source);
+    void CaptureMediaHistory(const conversationMessage& message, std::uint64_t source);
 
     std::vector<conversationMessage> messages;
     std::vector<std::uint64_t> messageSources;
     std::vector<ContinuityExcerpt> continuity;
+    std::vector<MediaRecord> mediaHistory;
     std::uint64_t nextSource = 1;
     std::size_t maxMessages = 24;
     std::size_t maxCharacters = 14000;

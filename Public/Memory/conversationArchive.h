@@ -3,6 +3,7 @@
 // Forward declared so sqlite3 stays out of every caller's translation unit.
 struct sqlite3;
 
+#include "Core/conversationMediaReference.h"
 #include "Memory/memoryScope.h"
 #include <functional>
 #include <cstddef>
@@ -27,6 +28,7 @@ struct ArchivedTurn
     std::string createdAt;
     int turnIndex = 0;
     MemoryScope scope{};
+    std::vector<conversationMediaReference> mediaReferences{};
 };
 
 // The text embedded at indexing time and supplied to an optional final reranker.
@@ -76,7 +78,7 @@ struct ArchiveLimits
 // The shared sensitive-content gate runs here before durable writes.
 class ConversationArchive
 {
-public:
+  public:
     explicit ConversationArchive(std::string path = "Memory/revia_conversations.db", ArchiveLimits limits = {});
     ~ConversationArchive();
 
@@ -90,7 +92,11 @@ public:
     // Returns false when the turn was withheld or could not be written; outReason says
     // which, so a caller can report a refusal without inventing a cause.
     bool Record(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason,
-        const MemoryScope& scope = {}, std::function<bool()> admission = {});
+        const MemoryScope& scope = {}, std::function<bool()> admission = {},
+        const std::vector<conversationMediaReference>& mediaReferences = {});
+    bool RecordGeneratedAssistant(const std::string& sessionId, const std::string& content,
+        const std::vector<conversationMediaReference>& references, std::string& outReason, const MemoryScope& scope,
+        std::function<bool()> admission = {});
     bool EndSession(const std::string& sessionId);
 
     [[nodiscard]] std::vector<ArchivedTurn> LoadSession(const std::string& sessionId, std::size_t maxTurns = 200) const;
@@ -105,6 +111,7 @@ public:
     // stored form of this content. Regenerating a reply retracts what it replaces; a
     // turn the archive withheld or that something else followed is never touched.
     bool RemoveLastTurnIf(const std::string& sessionId, const std::string& role, const std::string& content);
+    bool InvalidateMediaAnalysis(const std::string& id);
     // The tail of the most recent session that is not this one, for restoring continuity
     // across a restart.
     [[nodiscard]] std::vector<ArchivedTurn> LoadPreviousSessionTail(
@@ -136,17 +143,16 @@ public:
     // Automatic recall still requires an admitted, attributed private request. Both
     // ranked lists are narrowed to its scope and time window before candidate limits.
     // Empty-topic windows and earliest-mention requests preserve chronological order.
-    [[nodiscard]] std::vector<ArchivedTurn> SearchHybrid(const RecallRequest& request, std::size_t maxTurns,
-        const MemoryScope& scope, const std::vector<float>& queryEmbedding = {},
-        const std::string& embeddingModel = "", std::int64_t nowEpoch = 0) const;
+    [[nodiscard]] std::vector<ArchivedTurn> SearchHybrid(const RecallRequest& request, std::size_t maxTurns, const MemoryScope& scope,
+        const std::vector<float>& queryEmbedding = {}, const std::string& embeddingModel = "", std::int64_t nowEpoch = 0) const;
 
-    [[nodiscard]] ArchiveEmbeddingBackfillPage ScanMissingEmbeddings(const std::string& embeddingModel,
-        std::int64_t afterRowId, std::size_t maxEntries = 25, const MemoryScope* scope = nullptr) const;
+    [[nodiscard]] ArchiveEmbeddingBackfillPage ScanMissingEmbeddings(
+        const std::string& embeddingModel, std::int64_t afterRowId, std::size_t maxEntries = 25, const MemoryScope* scope = nullptr) const;
     [[nodiscard]] bool NeedsEmbedding(const std::string& turnId, const std::string& embeddingModel) const;
     // A turn ID may be reused after regeneration. Match the captured text and scope
     // as well, so a late vector cannot be attached to its replacement.
-    bool SaveEmbedding(const ArchivedTurn& expectedTurn, const std::string& embeddingModel,
-        const std::vector<float>& embedding, std::function<bool()> admission = {});
+    bool SaveEmbedding(const ArchivedTurn& expectedTurn, const std::string& embeddingModel, const std::vector<float>& embedding,
+        std::function<bool()> admission = {});
 
     // Returns how many turns were removed. Forgetting is immediate and total; there is no
     // archived copy kept behind it, because a forget that leaves a copy is not one.
@@ -157,12 +163,15 @@ public:
     [[nodiscard]] std::size_t TotalTurns() const;
     [[nodiscard]] std::string Status() const;
 
-private:
+  private:
     struct Connection;
     // One connection, opened on first use and kept. Two turns are archived per exchange
     // and each open re-ran the schema before it could insert anything, which measured at
     // ten milliseconds a call on a database of a few hundred rows.
     [[nodiscard]] sqlite3* Acquire() const;
+    bool RecordTurn(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason,
+        const MemoryScope& scope, std::function<bool()> admission, const std::vector<conversationMediaReference>& mediaReferences,
+        bool generatedAssistant);
     [[nodiscard]] std::vector<ArchivedTurn> LoadCompatibleTail(
         const std::string& currentSessionId, std::size_t maxTurns, const MemoryScope* scope, bool includeCurrent) const;
 

@@ -41,6 +41,10 @@ struct ReviaSessionTestAccess
     static std::vector<initiative::StarterCue> EditorCues(ReviaSession& session)
     { return session.conversationStarter.RecentCues(std::chrono::system_clock::now()); }
     static std::string EditorContext(const ReviaSession& session) { return session.CurrentEditorContext(); }
+    static bool EditorSourceAvailable(const ReviaSession& session)
+    {
+        return session.CurrentSavedFileContext().available;
+    }
     static bool PrepareEditorOpeningContext(ReviaSession& session, const bool admitted = true)
     {
         std::lock_guard lock(session.operationMutex);
@@ -136,17 +140,97 @@ struct ReviaSessionTestAccess
     { session.QueueMemoryCorrectionProposals(proposals, session.Stamp()); }
     static void QueueMemoryCorrectionsFromOrigin(ReviaSession& session,
         const std::vector<memory::MemoryCorrectionProposal>& proposals, const RuntimeStamp& origin)
-    { session.QueueMemoryCorrectionProposals(proposals, origin); }
-    static void MarkStudioStarted(ReviaSession& session, bool value) { session.started.store(value); }
-    static attachments::AttachmentLibrary& Attachments(ReviaSession& session) { return session.Attachments(); }
+    {
+        session.QueueMemoryCorrectionProposals(proposals, origin);
+    }
+    static void MarkStudioStarted(ReviaSession& session, bool value)
+    {
+        session.started.store(value);
+    }
+    static attachments::AttachmentLibrary& Attachments(ReviaSession& session)
+    {
+        return session.Attachments();
+    }
+    static void ConfigureGeneratedMediaRuntime(ReviaSession& session)
+    {
+        session.settings.embedding.bEnabled = false;
+        session.started.store(true);
+    }
+    static void DiscardGeneratedMedia(ReviaSession& session, const conversationMediaReference& reference)
+    {
+        session.DiscardGeneratedMedia({reference});
+    }
+    static std::vector<std::string> PendingGeneratedInvalidations(ReviaSession& session)
+    {
+        std::lock_guard lock(session.attachmentMutex);
+        return session.forgottenMedia;
+    }
+    static void SeedGeneratedContext(ReviaSession& session, const conversationMediaReference& reference, const std::string& text)
+    {
+        std::lock_guard lock(session.operationMutex);
+        const auto scope = session.CapturePrivateMemoryScope();
+        conversationMessage message{"assistant", text, scope.participantId, scope};
+        message.mediaReferences = {reference};
+        session.context.AddMessage(std::move(message));
+    }
+    static bool RecordGeneratedArchive(
+        ReviaSession& session, const conversationMediaReference& reference, const std::string& text, std::string& error)
+    {
+        std::lock_guard lock(session.operationMutex);
+        return session.conversationArchive.RecordGeneratedAssistant(
+            session.CurrentConversationId(), text, {reference}, error, session.CapturePrivateMemoryScope(), [] { return true; });
+    }
+    static void DrainGeneratedInvalidations(ReviaSession& session)
+    {
+        std::lock_guard lock(session.operationMutex);
+        session.DrainForgottenMedia();
+    }
+    static bool SetGeneratedQuiet(ReviaSession& session, const bool quiet)
+    {
+        return session.initiativeController.RequestQuiet(quiet ? "quiet please" : "you can talk now");
+    }
+    static bool GeneratedSpeechAdmitted(ReviaSession& session)
+    {
+        return session.CaptureSpeechAdmission(session.Audience(), session.Stamp())();
+    }
+    static void RetireGeneratedConversation(ReviaSession& session)
+    {
+        session.conversationEpoch.fetch_add(1);
+    }
+    static std::function<void()> ArmGeneratedTaskCompletion(ReviaSession& session, std::optional<conversationMediaReference> reference = {})
+    {
+        const auto context = session.CaptureTaskContext();
+        const auto origin =
+            session.sessionIdentity.Stamp(actions::NewActionId(), actions::NewActionId(), session.companionAuthority->Revision());
+        tests::Check(session.companionAuthority->RegisterTask(origin, {}, policy::AuthorityPermissions::WithinMachineCeiling(), false),
+            "The generated task fixture could not register its native task scope.");
+        {
+            std::lock_guard lock(session.taskMutex);
+            tests::Check(!session.activeTask, "The generated task fixture replaced a live task.");
+            session.activeTask = ReviaSession::BackgroundTask{"Generated media fixture", std::chrono::steady_clock::now(), "completed",
+                origin, context, true, std::move(reference), session.conversationEpoch.load()};
+        }
+        return [&session, origin, context]
+        {
+            goals::Goal finished;
+            finished.title = "Generated media fixture";
+            finished.status = goals::GoalStatus::Succeeded;
+            session.FinishTask(finished, origin, context);
+        };
+    }
+    static SessionResult SubmitMediaWithAdmission(ReviaSession& session, const std::string& input,
+        std::vector<conversationMediaReference> references, std::function<bool()> admission)
+    {
+        return session.SubmitTurn(input, agents::InputSource::Typed, {}, std::move(references), std::move(admission));
+    }
     // Main with or without its vision projector, and no embedding server, so document
     // search is lexical and deterministic.
     static void ConfigureAttachments(ReviaSession& session, bool vision)
     {
         session.settings.llm.bVisionEnabled = vision;
         session.settings.embedding.bEnabled = false;
-        session.router.ApplyLLMSettings(session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embeddingSettings{},
-            aiProfile{}, true, true);
+        session.router.ApplyLLMSettings(
+            session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
     }
     static void UseVirtualMachine(ReviaSession& session, std::shared_ptr<workspace::VirtualMachineRuntime> machine)
     { session.virtualMachine = std::move(machine); }

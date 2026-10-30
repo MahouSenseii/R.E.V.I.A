@@ -20,5 +20,6 @@ struct ImageResult
     double peakAllocatedMiB = 0.0;
     double peakReservedMiB = 0.0;
     ImageArtifactReceipt receipt;
+    ImageArtifactExpectation expectedArtifact;
 };
 }

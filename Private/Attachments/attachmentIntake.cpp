@@ -66,6 +66,7 @@ std::string StoredExtension(const AttachmentKind kind, const std::string& mimeTy
         case AttachmentKind::Pdf: return ".pdf";
         case AttachmentKind::Docx: return ".docx";
         case AttachmentKind::Text: return ".txt";
+        case AttachmentKind::Video: return mimeType == "video/webm" ? ".webm" : ".mp4";
     }
     return ".bin";
 }
@@ -80,7 +81,7 @@ IntakeResult Refused(std::string message)
 
 std::uintmax_t LargestLimit(const AttachmentLimits& limits)
 {
-    return std::max({limits.maxImageBytes, limits.maxTextFileBytes, limits.maxPdfBytes, limits.maxDocxBytes});
+    return std::max({limits.maxImageBytes, limits.maxTextFileBytes, limits.maxPdfBytes, limits.maxDocxBytes, limits.video.maxBytes});
 }
 } // namespace
 
@@ -92,13 +93,14 @@ std::string ToString(const AttachmentKind kind)
         case AttachmentKind::Text: return "text";
         case AttachmentKind::Pdf: return "pdf";
         case AttachmentKind::Docx: return "docx";
+        case AttachmentKind::Video: return "video";
     }
     return "unknown";
 }
 
 bool IsDocument(const AttachmentKind kind)
 {
-    return kind != AttachmentKind::Image;
+    return kind == AttachmentKind::Text || kind == AttachmentKind::Pdf || kind == AttachmentKind::Docx;
 }
 
 std::string HumanSize(const std::uintmax_t bytes)
@@ -198,6 +200,9 @@ std::optional<AttachmentKind> DetectKind(const std::string_view bytes, const std
     const std::string ext = Lowered(extension);
     if (InspectImage(bytes))
         return AttachmentKind::Image;
+    if ((bytes.size() >= 12 && bytes.substr(4, 4) == "ftyp") ||
+        (bytes.size() >= 4 && bytes.substr(0, 4) == std::string_view("\x1A\x45\xDF\xA3", 4)) || ext == ".mp4" || ext == ".webm")
+        return AttachmentKind::Video;
     if (bytes.substr(0, 1024).find("%PDF-") != std::string_view::npos)
         return AttachmentKind::Pdf;
     if (bytes.substr(0, 4) == std::string_view("PK\x03\x04", 4))
@@ -222,7 +227,7 @@ std::optional<AttachmentKind> DetectKind(const std::string_view bytes, const std
                                              (static_cast<unsigned char>(bytes[0]) == 0xFE && static_cast<unsigned char>(bytes[1]) == 0xFF));
     if (utf16 || (bytes.find('\0') == std::string_view::npos && revia::utf8::IsValid(bytes)))
         return AttachmentKind::Text;
-    why = "This kind of file is not supported. Revia reads images (PNG, JPEG, GIF, WebP), PDF, Word (.docx) and UTF-8 text files.";
+    why = "This kind of file is not supported. Revia reads images, short MP4/H.264 or WebM/VP8/VP9 clips, PDF, Word (.docx) and UTF-8 text files.";
     return std::nullopt;
 }
 
@@ -247,13 +252,15 @@ std::string SanitizeDisplayName(const std::string_view name)
     return revia::utf8::Prefix(cleaned, 120);
 }
 
-AttachmentIntake::AttachmentIntake(std::filesystem::path filesDirectory, AttachmentLimits inputLimits)
-    : directory(std::move(filesDirectory)), limits(inputLimits)
+AttachmentIntake::AttachmentIntake(std::filesystem::path filesDirectory, AttachmentLimits inputLimits, VideoDecoderSettings decoderSettings)
+    : directory(std::move(filesDirectory)), limits(inputLimits), videoDecoder(std::move(decoderSettings))
 {
 }
 
-IntakeResult AttachmentIntake::IntakeFile(const std::filesystem::path& source) const
+IntakeResult AttachmentIntake::IntakeFile(const std::filesystem::path& source, const std::stop_token stopToken) const
 {
+    if (stopToken.stop_requested())
+        return Refused("Attachment intake was cancelled.");
     std::error_code error;
     const std::string name = SanitizeDisplayName(revia::actions::PathToUtf8(source.filename()));
     const std::filesystem::file_status status = std::filesystem::status(source, error);
@@ -276,11 +283,13 @@ IntakeResult AttachmentIntake::IntakeFile(const std::filesystem::path& source) c
     file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     if (static_cast<std::uintmax_t>(file.gcount()) != size || file.peek() != std::char_traits<char>::eof())
         return Refused("\"" + name + "\" changed while it was being read. Try again.");
-    return IntakeBytes(name, bytes);
+    return IntakeBytes(name, bytes, stopToken);
 }
 
-IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const std::string& bytes) const
+IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const std::string& bytes, const std::stop_token stopToken) const
 {
+    if (stopToken.stop_requested())
+        return Refused("Attachment intake was cancelled.");
     const std::string name = SanitizeDisplayName(rawName);
     if (bytes.empty())
         return Refused("\"" + name + "\" is empty.");
@@ -318,6 +327,11 @@ IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const
             staged.mimeType = image.mimeType;
             staged.width = image.width;
             staged.height = image.height;
+            std::string extension = std::filesystem::path(name).extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+            if (image.mimeType == "image/gif" || extension == ".gif" || extension == ".webp")
+                staged.note = "This upload is a still image; animation and later frames are not analyzed.";
             break;
         }
         case AttachmentKind::Text:
@@ -337,6 +351,11 @@ IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const
                 return tooLarge(limits.maxDocxBytes);
             staged.mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
             extracted = ExtractDocxText(bytes, limits.maxExtractedTextBytes);
+            break;
+        case AttachmentKind::Video:
+            if (bytes.size() > limits.video.maxBytes)
+                return tooLarge(limits.video.maxBytes);
+            staged.mimeType = bytes.substr(0, 4) == std::string_view("\x1A\x45\xDF\xA3", 4) ? "video/webm" : "video/mp4";
             break;
     }
     if (IsDocument(*kind))
@@ -382,6 +401,35 @@ IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const
     {
         std::filesystem::remove(partial, error);
         return Refused("\"" + name + "\" could not be copied into Revia's private attachment folder.");
+    }
+
+    if (staged.kind == AttachmentKind::Video)
+    {
+        const auto probe = videoDecoder.Probe(staged.storedPath, limits.video, stopToken);
+        if (!probe.ok)
+        {
+            Discard(staged);
+            return Refused("\"" + name + "\" was not attached. " + probe.error);
+        }
+        const auto poster = videoDecoder.Sample(staged.storedPath, probe.info, {0}, limits.video, stopToken);
+        if (!poster.ok || poster.frames.empty())
+        {
+            Discard(staged);
+            return Refused("\"" + name + "\" could not be decoded. " + poster.error);
+        }
+        staged.video = probe.info;
+        staged.mimeType = probe.info.mimeType;
+        staged.width = probe.info.width;
+        staged.height = probe.info.height;
+        staged.poster = poster.frames.front().image;
+        staged.note = "Video " + FormatVideoTimestamp(probe.info.durationMs) + "; " + probe.info.videoCodec +
+                      ". Review uses timestamped frame samples, not continuous video. " +
+                      (probe.info.hasAudio ? "The clip has audio; no audio has been analyzed yet." : "No audio stream.");
+    }
+    if (stopToken.stop_requested())
+    {
+        Discard(staged);
+        return Refused("Attachment intake was cancelled.");
     }
 
     IntakeResult result;

@@ -39,11 +39,11 @@ struct ImageInfo
 class AttachmentIntake
 {
 public:
-    explicit AttachmentIntake(std::filesystem::path filesDirectory, AttachmentLimits limits = {});
+    explicit AttachmentIntake(std::filesystem::path filesDirectory, AttachmentLimits limits = {}, VideoDecoderSettings decoderSettings = {});
 
-    [[nodiscard]] IntakeResult IntakeFile(const std::filesystem::path& source) const;
+    [[nodiscard]] IntakeResult IntakeFile(const std::filesystem::path& source, std::stop_token stopToken = {}) const;
     // For content with no file behind it, such as an image pasted from the clipboard.
-    [[nodiscard]] IntakeResult IntakeBytes(std::string_view name, const std::string& bytes) const;
+    [[nodiscard]] IntakeResult IntakeBytes(std::string_view name, const std::string& bytes, std::stop_token stopToken = {}) const;
     // Removes a staged copy that was never sent.
     bool Discard(const StagedAttachment& attachment) const;
 
@@ -53,6 +53,7 @@ public:
 private:
     std::filesystem::path directory;
     AttachmentLimits limits;
+    VideoDecoder videoDecoder;
 };
 
 } // namespace revia::attachments

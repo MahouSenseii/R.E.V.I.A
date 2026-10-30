@@ -2,6 +2,7 @@
 
 #include "Attachments/attachmentTypes.h"
 #include "Attachments/documentChunker.h"
+#include "Core/conversationMediaReference.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,7 +17,23 @@ struct sqlite3;
 namespace revia::attachments
 {
 
-// One file the user attached and Revia kept: its record, not its content.
+struct GeneratedArtifactProvenance
+{
+    std::uint32_t version = 1;
+    std::string jobId;
+    std::string provider;
+    std::string model;
+    std::string mode;
+    std::uint32_t seed = 0;
+    std::string settingsDigest;
+    std::string sourceId;
+    std::string sourceDigest;
+    std::int64_t createdAt = 0;
+    std::string modelRevision;
+    bool operator==(const GeneratedArtifactProvenance&) const = default;
+};
+
+// One kept file's record, including its bounded origin metadata rather than content.
 struct StoredDocument
 {
     std::string id;
@@ -30,6 +47,8 @@ struct StoredDocument
     std::size_t embeddedChunks = 0;
     std::filesystem::path storedPath;
     std::int64_t addedAt = 0;
+    MediaOrigin origin = MediaOrigin::UserAttachment;
+    std::optional<GeneratedArtifactProvenance> generated;
 };
 
 struct DocumentHit

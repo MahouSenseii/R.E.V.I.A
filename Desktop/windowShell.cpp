@@ -327,6 +327,35 @@ void ReviaWindow::BuildSettingsDialog()
         QStringLiteral("Camera access is a permission, set under Permissions."), QStringLiteral("Open Permissions"),
         [this]() { settingsDialog->ShowSection(SettingsSection::Permissions); }, QStringLiteral("cameraSnapshotsLinkRow"));
 
+    imageMinTokensCombo = new QComboBox();
+    imageMinTokensCombo->setObjectName("imageMinTokensCombo");
+    imageMinTokensCombo->setAccessibleName("Picture detail");
+    for (const int tokens : {0, 256, 512, 1024, 2048, 4096})
+        imageMinTokensCombo->addItem(
+            tokens == 0 ? QStringLiteral("0 (backend default)") : QString::number(tokens), QString::number(tokens));
+    const QString imageDetailHelp =
+        QStringLiteral("Minimum image tokens requested from the local vision model. More detail uses more context and memory. "
+                       "0 keeps the backend default. Restart Revia after changing this setting.");
+    imageMinTokensCombo->setToolTip(imageDetailHelp);
+    settingsDialog->AddCustomRow(SettingsSection::Vision, QStringLiteral("Pictures"), QStringLiteral("Picture detail"), imageDetailHelp,
+        imageMinTokensCombo, QStringLiteral("imageMinTokensRow"));
+    imageMinTokensReader = backend.readChoice;
+    connect(imageMinTokensCombo, &QComboBox::activated, this,
+        [this, backend](const int index)
+        {
+            if (!backend.writeChoice || index < 0 || index >= 6)
+                return;
+            const QString choice = imageMinTokensCombo->itemData(index).toString();
+            imageMinTokensCombo->setEnabled(false);
+            backend.writeChoice("llm.imageMinTokens", choice,
+                [this](const desktop::SettingWrite result)
+                {
+                    imageMinTokensCombo->setEnabled(true);
+                    RefreshImageMinTokens();
+                    ShowStatus(result.message, result.succeeded ? 5000 : 8000);
+                });
+        });
+
     cloudUseForCombo = new QComboBox();
     cloudUseForCombo->setObjectName("cloudUseForCombo");
     cloudUseForCombo->setAccessibleName("Use the cloud for");
@@ -406,6 +435,7 @@ void ReviaWindow::BuildSettingsDialog()
                 settingsDialog->Refresh();
             RefreshPreferenceSpins();
             RefreshCloudUseFor();
+            RefreshImageMinTokens();
         });
     capabilityRefreshTimer = new QTimer(this);
     capabilityRefreshTimer->setSingleShot(true);
@@ -426,6 +456,25 @@ void ReviaWindow::BuildSettingsDialog()
     if (shell.value("window/alwaysOnTop", false).toBool())
         SetAlwaysOnTop(true);
     RefreshCloudUseFor();
+    RefreshImageMinTokens();
+}
+
+void ReviaWindow::RefreshImageMinTokens()
+{
+    if (!imageMinTokensCombo || !imageMinTokensReader)
+        return;
+    const QString current = imageMinTokensReader("llm.imageMinTokens");
+    const QSignalBlocker blocker(imageMinTokensCombo);
+    while (imageMinTokensCombo->count() > 6)
+        imageMinTokensCombo->removeItem(6);
+    int index = imageMinTokensCombo->findData(current);
+    if (index < 0 && !current.isEmpty())
+    {
+        // Direct configuration permits intermediate values; display the saved value faithfully.
+        imageMinTokensCombo->addItem(current + QStringLiteral(" (configured)"), current);
+        index = 6;
+    }
+    imageMinTokensCombo->setCurrentIndex(index < 0 ? 0 : index);
 }
 
 void ReviaWindow::RefreshCloudUseFor()
@@ -451,6 +500,7 @@ void ReviaWindow::RefreshSettingsExtras()
     RefreshPreferenceSpins();
     RefreshInitiativeMode();
     RefreshCloudUseFor();
+    RefreshImageMinTokens();
     RefreshDelegationMode();
     // /internet, /set and capability changes from elsewhere reach the hosted panel here, so a
     // switch never shows a value from before them.

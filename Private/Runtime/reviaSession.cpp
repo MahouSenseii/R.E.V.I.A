@@ -14,6 +14,9 @@
 #include "Identity/promptMarkers.h"
 #include "Runtime/publicContextCache.h"
 #include "Runtime/reviaSession.h"
+#include "Attachments/mediaSelection.h"
+#include "Attachments/videoSelection.h"
+#include "Attachments/videoCoverage.h"
 #include "Agents/chatTools.h"
 #include "Core/taskContract.h"
 #include "Browser/browserSession.h"
@@ -38,6 +41,7 @@
 #include "Planning/goalPlanner.h"
 #include "Planning/operateIntent.h"
 #include "Visual/drawingRequestPolicy.h"
+#include "Visual/videoRequestPolicy.h"
 #include "Vision/screenAwarenessAssessment.h"
 #include "Windows/disposableApplicationFixtures.h"
 #include "Workspace/virtualMachineSettings.h"
@@ -200,6 +204,7 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     output.modelPath = tier.modelPath;
     output.bVisionEnabled = tier.bVisionEnabled;
     output.multimodalProjectorPath = tier.multimodalProjectorPath;
+    output.imageMinTokens = tier.imageMinTokens;
     output.contextSize = tier.contextSize;
     // The quantized KV cache was chosen for Main's 32K context. Fast and Expert keep
     // llama.cpp's default cache at their own smaller contexts.
@@ -434,6 +439,11 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             const auto capabilities = actionRuntime.Settings();
             grant.approvedRoots = capabilities.approvedRoots;
             grant.imageGenerationEnabled = capabilities.image.enabled;
+            {
+                std::lock_guard lock(taskMutex);
+                if (activeTask && activeTask->videoGeneration)
+                    grant.imageGenerationEnabled = false;
+            }
             const auto origin = sessionIdentity.Stamp({}, {}, companionAuthority->Revision());
             auto port = std::make_shared<agents::ChatActionPort>();
             port->evaluate = [this](const actions::ActionRequest& request) { return actionRuntime.Evaluate(request); };
@@ -512,15 +522,24 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             grant.executors.sandbox = sandboxWorkspace.Bind(std::move(binding));
             if (grant.imageGenerationEnabled)
             {
-                grant.executors.generateImage = [this, admission](const std::string& prompt, const agents::ToolCallContext& call)
+                auto imageRequests = std::make_shared<std::atomic<unsigned>>(0);
+                grant.discardGeneratedMedia = [this](const auto& references) { DiscardGeneratedMedia(references); };
+                grant.executors.generateImage = [this, admission, imageRequests](
+                                                    const std::string& prompt, const agents::ToolCallContext& call)
                 {
-                    auto outcome = documentWorkshop.GenerateImage(prompt, call.stopToken, admission, Stamp());
-                    // The reply owns the turn's state; only the picture's own events are kept.
-                    std::erase_if(outcome.events, [](const TurnEvent& event) { return event.kind == TurnEvent::Kind::State; });
+                    if (imageRequests->fetch_add(1) >= 4)
+                        return agents::ToolExecution::Fail("This turn has reached its four-image job limit.");
+                    visual::ImageRequest request;
+                    request.prompt = prompt;
+                    const auto result = GenerateImageRequest(request, {}, call.stopToken, admission, false);
                     if (!call.Admitted())
+                    {
+                        DiscardGeneratedMedia(result.generatedMediaReferences);
                         return agents::ToolExecution::Fail("The turn ended while the picture was being made.");
-                    const SessionResult result = ApplyTurn(std::move(outcome));
-                    return result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
+                    }
+                    auto execution = result.succeeded ? agents::ToolExecution::Ok(result.text) : agents::ToolExecution::Fail(result.text);
+                    execution.generatedMediaReferences = result.generatedMediaReferences;
+                    return execution;
                 };
             }
             grant.mcpTools = McpChatTools(handler, stopToken);
@@ -541,18 +560,20 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                     : (line.find("] [Warning]") != std::string::npos ? RuntimeEventKind::Warning : RuntimeEventKind::Activity);
             Publish(kind, line);
         });
-    conversationRuntime.SetPrivateAdmissionFactory([this]
-    {
-        const auto captured = Stamp();
-        const auto audience = Audience();
-        return [this, captured, audience]
+    conversationRuntime.SetPrivateAdmissionFactory(
+        [this]
         {
-            const auto current = Audience();
-            return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
-                audience.kind == identity::AudienceKind::Private && current.kind == audience.kind && current.revision == audience.revision;
-        };
-    });
-    conversationRuntime.SetEditorContextProvider([this] { return CurrentEditorContext(); });
+            const auto captured = Stamp();
+            const auto audience = Audience();
+            return [this, captured, audience]
+            {
+                const auto current = Audience();
+                return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
+                       audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
+                       current.revision == audience.revision;
+            };
+        });
+    conversationRuntime.SetSavedFileContextProvider([this] { return CurrentSavedFileContext(); });
     speechCoordinator.SetAdmissionFactory([this] { return CaptureSpeechAdmission(Audience(), Stamp()); });
     goalRunner.SetProgressHandler([this](const goals::GoalProgress& progress) { PublishGoalProgress(progress); });
     // A goal step that needs confirmation asks the same handler an interactive action
@@ -658,53 +679,66 @@ void ReviaSession::StartVirtualMachine()
             virtualMachine = std::make_shared<workspace::VirtualMachineRuntime>(workspace::CreateVmwareProvider(std::move(options)));
         }
         const auto origin = sessionIdentity.Stamp();
-        virtualMachine->SetObserver([this, origin](const workspace::VirtualMachineSnapshot& snapshot)
-        {
-            if (!sessionIdentity.IsCurrent(origin)) return;
-            const char* message = "The private virtual machine is unavailable; conversation remains available.";
-            switch (snapshot.state)
+        virtualMachine->SetObserver(
+            [this, origin](const workspace::VirtualMachineSnapshot& snapshot)
             {
-            case workspace::VirtualMachineState::Disabled: message = "Virtual machine startup is disabled."; break;
-            case workspace::VirtualMachineState::Preparing: message = "Preparing the private Ubuntu workspace in the background."; break;
-            case workspace::VirtualMachineState::Ready: message = "The private Ubuntu workspace is ready."; break;
-            case workspace::VirtualMachineState::Stopping: message = "Stopping the private Ubuntu workspace."; break;
-            case workspace::VirtualMachineState::Stopped: message = "The private Ubuntu workspace stopped."; break;
-            case workspace::VirtualMachineState::Blocked:
-                // Provider diagnostics may contain private details; publish only fixed host explanations.
-                if (snapshot.code == "insufficient_memory")
-                    message = "The Ubuntu workspace needs at least 3 GiB of available host memory. "
-                              "Close other applications and relaunch Revia.";
-                else if (snapshot.code == "insufficient_disk")
-                    message = "The Ubuntu workspace needs at least 6 GiB of free disk space to start, or 12 GiB for first setup. "
-                              "Free space and relaunch Revia.";
-                else if (snapshot.code == "missing_tool")
-                    message = "The Ubuntu workspace needs VMware Workstation and Windows OpenSSH client tools. "
-                              "Install the missing tools and relaunch Revia.";
-                else if (snapshot.code == "readiness_unverified" || snapshot.code == "guest_bootstrap_pending")
-                    message = "The Ubuntu workspace setup could not be verified. Revia will retry on the next launch.";
-                else if (snapshot.code == "startup_prerequisite_failed")
-                    message = "The Ubuntu workspace could not finish waiting for Revia's voice preparation. "
-                              "Relaunch Revia to retry.";
-                else if (snapshot.code == "enrollment_in_use")
-                    message = "Another Revia session is using this Ubuntu workspace. "
-                              "Close that session and relaunch Revia.";
-                break;
-            }
-            PublishComponent("Virtual machine", workspace::ToString(snapshot.state), message, -1.0, 0, 0, {}, 0, origin);
-        });
+                if (!sessionIdentity.IsCurrent(origin))
+                    return;
+                const char* message = "The private virtual machine is unavailable; conversation remains available.";
+                switch (snapshot.state)
+                {
+                case workspace::VirtualMachineState::Disabled:
+                    message = "Virtual machine startup is disabled.";
+                    break;
+                case workspace::VirtualMachineState::Preparing:
+                    message = "Preparing the private Ubuntu workspace in the background.";
+                    break;
+                case workspace::VirtualMachineState::Ready:
+                    message = "The private Ubuntu workspace is ready.";
+                    break;
+                case workspace::VirtualMachineState::Stopping:
+                    message = "Stopping the private Ubuntu workspace.";
+                    break;
+                case workspace::VirtualMachineState::Stopped:
+                    message = "The private Ubuntu workspace stopped.";
+                    break;
+                case workspace::VirtualMachineState::Blocked:
+                    // Provider diagnostics may contain private details; publish only fixed host explanations.
+                    if (snapshot.code == "insufficient_memory")
+                        message = "The Ubuntu workspace needs at least 3 GiB of available host memory. "
+                                  "Close other applications and relaunch Revia.";
+                    else if (snapshot.code == "insufficient_disk")
+                        message = "The Ubuntu workspace needs at least 6 GiB of free disk space to start, or 12 GiB for first setup. "
+                                  "Free space and relaunch Revia.";
+                    else if (snapshot.code == "missing_tool")
+                        message = "The Ubuntu workspace needs VMware Workstation and Windows OpenSSH client tools. "
+                                  "Install the missing tools and relaunch Revia.";
+                    else if (snapshot.code == "readiness_unverified" || snapshot.code == "guest_bootstrap_pending")
+                        message = "The Ubuntu workspace setup could not be verified. Revia will retry on the next launch.";
+                    else if (snapshot.code == "startup_prerequisite_failed")
+                        message = "The Ubuntu workspace could not finish waiting for Revia's voice preparation. "
+                                  "Relaunch Revia to retry.";
+                    else if (snapshot.code == "enrollment_in_use")
+                        message = "Another Revia session is using this Ubuntu workspace. "
+                                  "Close that session and relaunch Revia.";
+                    break;
+                }
+                PublishComponent("Virtual machine", workspace::ToString(snapshot.state), message, -1.0, 0, 0, {}, 0, origin);
+            });
         // Permissions remain owned by the capability store. Startup supplies only a transport.
         actionRuntime.BindGuestRuntime(virtualMachine);
-        virtualMachine->Start([this, origin](std::stop_token stop)
-        {
-            // Voice keeps its selected model and device. Wait on this existing VM
-            // worker so the provider checks available RAM after warmup settles.
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
-            while (!voiceWarmupFinished.load() && !stop.stop_requested() && sessionIdentity.IsCurrent(origin) &&
-                std::chrono::steady_clock::now() < deadline)
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            return voiceWarmupFinished.load() && voiceWarmupSucceeded.load() && !stop.stop_requested() &&
-                sessionIdentity.IsCurrent(origin);
-        });
+        virtualMachine->Start(
+            [this, origin](std::stop_token stop)
+            {
+                // Voice keeps its selected model and device. Wait on this existing VM
+                // worker so the provider checks available RAM after warmup settles.
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+                while (!voiceWarmupFinished.load() && !stop.stop_requested() && sessionIdentity.IsCurrent(origin) &&
+                       std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                return voiceWarmupFinished.load() && voiceWarmupSucceeded.load() && !stop.stop_requested() &&
+                       sessionIdentity.IsCurrent(origin);
+            });
     }
     catch (...)
     {
@@ -961,14 +995,15 @@ bool ReviaSession::Start()
     else
     {
         appLogger.Log("Capability runtime initialized.");
-        runtimeEvidenceBridge.Start(eventBus, actionRuntime.EvidenceJournalOwner(), [this](const audit::JournalHealth& health)
-        {
-            PublishComponent("Evidence journal", health.degraded ? "Degraded" : "Ready",
-                "Dropped telemetry: " + std::to_string(health.droppedTelemetry) +
-                "; unresolved transactions: " + std::to_string(health.unresolvedTransactions.size()) +
-                "; quarantined records: " + std::to_string(health.quarantinedRecords) +
-                "; persistence diagnostic present: " + std::string(health.error.empty() ? "no" : "yes"));
-        });
+        runtimeEvidenceBridge.Start(eventBus, actionRuntime.EvidenceJournalOwner(),
+            [this](const audit::JournalHealth& health)
+            {
+                PublishComponent("Evidence journal", health.degraded ? "Degraded" : "Ready",
+                    "Dropped telemetry: " + std::to_string(health.droppedTelemetry) +
+                        "; unresolved transactions: " + std::to_string(health.unresolvedTransactions.size()) +
+                        "; quarantined records: " + std::to_string(health.quarantinedRecords) +
+                        "; persistence diagnostic present: " + std::string(health.error.empty() ? "no" : "yes"));
+            });
         // Cloud requests go into the same action audit, the intent before any byte leaves.
         // Without this sink the cloud backend sends nothing.
         if (const std::shared_ptr<audit::EvidenceJournal> journal = actionRuntime.EvidenceJournalOwner())
@@ -1049,6 +1084,8 @@ bool ReviaSession::Start()
     resources::ApplyResourcePlan(resourcePlan, settings);
     imageGenerator.Configure(settings.image);
     actionRuntime.BindImageProvider(imageGenerator, imageGenerator.OutputDirectory(), settings.initiative.bEnabled);
+    videoGenerator.Configure(settings.video);
+    actionRuntime.BindVideoProvider(videoGenerator, videoGenerator.OutputDirectory());
 
     // Fast remains a small CPU-resident brain on multi- and single-GPU systems, so it
     // never takes VRAM reserved for voice. Where Main has a GPU, Main answers short
@@ -1445,8 +1482,7 @@ bool ReviaSession::Start()
         PublishComponent("Memory reranker", available ? "Ready" : "Fallback",
             available ? "Local CPU memory reranking is ready." : memoryReranker->LastError());
     }
-    if (settings.memoryNli.enabled && settings.embedding.bEnabled && profile.bMemoryEnabled &&
-        settings.llm.backend == "LLamaCpp")
+    if (settings.memoryNli.enabled && settings.embedding.bEnabled && profile.bMemoryEnabled && settings.llm.backend == "LLamaCpp")
     {
         const auto nliStarted = std::chrono::steady_clock::now();
         const bool available = memoryNli->Start(settings.memoryNli, stopToken);
@@ -2297,9 +2333,7 @@ void ReviaSession::StartInitiativeLoop()
                         }
                         initiative::Proposal candidate;
                         const auto describeEvidence = [](const initiative::Proposal& proposal)
-                        {
-                            return proposal.optionalObservation ? std::string("an authorized saved C/C++ revision") : proposal.evidence;
-                        };
+                        { return proposal.optionalObservation ? std::string("an authorized saved C/C++ revision") : proposal.evidence; };
                         if (consideration.hasProposal)
                         {
                             lastLoggedInitiative.clear();
@@ -2324,8 +2358,8 @@ void ReviaSession::StartInitiativeLoop()
                         {
                             continue;
                         }
-                        auto openingAdmitted = CaptureInitiativeAdmission(consideration.proposal,
-                            proposalOrigin, proposalAudience, proposalInputGeneration, proposalAwarenessEpoch);
+                        auto openingAdmitted = CaptureInitiativeAdmission(
+                            consideration.proposal, proposalOrigin, proposalAudience, proposalInputGeneration, proposalAwarenessEpoch);
                         if (!openingAdmitted())
                         {
                             initiativeController.Expire(consideration.proposal.id);
@@ -2367,14 +2401,18 @@ void ReviaSession::StartInitiativeLoop()
                                         const std::stop_token operationToken = BeginOperation();
                                         // Spare compute admits a new optional turn. Once it owns
                                         // this operation, its own inference may make the GPU busy.
-                                        openingAdmitted = CaptureInitiativeAdmission(consideration.proposal,
-                                            proposalOrigin, proposalAudience, proposalInputGeneration, proposalAwarenessEpoch, false);
+                                        openingAdmitted = CaptureInitiativeAdmission(consideration.proposal, proposalOrigin,
+                                            proposalAudience, proposalInputGeneration, proposalAwarenessEpoch, false);
                                         if (consideration.proposal.optionalObservation)
                                         {
                                             std::lock_guard lock(cancellationMutex);
                                             editorOpeningStop.store(std::make_shared<std::stop_source>(activeStopSource));
                                         }
-                                        if (!llmAvailable || (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning()))
+                                        const bool savedSourceOpening =
+                                            consideration.proposal.optionalObservation &&
+                                            consideration.proposal.evidence.starts_with(perception::SavedFileContextPrefix);
+                                        if (!savedSourceOpening &&
+                                            (!llmAvailable || (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning())))
                                         {
                                             PublishComponent("Language model", "Restarting",
                                                 "The local model stopped; Revia is restarting it before speaking.");
@@ -2385,7 +2423,8 @@ void ReviaSession::StartInitiativeLoop()
                                         {
                                             deliver = [&](const SessionResult& reply)
                                             {
-                                                if (!openingAdmitted() || operationToken.stop_requested()) return false;
+                                                if (!openingAdmitted() || operationToken.stop_requested())
+                                                    return false;
                                                 RuntimeEvent event;
                                                 event.kind = RuntimeEventKind::AssistantMessage;
                                                 event.stamp = proposalOrigin;
@@ -2400,16 +2439,21 @@ void ReviaSession::StartInitiativeLoop()
                                                 return true;
                                             };
                                         }
-                                        if (consideration.proposal.optionalObservation && !PreparePrivateContext(proposalMemoryScope, openingAdmitted))
+                                        if (consideration.proposal.optionalObservation &&
+                                            !PreparePrivateContext(proposalMemoryScope, openingAdmitted))
                                         {
                                             opening.succeeded = false;
                                             opening.reason = "The private observation context changed before the opening.";
                                         }
+                                        else if (savedSourceOpening)
+                                            opening = conversationRuntime.StartSavedSourceConversation(consideration.proposal.message,
+                                                consideration.proposal.evidence, profile, llmAvailable, ShouldSpeakOnCurrentChannel(),
+                                                operationToken, proposalAudience.revision, openingAdmitted, std::move(deliver));
                                         else
                                             opening = conversationRuntime.StartConversation(consideration.proposal.message,
-                                            consideration.proposal.evidence, profile, llmAvailable, ShouldSpeakOnCurrentChannel(),
-                                            operationToken, proposalAudience.revision,
-                                            openingAdmitted, consideration.proposal.optionalObservation, std::move(deliver));
+                                                consideration.proposal.evidence, profile, llmAvailable, ShouldSpeakOnCurrentChannel(),
+                                                operationToken, proposalAudience.revision, openingAdmitted,
+                                                consideration.proposal.optionalObservation, std::move(deliver));
                                         if (opening.succeeded && !opening.text.empty() &&
                                             (openingPublished || (!operationToken.stop_requested() && openingAdmitted())))
                                         {
@@ -2432,10 +2476,14 @@ void ReviaSession::StartInitiativeLoop()
                             if (consideration.proposal.optionalObservation)
                                 editorOpeningStop.store({});
                             const bool choseSilence = opening.succeeded && opening.text.empty();
-                            PublishComponent("Initiative", choseSilence ? "Silent" : opening.succeeded ? "Started" : "Suppressed",
-                                choseSilence ? "No optional comment was worth an interruption." :
-                                    opening.succeeded ? describeEvidence(consideration.proposal) : opening.reason, -1.0, 0, 0, {},
-                                proposalAudience.revision, proposalOrigin);
+                            PublishComponent("Initiative",
+                                choseSilence        ? "Silent"
+                                : opening.succeeded ? "Started"
+                                                    : "Suppressed",
+                                choseSilence        ? "No optional comment was worth an interruption."
+                                : opening.succeeded ? describeEvidence(consideration.proposal)
+                                                    : opening.reason,
+                                -1.0, 0, 0, {}, proposalAudience.revision, proposalOrigin);
                             if (!opening.succeeded || opening.text.empty())
                             {
                                 initiativeController.Expire(consideration.proposal.id);
@@ -2455,8 +2503,9 @@ void ReviaSession::StartInitiativeLoop()
                                 eventBus.Publish(std::move(event));
                             }
                             appLogger.Log(choseSilence ? "Saved-file observation considered; chose silence."
-                                : opening.succeeded ? "Conversation started from event evidence: " + describeEvidence(consideration.proposal)
-                                                    : "Conversation opening suppressed: " + opening.reason);
+                                          : opening.succeeded
+                                              ? "Conversation started from event evidence: " + describeEvidence(consideration.proposal)
+                                              : "Conversation opening suppressed: " + opening.reason);
                             continue;
                         }
 
@@ -3472,8 +3521,8 @@ SessionResult ReviaSession::AcceptProposal(const std::string& proposalId)
     return result;
 }
 
-void ReviaSession::ArchiveTurn(
-    const std::string& role, const std::string& content, const memory::MemoryScope& scope, std::function<bool()> admission)
+void ReviaSession::ArchiveTurn(const std::string& role, const std::string& content, const memory::MemoryScope& scope,
+    std::function<bool()> admission, const std::vector<conversationMediaReference>& mediaReferences)
 {
     if (!sessionIdentity.IsCurrent(sessionIdentity.Stamp()))
         return;
@@ -3484,7 +3533,14 @@ void ReviaSession::ArchiveTurn(
         return;
     }
     std::string reason;
-    if (!conversationArchive.Record(conversationSessionId, role, content, reason, scope, admission))
+    const bool generatedAssistant = role == "assistant" && !mediaReferences.empty() &&
+                                    std::all_of(mediaReferences.begin(), mediaReferences.end(),
+                                        [](const auto& reference) { return reference.origin == MediaOrigin::GeneratedArtifact; });
+    const bool recorded =
+        generatedAssistant
+            ? conversationArchive.RecordGeneratedAssistant(conversationSessionId, content, mediaReferences, reason, scope, admission)
+            : conversationArchive.Record(conversationSessionId, role, content, reason, scope, admission, mediaReferences);
+    if (!recorded)
     {
         // Only the refusal is logged, never the turn. Recording why a secret was withheld
         // by writing the secret to the log would defeat the whole point of withholding it.
@@ -3556,12 +3612,12 @@ std::string ReviaSession::RecallConversation(
 
     const std::int64_t now = memory::CurrentEpoch();
     const auto stopToken = CurrentOperationToken();
-    const bool ranked = !request.terms.empty() &&
-        (request.kind == memory::RecallKind::Topic || request.kind == memory::RecallKind::Window);
+    const bool ranked = !request.terms.empty() && (request.kind == memory::RecallKind::Topic || request.kind == memory::RecallKind::Window);
     std::string query;
     for (const auto& term : request.terms)
     {
-        if (!query.empty()) query += ' ';
+        if (!query.empty())
+            query += ' ';
         query += term;
     }
     embeddingOutput embedding;
@@ -3698,10 +3754,10 @@ bool ReviaSession::CommitPreferenceLocked(const std::string& lowered, const appS
     // Applied to the running session where that is safe to do live, so a preference is not
     // a promise about the next start. Worker startup settings remain next-start.
     static const std::set<std::string> appliedNow = {"speech.enabled", "bargein.enabled", "speechrecognition.handsfree",
-        "speechrecognition.requirewakeword", "initiative.enabled", "initiative.mode", "initiative.maxperhour", "initiative.curiosityenabled",
-        "initiative.spontaneousspeechenabled", "initiative.speakwhenuseraway", "initiative.autonomouslearningenabled",
-        "initiative.suppresswhenfullscreen", "resources.usagesampleseconds", "responsefilter.aireviewenabled",
-        "presence.avatarbridgeenabled", "presence.externaladaptersenabled", "presence.enabled",
+        "speechrecognition.requirewakeword", "initiative.enabled", "initiative.mode", "initiative.maxperhour",
+        "initiative.curiosityenabled", "initiative.spontaneousspeechenabled", "initiative.speakwhenuseraway",
+        "initiative.autonomouslearningenabled", "initiative.suppresswhenfullscreen", "resources.usagesampleseconds",
+        "responsefilter.aireviewenabled", "presence.avatarbridgeenabled", "presence.externaladaptersenabled", "presence.enabled",
         "presence.requireaddressedstreammessages", "conversation.delegation"};
     // Read from the running settings each time they are used, so committing is applying.
     static const std::set<std::string> readAtUse = {
@@ -3790,8 +3846,8 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
         // turned into a request. The hands-free preference itself is kept for the next start.
         speechRecognitionService.SetHandsFreeEnabled(false);
         speechRecognitionService.Cancel();
-        PublishComponent("Microphone", "Disabled",
-            "The microphone is off. Turning Use the microphone back on takes effect the next time Revia starts.");
+        PublishComponent(
+            "Microphone", "Disabled", "The microphone is off. Turning Use the microphone back on takes effect the next time Revia starts.");
     }
     else if (lowered == "speechrecognition.requirewakeword")
     {
@@ -3814,7 +3870,8 @@ void ReviaSession::ApplyPreference(const std::string& lowered)
         // saved source a direct question may still need. Resuming cannot revive one.
         userInteractionGeneration.fetch_add(1);
         conversationStarter.Clear();
-        if (auto attempt = editorOpeningStop.load()) attempt->request_stop();
+        if (auto attempt = editorOpeningStop.load())
+            attempt->request_stop();
         if (liveWorkersOpen && curiosityWorker.joinable())
         {
             StopCuriosityLoop();
@@ -3958,25 +4015,176 @@ SessionResult ReviaSession::ReviseDocumentBlock(const std::string& reference, co
 
 SessionResult ReviaSession::GenerateImage(const std::string& prompt, const std::stop_token stopToken, std::function<bool()> admission)
 {
+    visual::ImageRequest request;
+    request.prompt = prompt;
+    return GenerateImageRequest(request, {}, stopToken, std::move(admission));
+}
+
+void ReviaSession::DiscardGeneratedMedia(const std::vector<conversationMediaReference>& references)
+{
+    auto* library = AttachmentsIfPresent();
+    if (!library)
+        return;
+    for (const auto& reference : references)
+    {
+        const auto documents = library->List();
+        const auto owned = std::find_if(documents.begin(), documents.end(),
+            [&](const auto& document)
+            {
+                return document.id == reference.id && document.digest == reference.digest &&
+                       document.origin == MediaOrigin::GeneratedArtifact;
+            });
+        if (reference.origin != MediaOrigin::GeneratedArtifact || owned == documents.end())
+            continue;
+        std::string error;
+        if (!library->Forget(reference.id, error))
+            appLogger.Warning("An unpublished generated artifact could not be retired: " + error);
+        const auto remaining = library->List();
+        if (std::none_of(remaining.begin(), remaining.end(), [&](const auto& document) { return document.id == reference.id; }))
+        {
+            std::lock_guard lock(attachmentMutex);
+            forgottenMedia.push_back(reference.id);
+        }
+        (void)conversationArchive.InvalidateMediaAnalysis(reference.id);
+    }
+}
+
+bool ReviaSession::PublishGeneratedMedia(
+    const std::vector<conversationMediaReference>& references, const std::function<bool()>& admission, const std::uint64_t mediaEpoch)
+{
+    auto* library = AttachmentsIfPresent();
+    if (!library || !admission || !admission() || conversationEpoch.load() != mediaEpoch || !library->ImageReferencesCurrent(references))
+        return references.empty();
+    const auto documents = library->List();
+    for (const auto& reference : references)
+    {
+        const auto found = std::find_if(documents.begin(), documents.end(),
+            [&](const auto& document)
+            {
+                return document.id == reference.id && document.digest == reference.digest &&
+                       document.origin == MediaOrigin::GeneratedArtifact;
+            });
+        if (reference.origin != MediaOrigin::GeneratedArtifact || found == documents.end() || !admission())
+            return false;
+        RuntimeEvent event;
+        event.kind = RuntimeEventKind::Diagram;
+        event.stamp = Stamp();
+        event.audienceRevision = Audience().revision;
+        event.component = "Canvas";
+        event.phase = "Image";
+        event.message = reference.name;
+        event.resource = actions::PathToUtf8(found->storedPath);
+        event.generatedMediaReference = reference;
+        event.conversationMediaEpoch = mediaEpoch;
+        eventBus.Publish(std::move(event));
+    }
+    return true;
+}
+
+SessionResult ReviaSession::GenerateImageRequest(const visual::ImageRequest& request, std::optional<conversationMediaReference> source,
+    const std::stop_token stopToken, std::function<bool()> admission, const bool publishTurnStates)
+{
+    {
+        std::lock_guard lock(taskMutex);
+        if (activeTask && activeTask->videoGeneration)
+        {
+            SessionResult result;
+            result.succeeded = false;
+            result.text = result.reason = "A video job is using the generation device. Wait for it or stop it before creating a picture.";
+            return result;
+        }
+    }
+    const auto generationOrigin = Stamp();
+    const auto generationAudience = Audience();
     if (!admission)
     {
-        const auto origin = Stamp();
-        const auto audience = Audience();
-        admission = [this, origin, audience]
+        admission = [this, generationOrigin, generationAudience]
         {
             const auto current = Audience();
-            return started.load() && Admits(origin) && audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
-                   current.revision == audience.revision;
+            return started.load() && Admits(generationOrigin) && generationAudience.kind == identity::AudienceKind::Private &&
+                   current.kind == generationAudience.kind && current.revision == generationAudience.revision;
         };
     }
-    auto outcome = documentWorkshop.GenerateImage(prompt, stopToken, admission, Stamp());
+    auto& library = Attachments();
+    const auto revision = library.MediaRevision();
+    const auto epoch = conversationEpoch.load();
+    if (request.mode == visual::ImageRequestMode::ReferenceToImage)
+    {
+        const auto current = source ? library.ReadImageSource(*source, stopToken) : std::nullopt;
+        if (!current || !request.source || !request.source->bytes || !current->pixels.bytes || request.source->id != source->id ||
+            request.source->digest != source->digest || request.source->mimeType != current->pixels.mimeType ||
+            request.source->width != current->pixels.width || request.source->height != current->pixels.height ||
+            *request.source->bytes != *current->pixels.bytes)
+        {
+            SessionResult result;
+            result.succeeded = false;
+            result.text = result.reason = "The reference image is no longer available. No image was generated.";
+            return result;
+        }
+    }
+    else if (source || request.source)
+    {
+        SessionResult result;
+        result.succeeded = false;
+        result.text = result.reason = "This image request has incompatible source data. No image was generated.";
+        return result;
+    }
+    const auto generationAdmitted = [this, &library, revision, epoch, admission, stopToken, generationOrigin, generationAudience]
+    {
+        try
+        {
+            return !stopToken.stop_requested() && admission() && Admits(generationOrigin) &&
+                   generationAudience.kind == identity::AudienceKind::Private && Audience().revision == generationAudience.revision &&
+                   conversationEpoch.load() == epoch && library.MediaRevision() == revision;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    };
+    auto outcome = documentWorkshop.GenerateImage(request, stopToken, generationAdmitted, generationOrigin);
     bool admitted = false;
     try
     {
-        admitted = !stopToken.stop_requested() && admission();
+        admitted = generationAdmitted() && (!source || library.ImageReferencesCurrent({*source}));
     }
     catch (...)
     {
+    }
+    if (outcome.generatedImage && outcome.generatedImage->succeeded)
+    {
+        const auto imported = library.ImportGeneratedImage(
+            *outcome.generatedImage, imageGenerator.OutputDirectory(),
+            [admitted, generationAdmitted] { return admitted && generationAdmitted(); }, stopToken);
+        if (!imported.succeeded)
+        {
+            SessionResult result;
+            result.succeeded = false;
+            result.text = result.reason = imported.error;
+            return result;
+        }
+        if (!generationAdmitted() || !library.ImageReferencesCurrent({imported.reference}))
+        {
+            DiscardGeneratedMedia({imported.reference});
+            SessionResult result;
+            result.succeeded = false;
+            result.reason = "Image access changed before the result could be published.";
+            return result;
+        }
+        outcome.result.generatedMediaReferences = {imported.reference};
+        const auto oldPath = actions::PathToUtf8(outcome.generatedImage->path);
+        const auto storedPath = actions::PathToUtf8(imported.storedPath);
+        for (auto& event : outcome.events)
+            if (event.kind == TurnEvent::Kind::Runtime && event.runtimeEvent.component == "Canvas" && event.runtimeEvent.phase == "Image")
+            {
+                event.runtimeEvent.resource = storedPath;
+                event.runtimeEvent.stamp = generationOrigin;
+                event.runtimeEvent.audienceRevision = generationAudience.revision;
+                event.runtimeEvent.generatedMediaReference = imported.reference;
+                event.runtimeEvent.conversationMediaEpoch = epoch;
+            }
+        if (const auto at = outcome.result.reasoning.find(oldPath); !oldPath.empty() && at != std::string::npos)
+            outcome.result.reasoning.replace(at, oldPath.size(), storedPath);
     }
     if (!admitted)
     {
@@ -3985,6 +4193,9 @@ SessionResult ReviaSession::GenerateImage(const std::string& prompt, const std::
         result.reason = "Image request was cancelled or its conversation changed.";
         return result;
     }
+    if (!publishTurnStates)
+        std::erase_if(outcome.events, [](const TurnEvent& event)
+            { return event.kind == TurnEvent::Kind::State || (event.kind == TurnEvent::Kind::Runtime && event.runtimeEvent.component == "Canvas"); });
     return ApplyTurn(std::move(outcome));
 }
 
@@ -4248,6 +4459,30 @@ void ReviaSession::StopVoiceWarmup()
 
 SessionResult ReviaSession::Submit(const std::string& input, const agents::InputSource source)
 {
+    return SubmitTurn(input, source);
+}
+
+SessionResult ReviaSession::SubmitTurn(const std::string& input, const agents::InputSource source,
+    std::vector<attachments::StagedAttachment> files, std::vector<conversationMediaReference> replayMedia,
+    std::function<bool()> originAdmission)
+{
+    struct UnsentFiles
+    {
+        ReviaSession& session;
+        std::vector<attachments::StagedAttachment>& files;
+        ~UnsentFiles()
+        {
+            if (!files.empty())
+                session.Attachments().DiscardTaken(files, "the message was not sent");
+        }
+    } unsentFiles{*this, files};
+    if (originAdmission && !originAdmission())
+    {
+        SessionResult denied;
+        denied.succeeded = false;
+        denied.text = denied.reason = "The original conversation context changed before replay.";
+        return denied;
+    }
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
     if (auto api = localApiRuntime.load())
@@ -4276,7 +4511,8 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
         performanceRuntime.Stop("she stopped singing to answer you");
     }
 
-    const agents::InputVerdict inputVerdict = inputArbiter.Offer(input, source, std::chrono::system_clock::now(), CaptureInputContext(source));
+    const agents::InputVerdict inputVerdict =
+        inputArbiter.Offer(input, source, std::chrono::system_clock::now(), CaptureInputContext(source));
     if (inputVerdict != agents::InputVerdict::Queued)
     {
         result.reason = "Input " + agents::ToString(inputVerdict) + ".";
@@ -4346,13 +4582,25 @@ SessionResult ReviaSession::Submit(const std::string& input, const agents::Input
 
     // Typed input is answered immediately. Pressing Enter should send, not wait.
     const agents::InputBatch acceptedInput = inputArbiter.TakeBatch();
+    if (originAdmission && !originAdmission())
+    {
+        result.succeeded = false;
+        result.text = result.reason = "The original conversation context changed while replay was waiting.";
+        return result;
+    }
     if (!acceptedInput.contextMatched || acceptedInput.text.empty() || !InputContextCurrent(acceptedInput.context))
     {
         result.succeeded = false;
         result.reason = "The input arbiter produced an empty turn.";
         return result;
     }
-    return RunTurnLocked(acceptedInput);
+    if ((!files.empty() || !replayMedia.empty()) && acceptedInput.text != input)
+    {
+        result.succeeded = false;
+        result.reason = "The attachment request no longer matches the admitted message.";
+        return result;
+    }
+    return RunTurnLocked(acceptedInput, std::exchange(files, {}), std::move(replayMedia), std::move(originAdmission));
 }
 
 void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitionEvent)
@@ -4438,12 +4686,15 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
         userEvent.phase = "HandsFree";
         userEvent.message = recognitionEvent.transcript;
         eventBus.Publish(std::move(userEvent));
-        const auto verdict = inputArbiter.Offer(recognitionEvent.transcript, agents::InputSource::Voice,
-            std::chrono::system_clock::now(), voiceContext);
+        const auto verdict =
+            inputArbiter.Offer(recognitionEvent.transcript, agents::InputSource::Voice, std::chrono::system_clock::now(), voiceContext);
         if (verdict == agents::InputVerdict::Queued)
         {
             std::stop_source active;
-            { std::lock_guard lock(cancellationMutex); active = activeStopSource; }
+            {
+                std::lock_guard lock(cancellationMutex);
+                active = activeStopSource;
+            }
             active.request_stop();
             speechService.StopSpeaking();
             lastUserInteractionSteadyMs.store(SteadyMilliseconds());
@@ -4453,9 +4704,20 @@ void ReviaSession::OnRecognitionEvent(const speech::RecognitionEvent& recognitio
     }
 }
 
-SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
+SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch, std::vector<attachments::StagedAttachment> files,
+    std::vector<conversationMediaReference> replayMedia, std::function<bool()> originAdmission)
 {
-    if (!batch.contextMatched || !InputContextCurrent(batch.context))
+    struct UnusedFiles
+    {
+        ReviaSession& session;
+        std::vector<attachments::StagedAttachment>& files;
+        ~UnusedFiles()
+        {
+            if (!files.empty())
+                session.Attachments().DiscardTaken(files, "the captured message was no longer admitted");
+        }
+    } unusedFiles{*this, files};
+    if (!batch.contextMatched || !InputContextCurrent(batch.context) || (originAdmission && !originAdmission()))
     {
         SessionResult denied;
         denied.succeeded = false;
@@ -4464,14 +4726,14 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch)
     }
     auto admittedBatch = batch;
     SessionResult result = GuardTurn(
-        [this, &admittedBatch]()
+        [this, &admittedBatch, &files, &replayMedia, &originAdmission]()
         {
             if (admittedBatch.source == agents::InputSource::Typed &&
                 admittedBatch.context.audience.kind == identity::AudienceKind::Private && InputContextCurrent(admittedBatch.context))
             {
                 (void)ResolveLocalSpeaker(admittedBatch.text, admittedBatch.context);
             }
-            return RunTurnUnguarded(admittedBatch);
+            return RunTurnUnguarded(admittedBatch, std::exchange(files, {}), std::move(replayMedia), std::move(originAdmission));
         });
     {
         std::lock_guard lock(taskContractMutex);
@@ -4545,12 +4807,17 @@ SessionResult ReviaSession::GuardTurn(const std::function<SessionResult()>& turn
     }
 }
 
-SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
+SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch, std::vector<attachments::StagedAttachment> turnFiles,
+    std::vector<conversationMediaReference> replayMedia, std::function<bool()> originAdmission)
 {
+    DrainForgottenMedia();
     const auto& acceptedInput = batch.text;
     const auto captured = batch.context;
-    const auto inputAdmission = [this, captured]()
-    { return InputContextCurrent(captured) && captured.stamp.policyVersion == companionAuthority->Revision(); };
+    const auto inputAdmission = [this, captured, originAdmission]()
+    {
+        return (!originAdmission || originAdmission()) && InputContextCurrent(captured) &&
+               captured.stamp.policyVersion == companionAuthority->Revision();
+    };
     const bool privateAudience = captured.audience.kind == identity::AudienceKind::Private;
     const memory::MemoryScope memoryScope{
         captured.participantId, captured.audience, captured.participantSource, captured.consentRevision, captured.stamp.companionId};
@@ -4563,12 +4830,6 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
     }
     // Files that came with a typed message. Whatever this turn does not hand to the
     // model is deleted when it ends, so a refused or redirected turn keeps nothing.
-    std::vector<attachments::StagedAttachment> turnFiles;
-    if (batch.source == agents::InputSource::Typed)
-    {
-        std::lock_guard lock(attachmentMutex);
-        turnFiles = std::exchange(pendingTurnAttachments, {});
-    }
     struct UnusedFiles
     {
         ReviaSession& session;
@@ -4590,15 +4851,47 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         result.reason = "The accepted input task contract could not be admitted.";
         return result;
     }
-    const auto admission = [this, captured, taskContract, stopToken]()
-    { return InputContextCurrent(captured) && TaskContractRefusal(*taskContract, stopToken).empty(); };
+    const auto admission = [this, captured, taskContract, stopToken, originAdmission]()
+    {
+        return (!originAdmission || originAdmission()) && InputContextCurrent(captured) &&
+               TaskContractRefusal(*taskContract, stopToken).empty();
+    };
     speechService.SetAdmissionGuard(admission);
     if (initiativeController.RequestQuiet(acceptedInput))
         speechService.StopSpeaking();
+    bool userArchived = false;
+    std::vector<conversationMediaReference> generationInputReferences;
     const auto finish = [&](SessionResult finished)
     {
         if (!finished.taskContract)
             finished.taskContract = taskContract;
+        if (!finished.generatedMediaReferences.empty())
+        {
+            auto* library = AttachmentsIfPresent();
+            if (!finished.succeeded || !admission() || !library || !library->ImageReferencesCurrent(finished.generatedMediaReferences) ||
+                (!generationInputReferences.empty() && !library->ImageReferencesCurrent(generationInputReferences)))
+            {
+                DiscardGeneratedMedia(finished.generatedMediaReferences);
+                finished = {};
+                finished.succeeded = false;
+                finished.reason = "The generated result was withdrawn before it could enter this conversation.";
+                finished.taskContract = taskContract;
+            }
+            else
+            {
+                if (!userArchived)
+                    ArchiveTurn("user", acceptedInput, memoryScope, admission, generationInputReferences);
+                conversationMessage user{"user", acceptedInput, memoryScope.participantId, memoryScope};
+                user.mediaReferences = generationInputReferences;
+                context.AddMessage(std::move(user));
+                conversationMessage assistant{"assistant", finished.text, memoryScope.participantId, memoryScope};
+                assistant.mediaReferences = finished.generatedMediaReferences;
+                context.AddMessage(std::move(assistant));
+                finished.fromAssistant = true;
+                ArchiveTurn("assistant", finished.text, memoryScope, admission, finished.generatedMediaReferences);
+                RememberExchange(batch, finished, true);
+            }
+        }
         if (!finished.shouldExit && !stopToken.stop_requested())
         {
             (void)affectController.ObserveTurn(acceptedInput, finished.text, finished.succeeded);
@@ -4623,12 +4916,22 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
             return finish(std::move(result));
         }
         std::vector<conversationMessage> history;
-        { std::lock_guard lock(audienceMutex); history = audienceHistory; }
+        {
+            std::lock_guard lock(audienceMutex);
+            history = audienceHistory;
+        }
         identity::RelationshipState presentation;
         if (const auto alias = relationships.DisplayNameForAudience(captured.participantId, captured.audience))
             presentation.displayName = *alias;
-        result = conversationRuntime.ReplyForAudience(acceptedInput, history, captured.audience, presentation, profile, llmAvailable,
-            ShouldSpeakOnCurrentChannel(), stopToken, admission, {}, batch.acceptedAt);
+        if (attachments::SelectConversationMedia(acceptedInput, {}, memoryScope).requested)
+        {
+            result.succeeded = result.fromAssistant = true;
+            result.audienceRevision = captured.audience.revision;
+            result.text = "Image attachments are private. No image was read in this shared conversation.";
+        }
+        else
+            result = conversationRuntime.ReplyForAudience(acceptedInput, history, captured.audience, presentation, profile, llmAvailable,
+                ShouldSpeakOnCurrentChannel(), stopToken, admission, {}, batch.acceptedAt);
         if (result.succeeded && admission())
         {
             if (captured.participantSource == identity::SpeakerSource::ConsentedVoice)
@@ -4638,7 +4941,8 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
             {
                 audienceHistory.push_back({"user", acceptedInput});
                 audienceHistory.push_back({"assistant", result.text});
-                if (audienceHistory.size() > 32) audienceHistory.erase(audienceHistory.begin(), audienceHistory.begin() + 2);
+                if (audienceHistory.size() > 32)
+                    audienceHistory.erase(audienceHistory.begin(), audienceHistory.begin() + 2);
                 RememberExchange(batch, result, false);
             }
         }
@@ -4655,6 +4959,114 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         result.shouldExit = true;
         result.text = "Exiting R.E.V.I.A...";
         return finish(std::move(result));
+    }
+
+    auto imageHistory = context.GetMediaHistory();
+    const auto recentMessages = context.GetRecentMessages();
+    imageHistory.insert(imageHistory.end(), recentMessages.begin(), recentMessages.end());
+    if (visual::IsVideoGenerationRequest(acceptedInput))
+    {
+        attachments::MediaSelection source;
+        const bool currentMedia = std::any_of(turnFiles.begin(), turnFiles.end(), [](const auto& file)
+            { return file.kind == attachments::AttachmentKind::Image || file.kind == attachments::AttachmentKind::Video; });
+        if (!currentMedia)
+        {
+            source = attachments::SelectConversationMedia(acceptedInput, imageHistory, memoryScope);
+            if (!replayMedia.empty())
+            {
+                source.references = replayMedia;
+                source.requested = true;
+                source.notice.clear();
+            }
+        }
+        if (!source.notice.empty())
+        {
+            result.succeeded = false;
+            result.text = result.reason = source.notice;
+            return finish(std::move(result));
+        }
+        auto files = PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken, source.references);
+        if (source.requested && files.mediaReferences.empty())
+        {
+            result.succeeded = false;
+            result.text = result.reason = "The requested animation reference is unavailable. No video job was started.";
+            return finish(std::move(result));
+        }
+        result = StartVideoGeneration(acceptedInput, files.mediaReferences, captured);
+        if (result.succeeded && admission())
+        {
+            conversationMessage user{"user", acceptedInput, memoryScope.participantId, memoryScope};
+            user.mediaReferences = files.mediaReferences;
+            context.AddMessage(std::move(user));
+            context.AddMessage({"assistant", result.text, memoryScope.participantId, memoryScope});
+            ArchiveTurn("user", acceptedInput, memoryScope, admission, files.mediaReferences);
+            ArchiveTurn("assistant", result.text, memoryScope, admission);
+        }
+        return finish(std::move(result));
+    }
+    const auto drawingIntent = visual::DrawingRequestPolicy::Classify(acceptedInput);
+    const bool imageCommand = acceptedInput == "/imagine" || acceptedInput.starts_with("/imagine ") || acceptedInput == "/draw" ||
+                              acceptedInput.starts_with("/draw ");
+    const auto generateReference = [&](const std::vector<conversationMediaReference>& references)
+    {
+        SessionResult generated;
+        generated.succeeded = false;
+        if (references.size() != 1 || attachments::IsVideoReference(references.front()))
+        {
+            generated.text = generated.reason = "Choose one available still image as the editing reference. No image was generated.";
+            return generated;
+        }
+        std::string lowered = acceptedInput;
+        std::transform(
+            lowered.begin(), lowered.end(), lowered.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered.find("animate") != std::string::npos || lowered.find("animation") != std::string::npos ||
+            lowered.find("video") != std::string::npos)
+        {
+            generated.text = generated.reason =
+                "The local video-generation route is still being qualified. No image or video was generated.";
+            return generated;
+        }
+        const auto source = Attachments().ReadImageSource(references.front(), stopToken);
+        if (!source)
+        {
+            generated.text = generated.reason = "The selected reference image is unavailable or was changed. No image was generated.";
+            return generated;
+        }
+        visual::ImageRequest request;
+        request.mode = visual::ImageRequestMode::ReferenceToImage;
+        request.prompt = acceptedInput.starts_with("/imagine ") ? acceptedInput.substr(9)
+                         : acceptedInput.starts_with("/draw ")  ? acceptedInput.substr(6)
+                                                                : visual::DrawingRequestPolicy::ExtractSubject(acceptedInput);
+        request.source = visual::ImageSource{source->reference.id, source->reference.digest, source->pixels.mimeType, source->pixels.bytes,
+            source->pixels.width, source->pixels.height};
+        generationInputReferences = references;
+        return GenerateImageRequest(request, references.front(), stopToken, admission);
+    };
+    if (imageCommand)
+    {
+        const auto space = acceptedInput.find(' ');
+        const std::string subject = space == std::string::npos ? std::string() : acceptedInput.substr(space + 1);
+        auto source = attachments::SelectConversationImages(subject, imageHistory, memoryScope);
+        if (!replayMedia.empty())
+        {
+            source.references = replayMedia;
+            source.requested = true;
+        }
+        const bool newImage = std::any_of(
+            turnFiles.begin(), turnFiles.end(), [](const auto& file) { return file.kind == attachments::AttachmentKind::Image; });
+        if (newImage || source.requested)
+        {
+            auto files = PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken, source.references);
+            ArchiveTurn("user", acceptedInput, memoryScope, admission, files.mediaReferences);
+            userArchived = true;
+            if (!source.notice.empty())
+            {
+                result.succeeded = false;
+                result.text = result.reason = source.notice;
+                return finish(std::move(result));
+            }
+            return finish(generateReference(files.mediaReferences));
+        }
     }
 
     if (TryHandleActionInput(acceptedInput, result))
@@ -4705,7 +5117,8 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         return finish(std::move(result));
     }
 
-    if (!llmAvailable || (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning()))
+    const bool transcriptOnlyIntent = attachments::RequestsOnlyVideoTranscript(acceptedInput);
+    if (!transcriptOnlyIntent && (!llmAvailable || (llamaServerProcess.WasStartedByRevia() && !llamaServerProcess.IsRunning())))
     {
         PublishComponent("Language model", "Restarting", "The local model stopped; Revia is restarting it before this turn.");
         llmAvailable = EnsureLLMAvailable(stopToken);
@@ -4713,14 +5126,59 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
             llmAvailable ? "The local model restarted successfully." : "The local model could not be restarted.");
     }
 
-    // Archived before the reply so the user's turn survives a generation that fails,
-    // is stopped, or crashes the model. What was asked is worth keeping even when the
-    // answer never arrived.
-    ArchiveTurn("user", acceptedInput, memoryScope, admission);
+    const auto mediaEpoch = conversationEpoch.load();
+    auto* mediaLibrary = AttachmentsIfPresent();
+    const auto mediaRevision = mediaLibrary ? mediaLibrary->MediaRevision() : 0;
+    attachments::MediaSelection selected;
+    if (turnFiles.empty())
+    {
+        selected = attachments::SelectConversationMedia(acceptedInput, imageHistory, memoryScope);
+        if (!replayMedia.empty())
+        {
+            selected.references = std::move(replayMedia);
+            selected.requested = true;
+            selected.notice.clear();
+        }
+    }
+    const bool videoRequest =
+        std::any_of(selected.references.begin(), selected.references.end(), attachments::IsVideoReference) ||
+        std::any_of(turnFiles.begin(), turnFiles.end(), [](const auto& file) { return file.kind == attachments::AttachmentKind::Video; });
+    const bool imageRequest =
+        selected.requested ||
+        std::any_of(turnFiles.begin(), turnFiles.end(), [](const auto& file)
+            { return file.kind == attachments::AttachmentKind::Image || file.kind == attachments::AttachmentKind::Video; });
+    attachments::TurnAttachments attached =
+        PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken, selected.references);
+    if (!selected.notice.empty())
+        attached.reference +=
+            (attached.reference.empty() ? "" : "\n\n") + std::string(identity::markers::AttachmentGrounding) + " " + selected.notice;
+    const auto& visibleMedia = attached.visibleMediaReferences;
+    const auto mediaAdmitted = [this, admission, mediaLibrary, mediaRevision, mediaEpoch]()
+    { return admission() && conversationEpoch.load() == mediaEpoch && (!mediaLibrary || mediaLibrary->MediaRevision() == mediaRevision); };
+    if (!mediaAdmitted() || (!visibleMedia.empty() && !mediaLibrary->ImageReferencesCurrent(visibleMedia)))
+    {
+        result.succeeded = false;
+        result.reason = "Image access changed before this turn could be sent.";
+        return finish(std::move(result));
+    }
+    // Preserve the user's associations even when generation fails or vision is unavailable.
+    ArchiveTurn("user", acceptedInput, memoryScope, admission, attached.mediaReferences);
+    userArchived = true;
 
     // Asking for a drawing in conversation draws. Requiring /draw would make the
     // capability reachable only by someone who already knew it existed.
-    const auto drawingIntent = visual::DrawingRequestPolicy::Classify(acceptedInput);
+    const bool transformReference =
+        (selected.requested || !attached.mediaReferences.empty()) && attachments::RequestsImageTransformation(acceptedInput);
+    if ((drawingIntent != visual::DrawingIntent::None && (!attached.mediaReferences.empty() || selected.requested)) || transformReference)
+    {
+        if (!selected.notice.empty())
+        {
+            result.succeeded = false;
+            result.text = result.reason = selected.notice;
+            return finish(std::move(result));
+        }
+        return finish(generateReference(attached.mediaReferences));
+    }
     if (drawingIntent != visual::DrawingIntent::None)
     {
         const auto subject = visual::DrawingRequestPolicy::ExtractSubject(acceptedInput);
@@ -4733,24 +5191,91 @@ SessionResult ReviaSession::RunTurnUnguarded(const agents::InputBatch& batch)
         }
         return finish(std::move(drawn));
     }
+    const bool imageCountRequest = imageRequest && attachments::RequestsImageAttachmentCount(acceptedInput);
+    const bool nativeTranscriptRequest = transcriptOnlyIntent;
+    const auto samplingLimitation = videoRequest ? attachments::VideoSamplingLimitation(acceptedInput, attached.videoTimestampsMs) : "";
+    if ((imageRequest || nativeTranscriptRequest) && ((attached.images.empty() && !attached.transcriptAvailable) || !llmAvailable ||
+                                                         imageCountRequest || !samplingLimitation.empty() || nativeTranscriptRequest))
+    {
+        if (nativeTranscriptRequest)
+            result.text = attached.videoTranscript;
+        else if (!llmAvailable && !attached.images.empty())
+            result.text = std::string(videoRequest ? "Video frame review" : "Image understanding") +
+                          " is unavailable because the configured local vision model is not ready. Check the "
+                          "selected model and its matching projector. No visual inspection ran.";
+        else if (!samplingLimitation.empty())
+            result.text = samplingLimitation;
+        else if (imageCountRequest && !attached.images.empty())
+        {
+            if (videoRequest)
+                result.text = "1 uploaded clip is available; " + std::to_string(attached.images.size()) +
+                              (attached.images.size() == 1 ? " sampled frame was" : " sampled frames were") + " prepared for this request.";
+            else
+                result.text = std::to_string(attached.images.size()) +
+                              (attached.images.size() == 1 ? " uploaded image is" : " uploaded images are") +
+                              " available for this request.";
+        }
+        else
+            result.text = selected.notice;
+        for (const auto& notice : attached.notices)
+            result.text += (result.text.empty() ? "" : "\n") + notice;
+        if (result.text.empty())
+            result.text = nativeTranscriptRequest
+                              ? "Uploaded speech transcription is unavailable for this request. No recognized words or audio conclusions "
+                                "were established."
+                          : videoRequest ? "No authorized video frames are available for this request. Please attach the intended clip."
+                                         : "No authorized image pixels are available for this request. Please attach the intended image.";
+        if (!mediaAdmitted())
+        {
+            result = {};
+            result.succeeded = false;
+            result.reason = "Image access changed before the explanation could be delivered.";
+            return finish(std::move(result));
+        }
+        conversationMessage user{"user", acceptedInput, memoryScope.participantId, memoryScope};
+        user.mediaReferences = attached.mediaReferences;
+        context.AddMessage(std::move(user));
+        context.AddMessage("assistant", result.text);
+        result.succeeded = result.fromAssistant = true;
+        result.audienceRevision = captured.audience.revision;
+        result.reasoning = "The attachment owner supplied the media transcription, availability, sampling limitation or clarification "
+                           "response. No visual model request was sent.";
+        ArchiveTurn("assistant", result.text, memoryScope, mediaAdmitted);
+        RememberExchange(batch, result, true);
+        return finish(std::move(result));
+    }
     const std::string speakerForTurn = captured.participantId;
-    attachments::TurnAttachments attached = PrepareTurnAttachments(acceptedInput, std::exchange(turnFiles, {}), stopToken);
     std::string turnReference = ClipboardReference(acceptedInput);
     if (!attached.reference.empty())
         turnReference += (turnReference.empty() ? "" : "\n\n") + attached.reference;
     result = conversationRuntime.ReplyForAudience(acceptedInput, {}, captured.audience, CurrentRelationship(), profile, llmAvailable,
-        ShouldSpeakOnCurrentChannel(), stopToken, admission, turnReference, batch.acceptedAt, memoryScope, std::move(attached.images));
-    if (!admission())
+        ShouldSpeakOnCurrentChannel(), stopToken, mediaAdmitted, turnReference, batch.acceptedAt, memoryScope, std::move(attached.images),
+        attached.mediaReferences, selected.requested);
+    if (!mediaAdmitted() || (!visibleMedia.empty() && !mediaLibrary->ImageReferencesCurrent(visibleMedia)) ||
+        (!result.generatedMediaReferences.empty() &&
+            (!AttachmentsIfPresent() || !AttachmentsIfPresent()->ImageReferencesCurrent(result.generatedMediaReferences))))
     {
+        DiscardGeneratedMedia(result.generatedMediaReferences);
         result = {};
         result.succeeded = false;
-        result.reason = "The audience changed before the reply could be delivered.";
+        result.reason = "The conversation or image access changed before the reply could be delivered.";
+        DrainForgottenMedia();
+        if (stopToken.stop_requested() && InputContextCurrent(captured) && conversationEpoch.load() == mediaEpoch &&
+            (!mediaLibrary || mediaLibrary->MediaRevision() == mediaRevision))
+            RememberExchange(batch, result, true);
         return finish(std::move(result));
     }
     RecordRelationshipEvidence(speakerForTurn, acceptedInput, result.text, result.succeeded);
+    if (!result.generatedMediaReferences.empty() && !PublishGeneratedMedia(result.generatedMediaReferences, mediaAdmitted, mediaEpoch))
+    {
+        DiscardGeneratedMedia(result.generatedMediaReferences);
+        result = {};
+        result.succeeded = false;
+        result.reason = "The generated artifact could not be published in this conversation.";
+    }
     if (result.succeeded && result.fromAssistant && !result.text.empty())
     {
-        ArchiveTurn("assistant", result.text, memoryScope, admission);
+        ArchiveTurn("assistant", result.text, memoryScope, mediaAdmitted, result.generatedMediaReferences);
     }
     RememberExchange(batch, result, true);
     if (!result.succeeded)
@@ -4788,8 +5313,7 @@ void ReviaSession::PollBackgroundEvents()
         if (event.saveSucceeded && event.decision.bSuccess && !event.correctionProposals.empty())
             QueueMemoryCorrectionProposals(event.correctionProposals, memoryEventOrigin);
         const bool embeddingBackfill = event.operation == "memory_backfill" || event.operation == "archive_backfill";
-        const std::string timingScope =
-            embeddingBackfill ? event.operation : "memory turn #" + std::to_string(event.turnId);
+        const std::string timingScope = embeddingBackfill ? event.operation : "memory turn #" + std::to_string(event.turnId);
         appLogger.Timing(timingScope, event.decision.timings);
 
         if (!event.embeddingError.empty())
@@ -4799,7 +5323,7 @@ void ReviaSession::PollBackgroundEvents()
         }
 
         const std::string phase = !event.decision.bSuccess || !event.saveSucceeded ? "Error"
-                                  : embeddingBackfill                             ? "Backfilled"
+                                  : embeddingBackfill                              ? "Backfilled"
                                   : event.wasAdded                                 ? "Saved"
                                                                                    : "Idle";
         PublishComponent(embeddingBackfill ? "Embeddings" : "Memory", phase,
@@ -4868,6 +5392,7 @@ void ReviaSession::RequestStop()
         interactiveBrowser->Stop();
     imageGenerator.Cancel();
     CancelSpeakerEnrollment();
+    videoGenerator.Cancel();
     CancelDelegation("stop was requested");
     agentWorkflow.RequestCancel();
     PreemptAutonomousActivity("stop was requested");
@@ -4956,6 +5481,7 @@ void ReviaSession::Stop()
     // process that is being killed underneath it.
     resourceMonitor.Stop();
     imageGenerator.Shutdown();
+    videoGenerator.Shutdown();
     if (!conversationSessionId.empty())
     {
         conversationArchive.EndSession(conversationSessionId);
@@ -7901,16 +8427,17 @@ void ReviaSession::RefreshMemoryBackfill()
     {
         const auto current = CapturePrivateMemoryScope();
         return memory::IsAttributedPrivateScope(current) && current.participantId == scope.participantId &&
-            current.companionId == scope.companionId && current.audience.kind == scope.audience.kind &&
-            current.audience.audienceId == scope.audience.audienceId && current.audience.revision == scope.audience.revision &&
-            current.participantSource == scope.participantSource && current.consentRevision == scope.consentRevision;
+               current.companionId == scope.companionId && current.audience.kind == scope.audience.kind &&
+               current.audience.audienceId == scope.audience.audienceId && current.audience.revision == scope.audience.revision &&
+               current.participantSource == scope.participantSource && current.consentRevision == scope.consentRevision;
     };
     RefreshSemanticDuplicateScope(scope, admission);
     if (started.load() && settings.embedding.bEnabled && profile.bMemoryEnabled && settings.llm.backend == "LLamaCpp")
     {
         turnCoordinator.BackfillMemoryEmbeddings(router, settings.embedding.modelName);
         if (ConversationSnapshot().bArchiveEnabled && memory::IsAttributedPrivateScope(scope))
-            turnCoordinator.Memory().StartArchiveEmbeddingBackfill(router, conversationArchive, settings.embedding.modelName, scope, admission);
+            turnCoordinator.Memory().StartArchiveEmbeddingBackfill(
+                router, conversationArchive, settings.embedding.modelName, scope, admission);
         else
             turnCoordinator.Memory().StopArchiveEmbeddingBackfill();
     }
@@ -7921,8 +8448,8 @@ void ReviaSession::RefreshMemoryBackfill()
 void ReviaSession::RefreshSemanticDuplicateScope(const memory::MemoryScope& scope, std::function<bool()> admission)
 {
     if (started.load() && settings.memoryNli.enabled && settings.embedding.bEnabled && profile.bMemoryEnabled &&
-        settings.llm.backend == "LLamaCpp" && memory::IsAttributedPrivateScope(scope) && memoryNli->IsAvailable() &&
-        admission && admission())
+        settings.llm.backend == "LLamaCpp" && memory::IsAttributedPrivateScope(scope) && memoryNli->IsAvailable() && admission &&
+        admission())
     {
         memory::SemanticDuplicateSettings policy;
         policy.enabled = true;
@@ -8349,7 +8876,7 @@ goals::Goal ReviaSession::ExecuteOperate(
     // Owner full access answers the per-kind questions itself, for routine kinds only; the
     // kinds that always need their own confirmation still stop the task.
     const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
-        goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
+                                 goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
     goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
     goalRunner.SeedToolDelegation(
@@ -8570,7 +9097,8 @@ std::stop_token ReviaSession::GoalToken() const
     return CurrentOperationToken();
 }
 
-bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage)
+bool ReviaSession::LaunchTask(
+    const std::string& title, std::function<goals::Goal(std::stop_token)> execute, std::string& outMessage, const bool videoGeneration)
 {
     std::lock_guard launching(taskLaunchMutex);
     const auto taskContext = CaptureTaskContext();
@@ -8579,8 +9107,8 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
         std::lock_guard lock(taskMutex);
         if (activeTask)
         {
-            const auto visibleTitle = CanDiscloseTask(activeTask->context, activeTask->stamp, taskContext)
-                ? activeTask->title : std::string("another task");
+            const auto visibleTitle =
+                CanDiscloseTask(activeTask->context, activeTask->stamp, taskContext) ? activeTask->title : std::string("another task");
             outMessage = "I'm still working on '" + visibleTitle + "'. Say /task cancel if you want me to drop it first.";
             return false;
         }
@@ -8616,6 +9144,8 @@ bool ReviaSession::LaunchTask(const std::string& title, std::function<goals::Goa
             ownedTaskContracts[origin.taskId] = contract;
         }
         activeTask = BackgroundTask{title, std::chrono::steady_clock::now(), "starting", origin, taskContext};
+        activeTask->videoGeneration = videoGeneration;
+        activeTask->mediaEpoch = videoGeneration ? conversationEpoch.load() : 0;
         tasksLaunched.fetch_add(1);
         taskWorker = std::jthread(
             [this, source, origin, taskContext, execute = std::move(execute)](const std::stop_token workerStop) mutable
@@ -8656,14 +9186,33 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     }
     const std::string summary = FormatGoalSummary(finished);
     std::string title;
+    std::optional<conversationMediaReference> generatedMedia;
+    std::uint64_t mediaEpoch = 0;
+    bool videoTask = false;
     {
         std::lock_guard lock(taskMutex);
         if (activeTask)
+        {
             title = activeTask->title;
+            generatedMedia = activeTask->generatedMedia;
+            mediaEpoch = activeTask->mediaEpoch;
+            videoTask = activeTask->videoGeneration;
+        }
         lastTaskReport = TaskReport{summary, finished.status, std::chrono::steady_clock::now(), origin, context};
         activeTask.reset();
     }
-    const auto admission = CaptureSpeechAdmission(audience, origin);
+    const auto speechAdmission = CaptureSpeechAdmission(audience, origin);
+    const auto admission = [this, speechAdmission, generatedMedia, mediaEpoch, context, origin, videoTask]
+    {
+        if (videoTask && conversationEpoch.load() != mediaEpoch)
+            return false;
+        if (!generatedMedia)
+            return speechAdmission();
+        const auto current = CaptureTaskContext();
+        auto* library = AttachmentsIfPresent();
+        return started.load() && CanDiscloseTask(context, origin, current) && current.audience.revision == context.audience.revision &&
+               conversationEpoch.load() == mediaEpoch && library && library->ImageReferencesCurrent({*generatedMedia});
+    };
     const auto settleWithoutReport = [&]
     {
         if (sessionIdentity.IsCurrent(origin) && !busy.load())
@@ -8671,6 +9220,8 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     };
     if (!admission())
     {
+        if (generatedMedia)
+            DiscardGeneratedMedia({*generatedMedia});
         settleWithoutReport();
         return;
     }
@@ -8681,6 +9232,8 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     PublishComponent("Task", goals::ToString(finished.status), summary, -1.0, 0, 0, {}, audience.revision, origin);
     if (!admission())
     {
+        if (generatedMedia)
+            DiscardGeneratedMedia({*generatedMedia});
         settleWithoutReport();
         return;
     }
@@ -8688,6 +9241,8 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     std::string report = succeeded   ? "Done: '" + title + "'."
                          : cancelled ? "Stopped '" + title + "'."
                                      : "I couldn't finish '" + title + "'.";
+    if (succeeded && generatedMedia)
+        report = "The short video is ready and attached. I haven't inspected it yet.";
     if (!succeeded && !cancelled && !finished.stopDetail.empty())
     {
         report += " " + utf8::Prefix(finished.stopDetail, 200);
@@ -8699,6 +9254,8 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     }
     if (!admission())
     {
+        if (generatedMedia)
+            DiscardGeneratedMedia({*generatedMedia});
         settleWithoutReport();
         return;
     }
@@ -8710,17 +9267,22 @@ void ReviaSession::FinishTask(const goals::Goal& finished, const RuntimeStamp& o
     message.component = "Task";
     message.message = report;
     message.detail = summary;
+    if (succeeded && generatedMedia)
+    {
+        message.generatedMediaReference = generatedMedia;
+        message.conversationMediaEpoch = mediaEpoch;
+    }
     eventBus.Publish(std::move(message));
 
     // Said out loud unless she was stopped, or a call is on.
-    if (!cancelled && speechService.IsEnabled() && !perception::InCall())
+    if (!cancelled && speechService.IsEnabled() && !perception::InCall() && speechAdmission())
     {
         speech::SpeechIntent spoken;
         spoken.owner = speech::SpeechOwner::Research;
         spoken.behavior = speech::SpeechBehavior::Queue;
         spoken.text = report;
         spoken.affect = emotionRuntime.ToAffectSnapshot();
-        spoken.admission = admission;
+        spoken.admission = [admission, speechAdmission] { return admission() && speechAdmission(); };
         const speech::SpeechSubmission submitted = speechCoordinator.Submit(std::move(spoken));
         if (!submitted.accepted)
             appLogger.Log("Task report not spoken: " + submitted.reason);
@@ -8763,7 +9325,8 @@ std::string ReviaSession::RunningTaskTitle() const
 {
     const auto current = CaptureTaskContext();
     std::lock_guard lock(taskMutex);
-    if (!activeTask) return {};
+    if (!activeTask)
+        return {};
     return CanDiscloseTask(activeTask->context, activeTask->stamp, current) ? activeTask->title : "another task";
 }
 
@@ -8986,6 +9549,12 @@ attachments::AttachmentLibrary& ReviaSession::Attachments()
     {
         attachmentLibrary = std::make_unique<attachments::AttachmentLibrary>(companionPaths.Resolve("RuntimeData/Attachments/Files"),
             companionPaths.Resolve("Memory/revia_documents.db"), companionPaths.Resolve("Audit/attachments.jsonl"));
+        auto transcription = settings.speechRecognition;
+        transcription.bUseGpu = false;
+        transcription.device = "cpu";
+        transcription.threads = std::min(transcription.threads, 2);
+        attachmentLibrary->SetVideoTranscriber([transcription](const std::filesystem::path& wave, const std::stop_token stopToken)
+            { return speech::TranscribeWaveFile(wave, transcription, stopToken, "Models/ggml-silero-v5.1.2.bin"); });
         // Document text is embedded only by a local embedding server; anywhere else,
         // search stays lexical rather than send the text away.
         if (settings.embedding.bEnabled && attachments::IsLocalEndpoint(settings.embedding.host))
@@ -9017,7 +9586,7 @@ std::optional<std::string> ReviaSession::AttachmentRefusal() const
     return std::nullopt;
 }
 
-attachments::IntakeResult ReviaSession::AttachFile(const std::filesystem::path& path)
+attachments::IntakeResult ReviaSession::AttachFile(const std::filesystem::path& path, const std::stop_token stopToken)
 {
     if (const auto refusal = AttachmentRefusal())
     {
@@ -9025,7 +9594,7 @@ attachments::IntakeResult ReviaSession::AttachFile(const std::filesystem::path& 
         refused.message = *refusal;
         return refused;
     }
-    attachments::IntakeResult result = Attachments().Stage(path);
+    attachments::IntakeResult result = Attachments().Stage(path, stopToken);
     appLogger.Log("[Attachments] " + std::string(result.status == attachments::IntakeStatus::Accepted ? "staged" : "not attached") + ": " +
                   result.message);
     return result;
@@ -9064,6 +9633,27 @@ SessionResult ReviaSession::SubmitWithAttachments(const std::string& input, cons
         refused.reason = *refusal;
         return refused;
     }
+    if (files.size() != attachmentIds.size())
+    {
+        Attachments().DiscardTaken(files, "a requested attachment is no longer staged");
+        SessionResult refused;
+        refused.succeeded = false;
+        refused.text = refused.reason = "One or more requested attachments are no longer staged. Attach them again before sending.";
+        return refused;
+    }
+    const auto videos =
+        std::count_if(files.begin(), files.end(), [](const auto& file) { return file.kind == attachments::AttachmentKind::Video; });
+    const bool hasImage =
+        std::any_of(files.begin(), files.end(), [](const auto& file) { return file.kind == attachments::AttachmentKind::Image; });
+    if (videos > 1 || (videos != 0 && hasImage))
+    {
+        Attachments().DiscardTaken(files, "video review accepts one clip separately from still-image uploads");
+        SessionResult refused;
+        refused.succeeded = false;
+        refused.text = refused.reason =
+            "Send one video clip per message, separately from still-image uploads. No partial media set was sent.";
+        return refused;
+    }
     std::string text = input;
     if (text.empty())
     {
@@ -9072,20 +9662,7 @@ SessionResult ReviaSession::SubmitWithAttachments(const std::string& input, cons
             text += (index == 0 ? "\"" : index + 1 == files.size() ? " and \"" : ", \"") + files[index].displayName + "\"";
         text += ".";
     }
-    {
-        std::lock_guard lock(attachmentMutex);
-        pendingTurnAttachments = std::move(files);
-    }
-    SessionResult result = Submit(text, agents::InputSource::Typed);
-    // A message Submit turned away before its turn ran leaves its files here.
-    std::vector<attachments::StagedAttachment> unused;
-    {
-        std::lock_guard lock(attachmentMutex);
-        unused = std::exchange(pendingTurnAttachments, {});
-    }
-    if (!unused.empty())
-        Attachments().DiscardTaken(unused, "the message was not sent");
-    return result;
+    return SubmitTurn(text, agents::InputSource::Typed, std::move(files));
 }
 
 std::vector<attachments::StoredDocument> ReviaSession::Documents()
@@ -9105,6 +9682,42 @@ std::string ReviaSession::DocumentPreview(const std::string& id)
     return library ? library->PreviewText(id) : std::string();
 }
 
+std::optional<conversationImage> ReviaSession::DocumentImagePreview(const std::string& id)
+{
+    if (AttachmentRefusal())
+        return std::nullopt;
+    const auto origin = Stamp();
+    const auto audience = Audience();
+    auto* library = AttachmentsIfPresent();
+    const auto image = library ? library->PreviewImage(id) : std::nullopt;
+    const auto current = Audience();
+    if (!origin.SameSession(Stamp()) || current.kind != identity::AudienceKind::Private || current.revision != audience.revision)
+        return std::nullopt;
+    return image;
+}
+
+std::optional<attachments::VideoPlaybackSource> ReviaSession::DocumentVideoPreview(const std::string& id, const std::stop_token stopToken)
+{
+    if (AttachmentRefusal())
+        return {};
+    const auto origin = Stamp();
+    const auto audience = Audience();
+    auto* library = AttachmentsIfPresent();
+    const auto revision = library ? library->MediaRevision() : 0;
+    const auto source = library ? library->PreviewVideo(id, stopToken) : std::nullopt;
+    const auto current = Audience();
+    if (stopToken.stop_requested() || !origin.SameSession(Stamp()) || current.kind != identity::AudienceKind::Private ||
+        current.revision != audience.revision || !library || library->MediaRevision() != revision)
+        return {};
+    return source;
+}
+
+std::uint64_t ReviaSession::MediaPresentationRevision()
+{
+    auto* library = AttachmentsIfPresent();
+    return library ? library->MediaRevision() : 0;
+}
+
 bool ReviaSession::ForgetDocument(const std::string& id, std::string& outError)
 {
     if (const auto refusal = AttachmentRefusal())
@@ -9118,11 +9731,49 @@ bool ReviaSession::ForgetDocument(const std::string& id, std::string& outError)
         outError = "There are no stored documents.";
         return false;
     }
-    if (!library->Forget(id, outError))
+    const bool completelyRemoved = library->Forget(id, outError);
+    if (!completelyRemoved)
+    {
+        const auto remaining = library->List();
+        if (std::any_of(remaining.begin(), remaining.end(), [&](const auto& document) { return document.id == id; }))
+            return false;
+    }
+    {
+        std::lock_guard lock(attachmentMutex);
+        forgottenMedia.push_back(id);
+    }
+    if (!conversationArchive.InvalidateMediaAnalysis(id))
+    {
+        outError = "The stored file was deleted, but its archived image analysis could not be cleared.";
         return false;
-    recentDocumentIds.erase(std::remove(recentDocumentIds.begin(), recentDocumentIds.end(), id), recentDocumentIds.end());
-    PublishComponent("Documents", "Forgotten", "A stored document, its passages and its search vectors were deleted.");
-    return true;
+    }
+    {
+        std::unique_lock lock(operationMutex, std::try_to_lock);
+        if (lock.owns_lock())
+            DrainForgottenMedia();
+    }
+    if (completelyRemoved)
+        PublishComponent("Documents", "Forgotten", "A stored document, its passages and its search vectors were deleted.");
+    return completelyRemoved;
+}
+
+void ReviaSession::DrainForgottenMedia()
+{
+    std::vector<std::string> removed;
+    {
+        std::lock_guard lock(attachmentMutex);
+        removed = std::exchange(forgottenMedia, {});
+    }
+    for (const auto& id : removed)
+    {
+        context.InvalidateMediaAnalysis(id);
+        recentDocumentIds.erase(std::remove(recentDocumentIds.begin(), recentDocumentIds.end(), id), recentDocumentIds.end());
+        if (lastExchange && (std::any_of(lastExchange->mediaReferences.begin(), lastExchange->mediaReferences.end(),
+                                [&](const auto& reference) { return reference.id == id; }) ||
+                               std::any_of(lastExchange->generatedMediaReferences.begin(), lastExchange->generatedMediaReferences.end(),
+                                   [&](const auto& reference) { return reference.id == id; })))
+            lastExchange.reset();
+    }
 }
 
 std::string ReviaSession::SearchDocuments(const std::string& query, const std::stop_token stopToken)
@@ -9132,11 +9783,12 @@ std::string ReviaSession::SearchDocuments(const std::string& query, const std::s
     return attachments::ExecuteDocumentSearch(AttachmentsIfPresent(), query, stopToken);
 }
 
-attachments::TurnAttachments ReviaSession::PrepareTurnAttachments(
-    const std::string& input, std::vector<attachments::StagedAttachment> files, const std::stop_token stopToken)
+attachments::TurnAttachments ReviaSession::PrepareTurnAttachments(const std::string& input,
+    std::vector<attachments::StagedAttachment> files, const std::stop_token stopToken,
+    const std::vector<conversationMediaReference>& references)
 {
     attachments::TurnAttachments prepared;
-    if (!files.empty())
+    if (!files.empty() || !references.empty())
     {
         // Attachments go to a model on this computer or nowhere.
         if (!attachments::IsLocalEndpoint(settings.llm.host))
@@ -9150,18 +9802,20 @@ attachments::TurnAttachments ReviaSession::PrepareTurnAttachments(
         }
         attachments::ImagePolicy images;
         images.visionAvailable = settings.llm.bVisionEnabled;
-        images.unavailableReason = "image understanding is off in this setup: the main model was started without its vision projector "
-                                   "(llm.visionEnabled in Config/settings.json).";
+        images.unavailableReason = "Image understanding is disabled for the main model in this setup (llm.visionEnabled; owner settings "
+                                   "can override Config/settings.json). No image pixels were sent.";
         std::vector<std::string> documentIds;
         for (const attachments::StagedAttachment& file : files)
             if (attachments::IsDocument(file.kind))
                 documentIds.push_back(file.id);
-        const std::size_t count = files.size();
-        prepared = Attachments().PrepareTurn(input, std::move(files), images, stopToken);
+        const std::size_t count = files.empty() ? references.size() : files.size();
+        prepared = files.empty() ? Attachments().ReinspectMedia(input, references, images, stopToken)
+                                 : Attachments().PrepareTurn(input, std::move(files), images, stopToken);
         for (const std::string& notice : prepared.notices)
             PublishComponent("Attachments", "Notice", notice);
-        PublishComponent("Attachments", "Read",
-            "Read " + std::to_string(count) + (count == 1 ? " file" : " files") + " for this message; they stay on this computer.");
+        PublishComponent("Attachments", "Prepared",
+            "Prepared " + std::to_string(count) + (count == 1 ? " attachment" : " attachments") +
+                " for this message; image availability is reported separately.");
         if (!documentIds.empty())
         {
             recentDocumentIds = std::move(documentIds);
@@ -9216,10 +9870,10 @@ ReviaSession::TaskContext ReviaSession::CaptureTaskContext() const
 bool ReviaSession::CanDiscloseTask(const TaskContext& captured, const RuntimeStamp& origin, const TaskContext& current) const
 {
     return sessionIdentity.IsCurrent(origin) && captured.audience.kind == identity::AudienceKind::Private &&
-        current.audience.kind == captured.audience.kind && current.audience.audienceId == captured.audience.audienceId &&
-        !captured.participantId.empty() && current.participantId == captured.participantId &&
-        std::is_permutation(captured.audience.recipientEntityIds.begin(), captured.audience.recipientEntityIds.end(),
-            current.audience.recipientEntityIds.begin(), current.audience.recipientEntityIds.end());
+           current.audience.kind == captured.audience.kind && current.audience.audienceId == captured.audience.audienceId &&
+           !captured.participantId.empty() && current.participantId == captured.participantId &&
+           std::is_permutation(captured.audience.recipientEntityIds.begin(), captured.audience.recipientEntityIds.end(),
+               current.audience.recipientEntityIds.begin(), current.audience.recipientEntityIds.end());
 }
 
 std::string ReviaSession::DescribeRunningTask() const
@@ -9261,7 +9915,8 @@ void ReviaSession::PublishGoalProgress(const goals::GoalProgress& progress)
         {
             if (!progress.message.empty())
                 activeTask->progress = "step " + std::to_string(progress.ordinal + 1) + ": " + utf8::Prefix(progress.message, 160);
-            if (!CanDiscloseTask(activeTask->context, activeTask->stamp, current)) return;
+            if (!CanDiscloseTask(activeTask->context, activeTask->stamp, current))
+                return;
             origin = activeTask->stamp;
         }
     }
@@ -9691,6 +10346,32 @@ std::string ReviaSession::FormatGoalList(const std::vector<goals::Goal>& goalLis
 
 bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult& result)
 {
+    if (input == "/video" || input == "/video status")
+    {
+        const auto snapshot = videoGenerator.Snapshot();
+        std::string available;
+        const bool ready = videoGenerator.IsAvailable(available);
+        result.text = "Local short-video generation: " + std::string(ready ? "available" : "unavailable") + ". " + available +
+                      "\nJob: " + snapshot.state + ". " + snapshot.detail;
+        return true;
+    }
+    if (input == "/video cancel")
+    {
+        bool video = false;
+        {
+            std::lock_guard lock(taskMutex);
+            video = activeTask && activeTask->videoGeneration;
+        }
+        if (video)
+        {
+            videoGenerator.Cancel();
+            (void)CancelTask("the video job was cancelled");
+            result.text = "Video cancellation was requested. Completion is reported when the owned job stops.";
+        }
+        else
+            result.text = "There is no video job to cancel.";
+        return true;
+    }
     if (HandleSkillCommand(input, result))
         return true;
     if (HandleImprovementCommand(input, result))
@@ -10927,24 +11608,28 @@ SessionResult ReviaSession::ExecuteAction(actions::ActionRequest request)
 std::string ReviaSession::FormatActionOutcome(const actions::ActionOutcome& outcome)
 {
     std::ostringstream stream;
-    const char* summary = !outcome.result.succeeded ? "Action stopped: " : outcome.runtimeError.empty()
-        ? "Action succeeded: " : "Action completed; runtime reporting failed: ";
+    const char* summary = !outcome.result.succeeded      ? "Action stopped: "
+                          : outcome.runtimeError.empty() ? "Action succeeded: "
+                                                         : "Action completed; runtime reporting failed: ";
     stream << summary << outcome.Message() << '\n';
     if (outcome.result.guest)
     {
         const auto& receipt = *outcome.result.guest;
         const auto output = utf8::Prefix(receipt.standardOutput, 4096);
         const auto error = utf8::Prefix(receipt.standardError, 4096);
-        const bool truncated = receipt.outputTruncated || output.size() < receipt.standardOutput.size() ||
-            error.size() < receipt.standardError.size();
+        const bool truncated =
+            receipt.outputTruncated || output.size() < receipt.standardOutput.size() || error.size() < receipt.standardError.size();
         const auto truth = [](const bool value) { return value ? "true" : "false"; };
         stream << "Guest receipt: attempted=" << truth(receipt.attempted) << ", succeeded=" << truth(receipt.succeeded);
-        if (receipt.exitCode != -1) stream << ", exit=" << receipt.exitCode;
+        if (receipt.exitCode != -1)
+            stream << ", exit=" << receipt.exitCode;
         stream << ", timed_out=" << truth(receipt.timedOut) << ", cancelled=" << truth(receipt.cancelled)
                << ", uncertain_effect=" << truth(receipt.uncertainEffect) << ", receipt_verified=" << truth(receipt.receiptVerified)
                << ", output_truncated=" << truth(truncated) << '\n';
-        if (!output.empty()) stream << "----- standard output -----\n" << output << "\n----- end standard output -----\n";
-        if (!error.empty()) stream << "----- standard error -----\n" << error << "\n----- end standard error -----\n";
+        if (!output.empty())
+            stream << "----- standard output -----\n" << output << "\n----- end standard output -----\n";
+        if (!error.empty())
+            stream << "----- standard error -----\n" << error << "\n----- end standard error -----\n";
     }
     for (const std::string& entry : outcome.result.entries)
     {

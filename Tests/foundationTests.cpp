@@ -7619,54 +7619,59 @@ void TestHerOwnWorkIsNotCompany()
         "Being spoken to no longer holds loneliness off.");
 }
 
-void TestOnlySoundEffectsSurviveInAsterisks()
+void TestVocalizationShapingPreservesEmphasisAndRemovesTheatre()
 {
     using revia::speech::ShapeVocalizations;
     using revia::speech::VocalizationShaping;
 
+    for (const std::string written :
+        {"The image has a **red circle**, a **blue square**, and a **green triangle**.", "The label is ***MINT 47***.",
+            "This is *really* clear.", "A *red circle* sits above a *green triangle*.", "The result is *statistically significant*.",
+            "The printed word is **smiles**.", "The printed word is **laughs**.", "**A *red circle* and *green triangle***",
+            "Use `*smiles*` and `[laugh]` literally.", "```cpp\nvalue = *source;\n*smiles*\n```", "Use 2 ** 3 and 4 * 5 here."})
+    {
+        const auto preserved = ShapeVocalizations(written, 2);
+        Check(preserved.text == written && !preserved.changed && preserved.kept == 0 && preserved.strippedStageDirections == 0,
+            "Markdown, code or factual emphasis was consumed as a vocalization/aside: " + preserved.text);
+    }
+    const auto mixed = ShapeVocalizations("*smiles* The **red circle** is above the *green triangle*. [laugh]", 2);
+    Check(
+        mixed.text == "The **red circle** is above the *green triangle*. *laughs*" && mixed.strippedStageDirections == 1 && mixed.kept == 1,
+        "Shaping a real aside or sound cue removed emphasized facts: " + mixed.text);
+    Check(ShapeVocalizations("Use `**red circle**` literally. *smiles*", 2).text == "Use `**red circle**` literally.",
+        "A protected code span consumed the acting aside after it or lost its own content.");
+
     // The complaint that started this: a small local model narrating its own body
     // language. It is not a sound the voice can make, so it does not reach the voice.
-    const VocalizationShaping narrated = ShapeVocalizations(
-        "*Softens, leaning forward slightly.* That makes sense to me.", 2);
-    Check(narrated.text == "That makes sense to me.",
-        "A prose stage direction survived: " + narrated.text);
-    Check(narrated.strippedStageDirections == 1 && narrated.changed,
-        "Removing a stage direction was not reported.");
+    const VocalizationShaping narrated = ShapeVocalizations("*Softens, leaning forward slightly.* That makes sense to me.", 2);
+    Check(narrated.text == "That makes sense to me.", "A prose stage direction survived: " + narrated.text);
+    Check(narrated.strippedStageDirections == 1 && narrated.changed, "Removing a stage direction was not reported.");
 
     // Single-word narration is the common case and must go the same way, otherwise the
     // rule leaks exactly where a small model leans hardest.
     const VocalizationShaping oneWord = ShapeVocalizations("*smiles* Sure, I can do that.", 2);
-    Check(oneWord.text == "Sure, I can do that.",
-        "A single-word stage direction survived: " + oneWord.text);
+    Check(oneWord.text == "Sure, I can do that.", "A single-word stage direction survived: " + oneWord.text);
 
     // Qwen3-TTS performs the cue itself, so a real sound is kept rather than stripped,
     // and every accepted synonym collapses to the one spelling handed to the model.
-    for (const std::string written : {
-        "Oh really [laugh] that is perfect.",
-        "Oh really <laughing> that is perfect.",
-        "Oh really *laughter* that is perfect."})
+    for (const std::string written :
+        {"Oh really [laugh] that is perfect.", "Oh really <laughing> that is perfect.", "Oh really *laughter* that is perfect."})
     {
         const VocalizationShaping kept = ShapeVocalizations(written, 2);
-        Check(kept.text == "Oh really *laughs* that is perfect.",
-            "A vocalization did not canonicalize: " + written + " -> " + kept.text);
+        Check(kept.text == "Oh really *laughs* that is perfect.", "A vocalization did not canonicalize: " + written + " -> " + kept.text);
         Check(kept.kept == 1, "A kept vocalization was not counted.");
     }
 
     // The budget is the reason the model cannot turn a tag it just learned into a tic.
-    const VocalizationShaping spam = ShapeVocalizations(
-        "*laughs* one *laughs* two *laughs* three *laughs* four", 2);
-    Check(spam.kept == 2 && spam.droppedOverBudget == 2,
-        "The per-reply vocalization budget was not enforced.");
-    Check(spam.text == "*laughs* one *laughs* two three four",
-        "Dropping over-budget vocalizations damaged the sentence: " + spam.text);
+    const VocalizationShaping spam = ShapeVocalizations("*laughs* one *laughs* two *laughs* three *laughs* four", 2);
+    Check(spam.kept == 2 && spam.droppedOverBudget == 2, "The per-reply vocalization budget was not enforced.");
+    Check(spam.text == "*laughs* one *laughs* two three four", "Dropping over-budget vocalizations damaged the sentence: " + spam.text);
 
     // Multiplication is why the span rule follows markdown rather than just pairing
     // asterisks. Deleting " 3 and 4 " out of the middle of a sum would be indefensible.
     const VocalizationShaping arithmetic = ShapeVocalizations("Use 2 * 3 and 4 * 5 here.", 2);
-    Check(arithmetic.text == "Use 2 * 3 and 4 * 5 here.",
-        "Bare multiplication asterisks were treated as a span: " + arithmetic.text);
-    Check(arithmetic.strippedStageDirections == 0,
-        "Arithmetic was counted as a stage direction.");
+    Check(arithmetic.text == "Use 2 * 3 and 4 * 5 here.", "Bare multiplication asterisks were treated as a span: " + arithmetic.text);
+    Check(arithmetic.strippedStageDirections == 0, "Arithmetic was counted as a stage direction.");
 
     // Paths and names that begin with punctuation keep the space in front of them; only
     // the gap a removed tag leaves before a closing mark is repaired.
@@ -7683,20 +7688,17 @@ void TestOnlySoundEffectsSurviveInAsterisks()
 
     // A bracketed aside Revia meant literally is still hers. Only asterisks are policed.
     const VocalizationShaping literal = ShapeVocalizations("Check [section 4] for that.", 2);
-    Check(literal.text == "Check [section 4] for that.",
-        "A literal bracketed aside was removed: " + literal.text);
+    Check(literal.text == "Check [section 4] for that.", "A literal bracketed aside was removed: " + literal.text);
 
     // A fragment that was nothing but theatre leaves nothing to say, and the streaming
     // path relies on that emptiness to skip the utterance rather than speak a space.
     const VocalizationShaping empty = ShapeVocalizations("*Leans back, considering.*", 2);
-    Check(empty.text.empty(),
-        "A fragment of pure stage direction left speakable text: " + empty.text);
+    Check(empty.text.empty(), "A fragment of pure stage direction left speakable text: " + empty.text);
 
     // Nothing to do is reported as nothing done, so the hard filter does not claim it
     // changed a reply it left alone.
     const VocalizationShaping untouched = ShapeVocalizations("Plain text, nothing to shape.", 2);
-    Check(!untouched.changed && untouched.text == "Plain text, nothing to shape.",
-        "An unchanged reply was reported as changed.");
+    Check(!untouched.changed && untouched.text == "Plain text, nothing to shape.", "An unchanged reply was reported as changed.");
 }
 
 void TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown()
@@ -7706,20 +7708,15 @@ void TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown()
     // The normalizer strips '*' as markdown noise. Left alone it flattened "*laughs*"
     // to the word "laughs", so the voice read the cue instead of performing it -- the
     // exact failure the whole feature exists to prevent.
-    const std::string spoken = SpeechService::NormalizeForSpeech(
-        "That is *really* good *laughs* and I mean it.", 4000, true);
-    Check(spoken.find("*laughs*") != std::string::npos,
-        "The vocalization tag was flattened before reaching the voice: " + spoken);
-    Check(spoken.find("really") != std::string::npos &&
-        spoken.find("*really*") == std::string::npos,
+    const std::string spoken = SpeechService::NormalizeForSpeech("That is *really* good *laughs* and I mean it.", 4000, true);
+    Check(spoken.find("*laughs*") != std::string::npos, "The vocalization tag was flattened before reaching the voice: " + spoken);
+    Check(spoken.find("really") != std::string::npos && spoken.find("*really*") == std::string::npos,
         "Markdown emphasis was not reduced to plain text: " + spoken);
 
     // Windows SAPI cannot perform a nonverbal cue, so the tag leaves without a trace
     // rather than becoming a word in the middle of the sentence.
-    const std::string sapi = SpeechService::NormalizeForSpeech(
-        "Oh no *laughs* that is perfect.", 4000, false);
-    Check(sapi.find("laugh") == std::string::npos,
-        "A backend that cannot perform the sound still received it: " + sapi);
+    const std::string sapi = SpeechService::NormalizeForSpeech("Oh no *laughs* that is perfect.", 4000, false);
+    Check(sapi.find("laugh") == std::string::npos, "A backend that cannot perform the sound still received it: " + sapi);
     Check(sapi.find("that is perfect.") != std::string::npos,
         "Dropping the cue damaged the sentence: " + sapi);
 }
@@ -10141,7 +10138,7 @@ int main(const int argc, char** argv)
         TestTheSameWordsLandDifferentlyDependingOnWho();
         TestThingsThatHappenToReviaReachHerEmotions();
         TestHerOwnWorkIsNotCompany();
-        TestOnlySoundEffectsSurviveInAsterisks();
+        TestVocalizationShapingPreservesEmphasisAndRemovesTheatre();
         TestHardFilterStripsStageDirectionsFromACompletedReply();
         TestSpeechNormalizerKeepsTheSoundAndDropsTheMarkdown();
         TestUnplayableClipsAreNotARenderedBank();
@@ -10227,6 +10224,8 @@ int main(const int argc, char** argv)
         RunReminderTests();
         RunClipboardTests();
         RunAttachmentTests();
+        RunMediaSelectionTests();
+        RunImageTokenSettingsTests();
         RunQuestionRelayTests();
         RunSelfAssessmentTests();
         RunSecretDetectionTests();

@@ -250,6 +250,15 @@ TurnOutcome DocumentWorkshop::ReviseDocumentBlock(const std::string& reference, 
 TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt, const std::stop_token stopToken, std::function<bool()> admission,
     const RuntimeStamp& stamp, const bool publishToCanvas, std::string requestedBy)
 {
+    visual::ImageRequest request;
+    request.prompt = prompt;
+    return GenerateImage(request, stopToken, std::move(admission), stamp, publishToCanvas, std::move(requestedBy));
+}
+
+TurnOutcome DocumentWorkshop::GenerateImage(const visual::ImageRequest& imageRequest, const std::stop_token stopToken,
+    std::function<bool()> admission, const RuntimeStamp& stamp, const bool publishToCanvas, std::string requestedBy)
+{
+    const auto& prompt = imageRequest.prompt;
     TurnOutcome turn;
     if (stopToken.stop_requested() || (admission && !admission()))
     {
@@ -274,6 +283,8 @@ TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt, const std
     request.id = actions::NewActionId();
     request.type = actions::ActionType::GenerateImage;
     request.value = prompt;
+    request.imageRequest = imageRequest;
+    request.executionStop = stopToken;
     request.requestedBy = std::move(requestedBy);
     request.beforeEffect = [stopToken, admission](const std::string&)
     {
@@ -283,6 +294,7 @@ TurnOutcome DocumentWorkshop::GenerateImage(const std::string& prompt, const std
     const auto executed = stamp.sessionId.empty() ? actionRuntime.Execute(request, false, stopToken)
                                                   : actionRuntime.ExecuteFor(stamp, request, false, stopToken);
     const visual::ImageResult generated = executed.result.image.value_or(visual::ImageResult{});
+    turn.generatedImage = executed.result.image;
     std::ostringstream trace;
     trace << "Picture: sent \"" << prompt
           << "\" to the local image model. This is a "
@@ -341,8 +353,7 @@ TurnOutcome DocumentWorkshop::ShowPicture(const std::string& path, const Picture
     }
 
     std::error_code error;
-    const std::filesystem::path requested =
-        std::filesystem::weakly_canonical(std::filesystem::path(path), error);
+    const std::filesystem::path requested = std::filesystem::weakly_canonical(std::filesystem::path(path), error);
     if (error || !std::filesystem::is_regular_file(requested, error))
     {
         turn.result.succeeded = false;
@@ -354,19 +365,14 @@ TurnOutcome DocumentWorkshop::ShowPicture(const std::string& path, const Picture
 
     std::string extension = requested.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
-        [](const unsigned char character)
-        {
-            return static_cast<char>(std::tolower(character));
-        });
-    const bool isPicture = extension == ".png" || extension == ".jpg" ||
-        extension == ".jpeg" || extension == ".bmp" || extension == ".gif" ||
-        extension == ".webp" || extension == ".svg";
+        [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    const bool isPicture = extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp" ||
+                           extension == ".gif" || extension == ".webp" || extension == ".svg";
     if (!isPicture)
     {
         turn.result.succeeded = false;
-        turn.result.text = extension.empty()
-            ? "That file has no extension, so I cannot tell whether it is a picture."
-            : "I can show images, not " + extension + " files.";
+        turn.result.text = extension.empty() ? "That file has no extension, so I cannot tell whether it is a picture."
+                                             : "I can show images, not " + extension + " files.";
         turn.result.reason = turn.result.text;
         turn.Then(TurnEvent::Moved(RuntimeState::Blocked, turn.result.reason));
         return turn;

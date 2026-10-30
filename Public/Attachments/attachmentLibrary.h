@@ -5,12 +5,18 @@
 #include "Attachments/documentStore.h"
 #include "Core/conversationMessage.h"
 #include "LLM/embeddingTypes.h"
+#include "Speech/fileTranscription.h"
+#include "Visual/imageTypes.h"
+#include "Visual/videoTypes.h"
 
 #include <condition_variable>
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -37,7 +43,37 @@ struct TurnAttachments
     std::vector<conversationImage> images;
     // Short user-facing notes, such as a picture the model could not see.
     std::vector<std::string> notices;
+    std::vector<conversationMediaReference> mediaReferences;
+    std::vector<conversationMediaReference> visibleMediaReferences;
+    bool transcriptAvailable = false;
+    std::vector<std::int64_t> videoTimestampsMs;
+    // Bounded native ASR rendering; separate uncertain audio evidence, never pixels.
+    std::string videoTranscript;
 };
+
+struct VideoPlaybackSource
+{
+    std::filesystem::path path;
+    VideoInfo info;
+    conversationMediaReference reference;
+};
+
+struct StoredImageSource
+{
+    conversationMediaReference reference;
+    conversationImage pixels;
+};
+
+struct GeneratedMediaImportResult
+{
+    bool succeeded = false;
+    conversationMediaReference reference;
+    std::filesystem::path storedPath;
+    std::string error;
+    std::optional<conversationImage> poster;
+};
+
+using GeneratedImageImportResult = GeneratedMediaImportResult;
 
 // The private attachment library of one companion: intake, the staged files waiting to
 // be sent, the stored documents and their search index, and the audit trail.
@@ -50,18 +86,20 @@ class AttachmentLibrary
 public:
     // query = true asks for a search-query embedding, false for a document one.
     using Embedder = std::function<embeddingOutput(const std::string& text, bool query, std::stop_token stopToken)>;
+    using VideoTranscriber = std::function<speech::FileTranscriptionResult(const std::filesystem::path&, std::stop_token)>;
 
     AttachmentLibrary(std::filesystem::path root, std::filesystem::path databasePath, std::filesystem::path auditPath,
-        AttachmentLimits limits = {});
+        AttachmentLimits limits = {}, VideoDecoderSettings decoderSettings = {});
     ~AttachmentLibrary();
     AttachmentLibrary(const AttachmentLibrary&) = delete;
     AttachmentLibrary& operator=(const AttachmentLibrary&) = delete;
 
     // Without an embedder (or with one that fails) search is lexical only.
     void SetEmbedder(Embedder embedder);
+    void SetVideoTranscriber(VideoTranscriber transcriber);
 
-    IntakeResult Stage(const std::filesystem::path& source);
-    IntakeResult StageBytes(const std::string& name, const std::string& bytes);
+    IntakeResult Stage(const std::filesystem::path& source, std::stop_token stopToken = {});
+    IntakeResult StageBytes(const std::string& name, const std::string& bytes, std::stop_token stopToken = {});
     // Drops a staged file the user removed before sending; its stored copy is deleted.
     bool Unstage(const std::string& id);
     // Hands the named staged files to a turn. Unknown ids are skipped.
@@ -73,8 +111,21 @@ public:
     // Files attached to this message: kept in the library, then shown to the model --
     // short documents whole, long ones by their most relevant passages, pictures as
     // image parts when the model can see them.
-    [[nodiscard]] TurnAttachments PrepareTurn(const std::string& input, std::vector<StagedAttachment> attachments, const ImagePolicy& images,
-        std::stop_token stopToken = {});
+    [[nodiscard]] TurnAttachments PrepareTurn(
+        const std::string& input, std::vector<StagedAttachment> attachments, const ImagePolicy& images, std::stop_token stopToken = {});
+
+    [[nodiscard]] TurnAttachments ReinspectImages(
+        const std::vector<conversationMediaReference>& references, const ImagePolicy& images, std::stop_token stopToken = {});
+    [[nodiscard]] TurnAttachments ReinspectMedia(const std::string& input, const std::vector<conversationMediaReference>& references,
+        const ImagePolicy& images, std::stop_token stopToken = {});
+    [[nodiscard]] bool ImageReferencesCurrent(const std::vector<conversationMediaReference>& references) const;
+    [[nodiscard]] std::optional<StoredImageSource> ReadImageSource(const conversationMediaReference& reference,
+        std::stop_token stopToken = {}) const;
+    [[nodiscard]] GeneratedImageImportResult ImportGeneratedImage(const visual::ImageResult& artifact,
+        const std::filesystem::path& ownedOutputRoot, std::function<bool()> admission, std::stop_token stopToken = {});
+    [[nodiscard]] GeneratedMediaImportResult ImportGeneratedVideo(const visual::VideoResult& artifact,
+        const std::filesystem::path& ownedOutputRoot, std::function<bool()> admission, std::stop_token stopToken = {});
+    [[nodiscard]] std::uint64_t MediaRevision() const noexcept { return mediaRevision.load(); }
 
     // Passages from earlier attachments for a message that asks about them. Empty when
     // nothing matched or the library is empty.
@@ -86,6 +137,8 @@ public:
     [[nodiscard]] std::vector<StoredDocument> List() const;
     // The start of a stored document's text, for the Documents list.
     [[nodiscard]] std::string PreviewText(const std::string& id, std::size_t maxBytes = 4000) const;
+    [[nodiscard]] std::optional<conversationImage> PreviewImage(const std::string& id) const;
+    [[nodiscard]] std::optional<VideoPlaybackSource> PreviewVideo(const std::string& id, std::stop_token stopToken = {}) const;
     // Removes a stored file, its passages and their vectors, and records that it did.
     bool Forget(const std::string& id, std::string& error);
     [[nodiscard]] bool HasDocuments() const;
@@ -104,8 +157,14 @@ private:
     void RemoveOrphans();
     void EmbedPending(std::stop_token stopToken);
     void WakeEmbedder();
+    [[nodiscard]] TurnAttachments PrepareVideo(
+        const std::string& input, const conversationMediaReference& reference, const ImagePolicy& images, std::stop_token stopToken);
 
     AttachmentIntake intake;
+    VideoDecoder videoDecoder;
+    VideoDecoderSettings videoDecoderSettings;
+    VideoTranscriber videoTranscriber;
+    mutable std::mutex transcriberMutex;
     DocumentStore store;
     std::filesystem::path auditPath;
     mutable std::mutex mutex;
@@ -117,6 +176,7 @@ private:
     std::condition_variable_any embedderWake;
     bool embedderPending = false;
     std::jthread embedderWorker;
+    std::atomic<std::uint64_t> mediaRevision{0};
 };
 
 // The executor for a search_documents tool: passages from the user's kept documents that

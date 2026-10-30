@@ -84,6 +84,18 @@ Diagrams retain the structured renderer. See [image setup and evidence](IMAGE_GE
 and [guest preparation limits](GUEST_ENVIRONMENT.md). Artifact validity does not
 certify visual quality, VM readiness or game competence.
 
+## Private uploaded video
+
+`AttachmentLibrary` owns accepted clip bytes, source identity and scoped media
+references. `VideoDecoder` owns bounded local probing, timestamped frame sampling,
+PCM extraction and streaming preview through `OwnedProcess`. Optional uploaded
+speech uses the existing recognition settings through `TranscribeWaveFile`,
+without entering the microphone lifecycle. `ReviaSession` captures admission and
+coordinates source checks, interval selection, archive/replay and the existing
+vision owner. Qt owns presentation only; its preview cancels and clears pixels
+when the captured access revision changes. See [video understanding](VIDEO_UNDERSTANDING.md)
+for formats, budgets, prerequisites and acceptance limits.
+
 ## Task contracts, evidence and evaluation
 
 `Core/TaskContract` carries the existing stamp, memory scope, resource ceilings,
@@ -708,6 +720,15 @@ Whisper uses a separate owned `whisper-server` child bound only to loopback. It 
 `PresenceRuntime` is a reducer and boundary, not a renderer. It consumes typed runtime events, atomically publishes `RuntimeData/Presence/avatar_state.json`, and appends bounded ordered animation transitions. A separate VRM/Live2D process may smooth and render that state and may crash or close without affecting Revia. Local adapter inboxes accept only allowlisted, bounded conversation events and reject replayed IDs. `ReviaSession` sends public turns through an isolated conversation path with channel-only history and the correct stable viewer relationship, while durable memory, private screen/camera context, and automatic lookup are disabled. Stream speech remains a separate explicit setting, and adapters never enter command, goal, or action routing.
 
 `ReviaSession` is the interface-neutral lifecycle owner. It starts or attaches to the configured llama.cpp processes, accepts one foreground operation at a time, publishes `RuntimeEvent` values, cancels an active request through `std::stop_token`, drains memory results, and shuts down only child processes it owns. `ConversationRuntime` owns approved conversational turns, their context, generation, grounding, streamed speech, and timing. Foreground serialization protects one coherent conversation/action state; it does not stop the independent workers above. Both Qt and the CLI use this same owner. Qt receives events through a queued UI-thread handoff; the CLI is a thin terminal adapter with a poll worker, not a second implementation of Revia.
+
+Uploaded images use `Attachments/AttachmentLibrary` and its existing private file
+store. Conversation messages and archived user turns retain ordered media IDs,
+digests and metadata, while pixels remain transient request data. Scoped selection
+chooses relevant references; the library revalidates owned paths and exact content
+before reinspection or preview. The session owns replay and publication admission,
+and forgetting revokes pending use and invalidates associated analysis. Qt joins
+attachment intake before retiring its captured session. See
+[uploaded image understanding](IMAGE_UNDERSTANDING.md) for limits and verification.
 
 Speaking first is event-driven. `ConversationStarter` recognizes a completed focus stretch,
 a return to an application, or repeated switching from admitted Tier 0 window events. An

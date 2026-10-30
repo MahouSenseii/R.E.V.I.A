@@ -54,7 +54,7 @@ bool Matches(const AuthorityPermissions& permissions, const actions::ActionReque
     // Legacy roots/applications describe host resources. They cannot name a guest
     // instance; only the machine-ceiling grant can reach its separately checked policy.
     if (actions::IsGuestAction(request.type)) return false;
-    if (request.type == actions::ActionType::GenerateImage)
+    if (request.type == actions::ActionType::GenerateImage || request.type == actions::ActionType::GenerateVideo)
         return !decision.canonicalDestination.empty() && (permissions.roots.empty() ||
             std::any_of(permissions.roots.begin(), permissions.roots.end(),
                 [&](const auto& root) { return WithinRoot(decision.canonicalDestination, root); }));
@@ -114,8 +114,9 @@ bool Denies(const AuthorityPermissions& permissions, const actions::ActionReques
 bool ValidGrant(const AuthorityGrantRequest& request)
 {
     const auto& permissions = request.scope.permissions;
-    const bool ownedImageOnly = permissions.operations.size() == 1 &&
-        permissions.operations.front() == actions::ActionType::GenerateImage;
+    const bool ownedImageOnly =
+        permissions.operations.size() == 1 && (permissions.operations.front() == actions::ActionType::GenerateImage ||
+                                                  permissions.operations.front() == actions::ActionType::GenerateVideo);
     return !permissions.withinMachineCeiling && !permissions.operations.empty() &&
            std::find(permissions.operations.begin(), permissions.operations.end(), actions::ActionType::Unknown) ==
                permissions.operations.end() &&

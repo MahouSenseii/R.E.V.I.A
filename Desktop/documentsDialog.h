@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Attachments/documentStore.h"
+#include "Core/conversationMessage.h"
 
 #include <QDialog>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,7 +20,9 @@ struct DocumentControls
 {
     std::function<std::vector<revia::attachments::StoredDocument>()> list;
     std::function<std::string(const std::string& id)> preview;
+    std::function<std::optional<conversationImage>(const std::string& id)> imagePreview;
     std::function<bool(const std::string& id, std::string& error)> forget;
+    std::function<void(const std::string& id)> videoPreview;
 };
 
 // The files Revia has kept from earlier messages: view one, or forget it -- which

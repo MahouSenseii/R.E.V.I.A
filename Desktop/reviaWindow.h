@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <thread>
@@ -175,9 +176,19 @@ class ReviaWindow final : public QMainWindow
     void AttachPaths(const QStringList& paths);
     void AttachPastedImage(const QImage& image);
     void RemoveAttachmentChip(const std::string& id);
+    void TrackStagedAttachment(const std::string& id, std::uint64_t audienceRevision);
+    void ReleaseStagedAttachments(const std::vector<std::string>& ids);
+    void DiscardStagedAttachments(revia::runtime::ReviaSession& owner);
+    void RevalidateAttachmentPresentation();
+    void RevalidateTranscriptMedia();
+    void InvalidateTranscriptMedia(const std::set<std::string>& ids);
+    [[nodiscard]] std::optional<QImage> GeneratedMediaPreview(const conversationMediaReference& reference);
+    void PresentGeneratedMedia(const std::vector<conversationMediaReference>& references);
     // Accepts a drag of local files or a picture onto the chat; true when it handled the event.
     bool HandleAttachmentDrag(QEvent* event);
     void ShowDocuments();
+    void OpenVideoPreview(const std::string& id);
+    void CloseVideoPreview();
     void ToggleListening();
     // Rebuilds the device list from what Windows reports and restores the saved
     // selection. Called at startup and from Refresh.
@@ -217,6 +228,7 @@ class ReviaWindow final : public QMainWindow
     ComposerContextKind composerContextKind = ComposerContextKind::None;
     // Settings › Models › Use the cloud for, read from the owner overlay.
     void RefreshCloudUseFor();
+    void RefreshImageMinTokens();
     void HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event);
     void PresentSessionResult(const revia::runtime::SessionResult& result);
     void CaptureDisplayedAnswer(const QString& text, const revia::runtime::RuntimeStamp& origin, std::uint64_t audienceRevision,
@@ -319,6 +331,7 @@ class ReviaWindow final : public QMainWindow
         QString renderedBody;
         // The files sent with a user message, shown under it.
         std::vector<AttachmentChip> attachments;
+        std::vector<conversationMediaReference> generatedMediaReferences;
         // An unprompted offer (a Proposal event): drawn as a quiet activity row.
         bool proposal = false;
         // Set for EntryKind::DelegatedTask only.
@@ -570,6 +583,8 @@ class ReviaWindow final : public QMainWindow
     QWidget* microphoneRow = nullptr;
     QComboBox* cloudUseForCombo = nullptr;
     std::function<QString(const std::string&)> cloudUseForReader;
+    QComboBox* imageMinTokensCombo = nullptr;
+    std::function<QString(const std::string&)> imageMinTokensReader;
     // Turns continuous screen awareness off through the Settings backend, for the header's
     // screen indicator; done gets whether it was saved and the backend's message.
     std::function<void(std::function<void(bool, QString)>)> screenAwarenessOff;
@@ -594,6 +609,8 @@ class ReviaWindow final : public QMainWindow
     QPushButton* documentsButton = nullptr;
     AttachmentTray* attachmentTray = nullptr;
     QPointer<DocumentsDialog> documentsDialog;
+    QPointer<QDialog> videoPreviewDialog;
+    std::uint64_t documentsAudienceRevision = 0;
     QPushButton* stopButton = nullptr;
     QPushButton* microphoneButton = nullptr;
     QPushButton* screenActionButton = nullptr;
@@ -649,9 +666,13 @@ class ReviaWindow final : public QMainWindow
     std::jthread deviceWorker;
     std::atomic<bool> shuttingDown = false;
     std::atomic<bool> voiceOperationRunning = false;
-    // Reads attached files off the GUI thread; a large PDF takes a moment to extract.
+    // Intake retains its source session until joined; running includes queued chip publication.
     std::jthread attachmentWorker;
     std::atomic<bool> attachmentRunning = false;
+    // Includes accepted copies whose chip publication is still queued on the GUI thread.
+    std::mutex stagedAttachmentMutex;
+    std::vector<std::string> stagedAttachmentIds;
+    std::uint64_t stagedAttachmentAudienceRevision = 0;
     // A reply that has been generated but is waiting for its audio to start, so the words
     // land with the voice. Released early on any speech failure, and by a timer, because
     // text that is never shown is a worse outcome than text shown slightly ahead.
@@ -676,4 +697,10 @@ class ReviaWindow final : public QMainWindow
     bool microphoneActive = false;
     bool listenRequested = false;
     MicrophoneUi microphoneUiState = MicrophoneUi::Unavailable;
+    std::uint64_t transcriptMediaEpoch = 0;
+    std::uint64_t transcriptMediaRevision = 0;
+    bool transcriptMediaInitialized = false;
+    std::uint64_t transcriptAudienceRevision = 0;
+    std::uint64_t transcriptConversationEpoch = 0;
+    revia::runtime::RuntimeStamp transcriptMediaStamp;
 };

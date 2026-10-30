@@ -1,4 +1,5 @@
 #include "reviaWindow.h"
+#include "documentsDialog.h"
 #include "tabNavigation.h"
 #include "Actions/actionTypes.h"
 
@@ -58,15 +59,20 @@ void ReviaWindow::BindSession()
 {
     const auto epoch = sessionUiEpoch.load();
     subscriptionId = Session().Events().Subscribe(
-        [this, epoch](const revia::runtime::RuntimeEvent& event)
+        [this, epoch, origin = &Session()](const revia::runtime::RuntimeEvent& event)
         {
+            const auto mediaEpoch = event.conversationMediaEpoch;
+            if (event.generatedMediaReference && mediaEpoch != origin->ConversationMediaEpoch())
+                return;
             QMetaObject::invokeMethod(
                 this,
-                [this, epoch, event]()
+                [this, epoch, mediaEpoch, event]()
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
                     if (!event.stamp.companionId.empty() && !event.stamp.SameSession(Session().Stamp()))
+                        return;
+                    if (event.generatedMediaReference && mediaEpoch != Session().ConversationMediaEpoch())
                         return;
                     HandleRuntimeEvent(event);
                 },
@@ -178,6 +184,7 @@ void ReviaWindow::RunStudioOperation(std::function<bool(revia::runtime::ReviaSes
                     audienceStudioPanel->SetBusy(false);
                     if (&Session() != origin || !origin->Admits(stamp))
                         return;
+                    RevalidateAttachmentPresentation();
                     completed(success, message);
                     RefreshStudioPanels();
                 },
@@ -359,6 +366,12 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
     ResetConversationPresentation();
     const bool restart = Session().IsStarted();
     const auto epoch = sessionUiEpoch.fetch_add(1) + 1;
+    attachmentWorker.request_stop();
+    attachmentTray->Clear();
+    attachmentTray->SetStatus(QString());
+    CloseVideoPreview();
+    if (documentsDialog)
+        delete documentsDialog.data();
     Session().Events().Unsubscribe(subscriptionId);
     subscriptionId = 0;
     AbandonQuestions();
@@ -389,6 +402,9 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                 voiceWorker.join();
             if (studioWorker.joinable())
                 studioWorker.join();
+            if (attachmentWorker.joinable())
+                attachmentWorker.join();
+            DiscardStagedAttachments(*outgoing);
             outgoing->Stop();
             QMetaObject::invokeMethod(
                 this,
@@ -401,6 +417,7 @@ void ReviaWindow::SwitchCompanion(const std::string& id)
                     // the dialog reads the incoming companion.
                     settingsDialog->AbandonPendingWrites();
                     cloudUseForCombo->setEnabled(true);
+                    imageMinTokensCombo->setEnabled(true);
                     std::string error;
                     try
                     {

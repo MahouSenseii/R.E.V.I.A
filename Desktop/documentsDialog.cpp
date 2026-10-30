@@ -1,12 +1,11 @@
 #include "documentsDialog.h"
 
-#include "Actions/actionTypes.h"
-
 #include <QDateTime>
 #include <algorithm>
+#include <limits>
 #include <QHBoxLayout>
 #include <QHeaderView>
-#include <QImageReader>
+#include <QImage>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPixmap>
@@ -25,6 +24,7 @@ QString KindLabel(const revia::attachments::AttachmentKind kind)
         case revia::attachments::AttachmentKind::Pdf: return QStringLiteral("PDF");
         case revia::attachments::AttachmentKind::Docx: return QStringLiteral("Word");
         case revia::attachments::AttachmentKind::Text: return QStringLiteral("Text");
+        case revia::attachments::AttachmentKind::Video: return QStringLiteral("Video");
     }
     return QString();
 }
@@ -69,6 +69,7 @@ DocumentsDialog::DocumentsDialog(DocumentControls inputControls, QWidget* parent
     layout->addLayout(buttons);
 
     image = new QLabel(this);
+    image->setObjectName(QStringLiteral("documentImagePreview"));
     image->setAlignment(Qt::AlignCenter);
     image->hide();
     layout->addWidget(image, 1);
@@ -112,6 +113,11 @@ void DocumentsDialog::Refresh()
     status->setText(documents.empty() ? QStringLiteral("No documents yet. Attach a file to a private message to add one.")
                                       : QString::number(documents.size()) + QStringLiteral(" kept."));
     Select(selected);
+    if (SelectedId().empty())
+    {
+        preview->clear();
+        image->clear();
+    }
     UpdateButtons();
 }
 
@@ -147,16 +153,24 @@ void DocumentsDialog::ViewSelected()
     const auto found = std::find_if(documents.begin(), documents.end(), [&](const auto& document) { return document.id == id; });
     if (found == documents.end())
         return;
+    if (found->kind == revia::attachments::AttachmentKind::Video)
+    {
+        if (controls.videoPreview)
+            controls.videoPreview(id);
+        return;
+    }
     if (found->kind == revia::attachments::AttachmentKind::Image)
     {
-        // Decoded by Qt from Revia's own private copy; nothing is opened in another program.
-        QImageReader reader(QString::fromStdString(revia::actions::PathToUtf8(found->storedPath)));
-        reader.setAllocationLimit(256);
-        const QImage picture = reader.read();
+        const auto validated = controls.imagePreview ? controls.imagePreview(id) : std::optional<conversationImage>{};
+        const QImage picture =
+            validated && validated->bytes && validated->bytes->size() <= static_cast<std::size_t>(std::numeric_limits<int>::max())
+                ? QImage::fromData(reinterpret_cast<const uchar*>(validated->bytes->data()), static_cast<int>(validated->bytes->size()))
+                : QImage();
         preview->hide();
-        image->setPixmap(picture.isNull() ? QPixmap()
-                                          : QPixmap::fromImage(picture.scaled(480, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
-        image->setText(picture.isNull() ? QStringLiteral("The stored picture could not be shown.") : QString());
+        if (picture.isNull())
+            image->setText(QStringLiteral("The stored picture is unavailable or has changed."));
+        else
+            image->setPixmap(QPixmap::fromImage(picture.scaled(480, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
         image->show();
         return;
     }
@@ -167,16 +181,18 @@ void DocumentsDialog::ViewSelected()
 
 bool DocumentsDialog::ForgetDocument(const std::string& id, QString& error)
 {
+    error.clear();
     std::string reason;
-    if (!controls.forget || !controls.forget(id, reason))
+    const bool forgotten = controls.forget && controls.forget(id, reason);
+    preview->clear();
+    image->clear();
+    Refresh();
+    if (!forgotten)
     {
         error = QString::fromStdString(reason.empty() ? std::string("The document could not be forgotten.") : reason);
         status->setText(error);
         return false;
     }
-    preview->clear();
-    image->clear();
-    Refresh();
     status->setText(QStringLiteral("Forgotten: the stored copy, its passages and its search vectors were deleted."));
     return true;
 }

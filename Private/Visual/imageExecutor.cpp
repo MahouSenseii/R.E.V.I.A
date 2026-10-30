@@ -40,7 +40,9 @@ actions::ActionResult ImageExecutor::Execute(const actions::ActionRequest& reque
         return result;
     }
     result.attempted = true;
-    result.image = provider.Generate(request.value, {}, {}, admitted, outputRoot);
+    result.image = request.imageRequest
+                       ? provider.Generate(*request.imageRequest, request.executionStop, admitted, outputRoot)
+                       : provider.Generate(request.value, {}, request.executionStop, admitted, outputRoot);
     result.succeeded = result.image->succeeded;
     result.message = result.image->message;
     if (result.succeeded)

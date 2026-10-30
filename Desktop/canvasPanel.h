@@ -3,7 +3,11 @@
 #include "Runtime/runtimeEvents.h"
 
 #include <QWidget>
+#include <QImage>
 
+#include <functional>
+#include <optional>
+#include <set>
 #include <vector>
 
 class QLabel;
@@ -13,16 +17,21 @@ class QStackedWidget;
 class QSvgWidget;
 
 // Shows what Revia has drawn, and pictures she was asked to display. Presentation
-// only: markup arrives already sanitized and already written to a file, pictures are
-// read from a path the runtime already checked, and nothing here can produce or alter one.
+// only: markup arrives already sanitized, generated pixels need a current host resolver,
+// and other pictures use paths the runtime checked. This widget cannot produce or alter media.
 class CanvasPanel final : public QWidget
 {
-public:
+  public:
     explicit CanvasPanel(QWidget* parent = nullptr);
 
     void Observe(const revia::runtime::RuntimeEvent& event);
+    using GeneratedImageResolver = std::function<std::optional<QImage>(const conversationMediaReference&)>;
+    void SetGeneratedImageResolver(GeneratedImageResolver resolver);
+    [[nodiscard]] std::vector<conversationMediaReference> GeneratedMediaReferences() const;
+    void RemoveMedia(const std::set<std::string>& ids);
+    void Clear();
 
-private:
+  private:
     struct Drawing
     {
         QString title;
@@ -30,6 +39,7 @@ private:
         QString markup;
         QString path;
         bool isPicture = false;
+        std::optional<conversationMediaReference> reference;
     };
 
     // The canvas is a view of recent work, not the archive; every drawing is already a
@@ -39,6 +49,8 @@ private:
 
     void Show(int index);
     void ExportCurrent();
+    void ClearView();
+    [[nodiscard]] std::optional<QImage> Resolve(const conversationMediaReference& reference) const;
 
     // Two views behind a stack rather than one clever widget: an SVG renderer and an
     // image renderer answer to different APIs, and a picture scaled by the wrong one
@@ -50,4 +62,6 @@ private:
     QLabel* caption = nullptr;
     QPushButton* exportButton = nullptr;
     std::vector<Drawing> drawings;
+    GeneratedImageResolver generatedImageResolver;
+    std::uint64_t presentationRevision = 0;
 };

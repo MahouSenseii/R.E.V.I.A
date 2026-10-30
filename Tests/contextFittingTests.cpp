@@ -84,6 +84,84 @@ void TestContinuityRetainsLateCorrectionsAndSourceOrder()
     Check(history.GetCompressedHistorySummary().empty(), "Clearing dialogue retained old working continuity.");
 }
 
+void TestContinuityDoesNotPromoteRetainedOrdinaryQuestions()
+{
+    const std::string previousQuestion = "For the JPEG, what is the upper-right shape and color?";
+    const std::string previousAnswer = "The upper-right shape is a blue triangle. A tiny road sign, perhaps?";
+    const std::string currentQuestion = "What are all three shapes and their colors in this GIF?";
+    conversationContext history;
+    history.AddMessage("user", "Here is the JPEG.");
+    history.AddMessage("assistant", "I can inspect the upload.");
+    history.AddMessage("user", previousQuestion);
+    history.AddMessage("assistant", previousAnswer);
+    history.AddMessage("user", currentQuestion);
+    const auto recent = history.GetRecentMessages();
+    Check(recent.size() == 5 && recent[2].content == previousQuestion && recent[3].content == previousAnswer &&
+              recent.back().content == currentQuestion,
+        "The ordinary-question fixture did not retain its complete dialogue.");
+    Check(history.GetCompressedHistorySummary().empty(), "A retained ordinary question was promoted into outstanding working continuity.");
+
+    const std::vector<std::pair<std::string, std::string>> explicitCases = {
+        {"What is still pending for the launch date?", "What is still pending for the launch date?"},
+        {"Which unfinished job do we schedule next?", "Which unfinished job do we schedule next?"},
+        {"What do we need to pack for launch?", "What do we need to pack for launch?"},
+        {"Must the sensor remain below 0.75 m?", "Must the sensor remain below 0.75 m?"},
+        {"We decided the rover is Amber. Which date remains open?", "We decided the rover is Amber."}};
+    for (const auto& [explicitContinuity, retained] : explicitCases)
+    {
+        conversationContext explicitHistory;
+        explicitHistory.AddMessage("user", explicitContinuity);
+        const auto summary = explicitHistory.GetCompressedHistorySummary();
+        Check(!summary.empty() && summary.find("[source 1] User:") != std::string::npos && summary.find(retained) != std::string::npos,
+            "An explicit pending task, constraint or decision lost continuity priority: " + explicitContinuity);
+    }
+    const std::string constraint = "The sensor must fit a 0.75 m opening.";
+    conversationContext compacted;
+    compacted.SetContextTokens(2048);
+    compacted.AddMessage("user",
+        Repeat("An ordinary background detail. ", 100) + '\n' + constraint + '\n' + Repeat("More ordinary background detail. ", 100));
+    compacted.AddMessage("assistant", "The limit is recorded.");
+    const auto compactedRecent = compacted.GetRecentMessages();
+    Check(compactedRecent.size() == 2 && compactedRecent.front().content.find(constraint) == std::string::npos &&
+              compacted.GetCompressedHistorySummary().find(constraint) != std::string::npos,
+        "A retained message's omitted middle lost its explicit constraint from working continuity.");
+}
+
+void TestContinuityRetainsEvictedOrdinaryQuestions()
+{
+    const std::string question = "What color is the farthest beacon?";
+    const std::string answer = "The farthest beacon is amber.";
+    std::vector<conversationMessage> archive = {{"user", question}, {"assistant", answer}};
+    for (int index = 0; index < 13; ++index)
+    {
+        archive.push_back({"user", "Routine observation " + std::to_string(index)});
+        archive.push_back({"assistant", "Routine acknowledgement " + std::to_string(index)});
+    }
+    conversationContext history;
+    for (const auto& message : archive)
+        history.AddMessage(message);
+    const auto recent = history.GetRecentMessages();
+    Check(std::none_of(recent.begin(), recent.end(), [&question](const auto& message) { return message.content == question; }),
+        "The ordinary-question fixture did not evict its original question.");
+    const auto summary = history.GetCompressedHistorySummary();
+    Check(summary.find(question) != std::string::npos && summary.find(answer) != std::string::npos &&
+              summary.find("[source 1] User:") < summary.find("[source 2] Revia:") && summary.size() <= 2800,
+        "Eviction lost an ordinary question, its answer or admitted source order.");
+    history.RestoreMessages(archive, 2);
+    Check(history.GetRecentMessages().size() == 2 && history.GetCompressedHistorySummary().find(question) != std::string::npos,
+        "Bounded archive restoration lost an evicted ordinary question.");
+    const std::string cancelled = "What would we check after cancellation?";
+    history.AddMessage("user", cancelled);
+    Check(history.RemoveLastMessageIf("user", cancelled), "The ordinary-question rollback did not remove its exact newest source.");
+    for (int index = 0; index < 26; ++index)
+        history.AddMessage(index % 2 == 0 ? "user" : "assistant", "A routine later exchange.");
+    Check(history.GetCompressedHistorySummary().find(cancelled) == std::string::npos,
+        "A rolled-back ordinary question reappeared after eviction.");
+    history.Clear();
+    Check(history.GetRecentMessages().empty() && history.GetCompressedHistorySummary().empty(),
+        "Clearing dialogue retained an evicted ordinary question.");
+}
+
 void TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore()
 {
     const std::vector<std::string> constraints = {"The rover must fit a 0.75 m doorway.", "Keep the sensor offset at -0.25 m.",
@@ -1494,6 +1572,8 @@ void TestActualWireRetainsCurrentPurposeAndConfiguredAnswerPosture()
 void RunContextFittingTests()
 {
     TestContinuityRetainsLateCorrectionsAndSourceOrder();
+    TestContinuityDoesNotPromoteRetainedOrdinaryQuestions();
+    TestContinuityRetainsEvictedOrdinaryQuestions();
     TestContinuityPreservesDecimalConstraintsAfterEvictionAndRestore();
     TestContinuityKeepsNonnumericSentenceBoundaries();
     TestHistoryTrimLeavesAStablePrefix();

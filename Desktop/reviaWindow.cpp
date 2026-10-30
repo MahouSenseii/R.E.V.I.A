@@ -23,6 +23,7 @@
 #include "commandPalette.h"
 #include "composerCard.h"
 #include "documentsDialog.h"
+#include "videoPreviewDialog.h"
 #include "panelWindow.h"
 #include "serialWorker.h"
 #include "settingsDialog.h"
@@ -97,6 +98,7 @@
 #include <cstddef>
 #include <exception>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -154,13 +156,24 @@ AttachmentOutcome OutcomeOf(const revia::attachments::IntakeResult& result, cons
 {
     AttachmentOutcome outcome;
     outcome.accepted = result.status == revia::attachments::IntakeStatus::Accepted;
-    outcome.message = QString::fromStdString(result.message);
+    outcome.message = QString::fromStdString(outcome.accepted ? result.attachment.note : result.message);
     if (outcome.accepted)
     {
         outcome.chip.id = result.attachment.id;
         outcome.chip.name = QString::fromStdString(result.attachment.displayName);
         outcome.chip.size = QString::fromStdString(revia::attachments::HumanSize(result.attachment.bytes));
         outcome.chip.thumbnail = thumbnail;
+        if (result.attachment.kind == revia::attachments::AttachmentKind::Video)
+        {
+            outcome.chip.video = true;
+            outcome.chip.durationMs = result.attachment.video.durationMs;
+            outcome.chip.size += QStringLiteral(" · Video %1").arg(QString::fromStdString(
+                revia::attachments::FormatVideoTimestamp(result.attachment.video.durationMs)));
+            if (result.attachment.poster && result.attachment.poster->bytes)
+                outcome.chip.thumbnail = QImage::fromData(
+                    reinterpret_cast<const uchar*>(result.attachment.poster->bytes->data()),
+                    static_cast<int>(result.attachment.poster->bytes->size()));
+        }
     }
     return outcome;
 }
@@ -406,6 +419,7 @@ ReviaWindow::ReviaWindow(const bool startRuntime, const bool buildSystemTray, QW
         {
             if (switchingCompanion)
                 return;
+            RevalidateAttachmentPresentation();
             Session().PollBackgroundEvents();
             RefreshAgentWorkflowViews();
         });
@@ -436,6 +450,10 @@ ReviaWindow::~ReviaWindow()
     // so a worker waiting for one must be refused rather than wait for ever.
     shuttingDown.store(true);
     sessionUiEpoch.fetch_add(1);
+    attachmentWorker.request_stop();
+    CloseVideoPreview();
+    if (documentsDialog)
+        delete documentsDialog.data();
     if (themeListenerId >= 0)
         revia::desktop::theme::RemoveListener(themeListenerId);
     AbandonQuestions();
@@ -465,6 +483,9 @@ ReviaWindow::~ReviaWindow()
     {
         deviceWorker.join();
     }
+    if (attachmentWorker.joinable())
+        attachmentWorker.join();
+    DiscardStagedAttachments(Session());
     Session().Stop();
     if (voiceWorker.joinable())
     {
@@ -765,6 +786,8 @@ void ReviaWindow::BuildInterface()
         [this](const std::string& device) { return Session().SetPreference("resources.voiceDevice", device); }, ui->resourcePage);
     ui->resourceHostLayout->addWidget(resourcePanel);
     canvasPanel = new CanvasPanel(ui->canvasPage);
+    canvasPanel->SetGeneratedImageResolver(
+        [this](const conversationMediaReference& reference) { return GeneratedMediaPreview(reference); });
     ui->canvasHostLayout->addWidget(canvasPanel);
     // Hosted by Settings › Permissions (and its internet cards by Settings › Internet) once the
     // dialog exists; the dialog's own page scrolls, so the panel needs no scroll area of its own.
@@ -808,6 +831,11 @@ void ReviaWindow::BuildInterface()
             {
                 if (const auto panel = revia::desktop::PanelFromKey(argument))
                     OpenPanel(*panel);
+                return;
+            }
+            if (action == QStringLiteral("video"))
+            {
+                OpenVideoPreview(argument.toStdString());
                 return;
             }
             bool parsed = false;
@@ -941,6 +969,7 @@ void ReviaWindow::BuildInterface()
         // Remembered so the turn that ends now reads "Stopped" rather than as a failure.
         userStopRequested = true;
         studioWorker.request_stop();
+        attachmentWorker.request_stop();
         Session().RequestStop();
     });
     connect(microphoneButton, &QPushButton::clicked, this, [this]() { ToggleListening(); });
@@ -1125,6 +1154,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     {
         return;
     }
+    RevalidateAttachmentPresentation();
     if (!voiceInput && (operationRunning.load() || Session().IsBusy()))
     {
         ShowStillWorking();
@@ -1138,7 +1168,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     {
         return;
     }
-    if (withAttachments && attachmentRunning.load())
+    if (!voiceInput && attachmentRunning.load())
     {
         ShowStatus(QStringLiteral("Still reading an attachment. Send again in a moment."), 6000);
         return;
@@ -1190,6 +1220,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
     {
         attached = attachmentTray->Chips();
         attachmentIds = attachmentTray->Ids();
+        ReleaseStagedAttachments(attachmentIds);
         attachmentTray->Clear();
         attachmentTray->SetStatus(QString());
     }
@@ -1225,7 +1256,7 @@ void ReviaWindow::SendMessage(const bool voiceInput)
 
     operationWorker = std::jthread(
         [this, epoch = sessionUiEpoch.load(), input = text.toStdString(), voiceInput, origin = Session().Stamp(),
-            audienceRevision = Session().Audience().revision, attachmentIds]()
+            audienceRevision = Session().Audience().revision, mediaEpoch = Session().ConversationMediaEpoch(), attachmentIds]()
         {
             const RunningFlag running(operationRunning);
             // Nothing thrown here may leave this thread.
@@ -1262,9 +1293,11 @@ void ReviaWindow::SendMessage(const bool voiceInput)
             }
             QMetaObject::invokeMethod(
                 this,
-                [this, epoch, result]()
+                [this, epoch, mediaEpoch, result]()
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    if (!result.generatedMediaReferences.empty() && mediaEpoch != Session().ConversationMediaEpoch())
                         return;
                     chatTurnInFlight = false;
                     if (composer)
@@ -1310,6 +1343,9 @@ void ReviaWindow::PresentSessionResult(const revia::runtime::SessionResult& resu
     {
         AppendChat(QString(), QString(), false, reasoning);
     }
+    if (result.succeeded && result.fromAssistant && !result.stamp.companionId.empty() &&
+        result.stamp.policyVersion == Session().Stamp().policyVersion)
+        PresentGeneratedMedia(result.generatedMediaReferences);
     if (!result.succeeded && !result.reason.empty())
     {
         AppendActivity("Request stopped: " + QString::fromStdString(result.reason));
@@ -1540,6 +1576,9 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
     {
         return;
     }
+    CloseVideoPreview();
+    if (documentsDialog)
+        delete documentsDialog.data();
     // Nothing is approved on the way out, and nothing waits on an approval.
     AbandonQuestions();
     // Recorded here rather than after the workers stop, so the reason survives even if
@@ -1557,6 +1596,7 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
     stopButton->setEnabled(false);
     Session().RequestStop();
     studioWorker.request_stop();
+    attachmentWorker.request_stop();
     shutdownWorker = std::jthread(
         [this]()
         {
@@ -1564,6 +1604,9 @@ void ReviaWindow::BeginShutdown(const revia::core::ExitReason reason, const std:
                 companionSwitchWorker.join();
             if (studioWorker.joinable())
                 studioWorker.join();
+            if (attachmentWorker.joinable())
+                attachmentWorker.join();
+            DiscardStagedAttachments(Session());
             // A Settings write in flight finishes against the session before it stops.
             if (settingsWorker)
                 settingsWorker->Stop();
@@ -1909,7 +1952,12 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
 {
     if (!event.stamp.companionId.empty() && !event.stamp.SameSession(Session().Stamp()))
         return;
+    RevalidateAttachmentPresentation();
     const auto currentAudienceRevision = Session().Audience().revision;
+    if (event.generatedMediaReference &&
+        (event.stamp.companionId.empty() || event.audienceRevision == 0 || event.stamp.policyVersion != Session().Stamp().policyVersion ||
+            event.conversationMediaEpoch != Session().ConversationMediaEpoch()))
+        return;
     if (event.audienceRevision != 0 && event.audienceRevision != currentAudienceRevision)
         return;
     if ((event.kind == revia::runtime::RuntimeEventKind::AssistantMessage ||
@@ -2355,6 +2403,8 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         const QString body = QString::fromStdString(event.message);
         const QString reasoning = QString::fromStdString(event.detail);
         AppendChat(speaker, body, false, reasoning);
+        if (event.generatedMediaReference)
+            PresentGeneratedMedia({*event.generatedMediaReference});
         CaptureDisplayedAnswer(body, event.stamp, event.audienceRevision, event.turnId);
         // The reply of a voice turn: a task that turn handed off goes beneath it. A typed
         // turn places its card when its own result is shown.
@@ -2465,6 +2515,14 @@ void ReviaWindow::ReviewDisplayedAnswer()
 
 void ReviaWindow::ResetConversationPresentation()
 {
+    if (canvasPanel)
+        canvasPanel->Clear();
+    std::set<std::string> generatedIds;
+    for (const auto& entry : chatEntries)
+        for (const auto& reference : entry.generatedMediaReferences)
+            generatedIds.insert(reference.id);
+    if (!generatedIds.empty())
+        InvalidateTranscriptMedia(generatedIds);
     if (answerFeedbackDialog)
         delete answerFeedbackDialog.data();
     latestDisplayedAnswer.clear();
@@ -2620,7 +2678,8 @@ void ReviaWindow::RefreshStateBadge()
                              newState == revia::runtime::RuntimeState::Responding || newState == revia::runtime::RuntimeState::Acting;
     // Foreground commands can change the badge while a background task continues.
     // That task remains cancellable regardless of the foreground state.
-    stopButton->setEnabled(cancellable || studioOperationRunning.load() || Session().HasRunningTask() || speechActive || microphoneActive);
+    stopButton->setEnabled(cancellable || attachmentRunning.load() || studioOperationRunning.load() || Session().HasRunningTask() ||
+                           speechActive || microphoneActive);
     if (composer)
     {
         QString voice = QStringLiteral("idle");
@@ -2651,7 +2710,8 @@ void ReviaWindow::UpdateSendState()
         return;
     const bool turnBusy = operationRunning.load() || Session().IsBusy();
     const bool pending = !messageInput->toPlainText().trimmed().isEmpty() || (attachmentTray != nullptr && !attachmentTray->IsEmpty());
-    sendButton->setEnabled(Session().IsStarted() && !turnBusy && !shuttingDown.load() && !switchingCompanion && pending);
+    sendButton->setEnabled(
+        Session().IsStarted() && !turnBusy && !attachmentRunning.load() && !shuttingDown.load() && !switchingCompanion && pending);
     // Stop takes the send slot while a turn, a task or a studio operation runs; while only speech
     // or the microphone runs it waits beside Send, so the next message can still go.
     const revia::runtime::RuntimeState state = lastRuntimeState;
@@ -3253,9 +3313,13 @@ void ReviaWindow::RenderChat()
                     files += QStringLiteral("<img src=\"%1\" height=\"48\"> ").arg(source.toString());
                 }
                 files += QStringLiteral("%1 (%2)&nbsp;&nbsp;").arg(chip.name.toHtmlEscaped(), chip.size.toHtmlEscaped());
+                if (chip.video)
+                    files += QStringLiteral("<a href=\"video:%1\">Play local preview</a>&nbsp;&nbsp;")
+                                 .arg(QString::fromStdString(chip.id).toHtmlEscaped());
             }
-            html += QStringLiteral("<p class=\"attachment\" align=\"%1\">Attached: %2</p>")
-                        .arg(entry.userMessage ? QStringLiteral("right") : QStringLiteral("left"), files);
+            html += QStringLiteral("<p class=\"attachment\" align=\"%1\">%2: %3</p>")
+                        .arg(entry.userMessage ? QStringLiteral("right") : QStringLiteral("left"),
+                            entry.generatedMediaReferences.empty() ? QStringLiteral("Attached") : QStringLiteral("Generated"), files);
         }
 
         // Copy, Regenerate and Review sit under the newest finished reply only; older replies are
@@ -3434,12 +3498,12 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
     UpdateSendState();
 
     operationWorker = std::jthread(
-        [this, epoch = sessionUiEpoch.load(), text = replacement.toStdString(), editing, replaced, absoluteKeepFrom]()
+        [this, epoch = sessionUiEpoch.load(), mediaEpoch = Session().ConversationMediaEpoch(), text = replacement.toStdString(), editing,
+            replaced, absoluteKeepFrom]()
         {
             const RunningFlag running(operationRunning);
             bool retracted = false;
-            const auto result = RunOrFail<revia::runtime::SessionResult>(
-                [this, &text, editing, &retracted]()
+            const auto result = RunOrFail<revia::runtime::SessionResult>([this, &text, editing, &retracted]()
                 { return editing ? Session().ReplaceLastUserTurn(text, retracted) : Session().RegenerateLast(retracted); },
                 [](const std::string& why)
                 {
@@ -3451,9 +3515,11 @@ void ReviaWindow::RetryLastExchange(const QString& replacement)
                 });
             QMetaObject::invokeMethod(
                 this,
-                [this, epoch, result, retracted, editing, replaced, absoluteKeepFrom, text]()
+                [this, epoch, mediaEpoch, result, retracted, editing, replaced, absoluteKeepFrom, text]()
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
+                        return;
+                    if (!result.generatedMediaReferences.empty() && mediaEpoch != Session().ConversationMediaEpoch())
                         return;
                     chatTurnInFlight = false;
                     if (retracted)
@@ -3653,6 +3719,11 @@ void ReviaWindow::ClearTranscript()
 
 bool ReviaWindow::StartNewChat(std::string& outError)
 {
+    if (attachmentRunning.load())
+    {
+        outError = "An attachment is still being read. Start a new chat once it finishes.";
+        return false;
+    }
     if (operationRunning.load())
     {
         outError = DisplayName().toStdString() + " is still working on the previous request. Start a new chat once the reply is in.";
@@ -3660,6 +3731,10 @@ bool ReviaWindow::StartNewChat(std::string& outError)
     }
     if (!Session().StartNewConversation(outError))
         return false;
+    RevalidateAttachmentPresentation();
+    DiscardStagedAttachments(Session());
+    attachmentTray->Clear();
+    attachmentTray->SetStatus(QString());
     CloseArchivedChat();
     lastTurnError.reset();
     ClearTranscript();
@@ -3671,7 +3746,7 @@ bool ReviaWindow::StartNewChat(std::string& outError)
 bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
 {
     const bool current = id == Session().CurrentConversationId();
-    if (current && operationRunning.load())
+    if (current && (operationRunning.load() || attachmentRunning.load()))
     {
         outError = DisplayName().toStdString() + " is still working on the previous request. Delete this chat once the reply is in.";
         return false;
@@ -3681,7 +3756,12 @@ bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
     if (viewingArchivedChat == id)
         CloseArchivedChat();
     if (current)
+    {
+        DiscardStagedAttachments(Session());
+        attachmentTray->Clear();
+        attachmentTray->SetStatus(QString());
         ClearTranscript();
+    }
     return true;
 }
 
@@ -3751,6 +3831,11 @@ void ReviaWindow::ContinueArchivedChat()
     const std::string id = viewingArchivedChat;
     if (id.empty())
         return;
+    if (attachmentRunning.load())
+    {
+        archivedChatLabel->setText(QStringLiteral("An attachment is still being read. Continue once it finishes."));
+        return;
+    }
     if (operationRunning.load())
     {
         archivedChatLabel->setText(DisplayName() + QStringLiteral(" is still working on the previous request. Continue once the reply is in."));
@@ -3762,6 +3847,10 @@ void ReviaWindow::ContinueArchivedChat()
         archivedChatLabel->setText(QString::fromStdString(error));
         return;
     }
+    RevalidateAttachmentPresentation();
+    DiscardStagedAttachments(Session());
+    attachmentTray->Clear();
+    attachmentTray->SetStatus(QString());
     // The whole saved chat is shown; Revia's working context holds only the current
     // speaker's own turns from it.
     const std::vector<revia::memory::ArchivedTurn> turns = Session().ConversationTranscript(id, error);
@@ -3781,6 +3870,8 @@ void ReviaWindow::ContinueArchivedChat()
         entry.body = QString::fromStdString(turn.content);
         entry.markdown = !entry.userMessage;
         chatEntries.push_back(std::move(entry));
+        if (turn.role == "assistant")
+            PresentGeneratedMedia(turn.mediaReferences);
     }
     TrimTranscript();
     RenderChat();
@@ -3979,6 +4070,7 @@ void ReviaWindow::ApplyUserPreferences()
     RefreshPreferenceSpins();
     RefreshInitiativeMode();
     RefreshCloudUseFor();
+    RefreshImageMinTokens();
     RefreshDelegationMode();
     RefreshPresenceUi();
 }
@@ -4212,7 +4304,7 @@ void ReviaWindow::BuildAttachmentControls()
 void ReviaWindow::ChooseAttachments()
 {
     const QStringList paths = QFileDialog::getOpenFileNames(this, QStringLiteral("Attach files"), QString(),
-        QStringLiteral("Supported files (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf *.docx *.txt *.md *.csv *.tsv *.json *.log *.xml "
+        QStringLiteral("Supported files (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.mp4 *.webm *.pdf *.docx *.txt *.md *.csv *.tsv *.json *.log *.xml "
                        "*.yaml *.yml *.toml *.ini *.c *.cc *.cpp *.h *.hpp *.cs *.py *.js *.ts *.java *.rs *.go *.html *.css *.sql "
                        "*.ps1 *.sh);;All files (*)"));
     AttachPaths(paths);
@@ -4222,6 +4314,7 @@ void ReviaWindow::AttachPaths(const QStringList& paths)
 {
     if (paths.isEmpty() || shuttingDown.load() || switchingCompanion)
         return;
+    RevalidateAttachmentPresentation();
     const std::size_t limit = revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn;
     if (attachmentTray->Chips().size() + static_cast<std::size_t>(paths.size()) > limit)
     {
@@ -4233,18 +4326,24 @@ void ReviaWindow::AttachPaths(const QStringList& paths)
         attachmentTray->SetStatus(QStringLiteral("Still reading the previous attachment. Try again in a moment."));
         return;
     }
-    // The previous worker has finished its body, so this join does not wait on work.
+    // Completion is published only after its last file read; this join cannot wait on more intake.
     if (attachmentWorker.joinable())
         attachmentWorker.join();
     attachmentTray->SetStatus(paths.size() == 1 ? QStringLiteral("Reading %1...").arg(QFileInfo(paths.front()).fileName())
                                                 : QStringLiteral("Reading %1 files...").arg(paths.size()));
+    stopButton->setEnabled(true);
+    UpdateSendState();
+    auto* origin = &Session();
     attachmentWorker = std::jthread(
-        [this, epoch = sessionUiEpoch.load(), paths]()
+        [this, origin, epoch = sessionUiEpoch.load(), audienceRevision = origin->Audience().revision,
+            conversationId = origin->CurrentConversationId(), paths](const std::stop_token stopToken)
         {
-            const RunningFlag running(attachmentRunning);
             std::vector<AttachmentOutcome> outcomes;
             for (const QString& path : paths)
             {
+                if (stopToken.stop_requested() || shuttingDown.load() || epoch != sessionUiEpoch.load() ||
+                    audienceRevision != origin->Audience().revision || conversationId != origin->CurrentConversationId())
+                    break;
                 try
                 {
                     const std::filesystem::path native(path.toStdU16String());
@@ -4253,12 +4352,21 @@ void ReviaWindow::AttachPaths(const QStringList& paths)
                     std::optional<PreparedImage> prepared;
                     if (LooksLikeImageFile(path))
                         prepared = PrepareImageFileForAttachment(path, static_cast<int>(revia::attachments::DesktopImageSide));
-                    if (prepared && !prepared->png.isEmpty())
-                        outcomes.push_back(OutcomeOf(
-                            Session().AttachImageData(QFileInfo(path).fileName().toStdString(), prepared->png.toStdString()),
-                            prepared->thumbnail));
-                    else
-                        outcomes.push_back(OutcomeOf(Session().AttachFile(native), QImage()));
+                    if (stopToken.stop_requested() || shuttingDown.load() || epoch != sessionUiEpoch.load() ||
+                        audienceRevision != origin->Audience().revision || conversationId != origin->CurrentConversationId())
+                        break;
+                    AttachmentOutcome outcome =
+                        prepared && !prepared->png.isEmpty()
+                            ? OutcomeOf(origin->AttachImageData(QFileInfo(path).fileName().toStdString(), prepared->png.toStdString()),
+                                  prepared->thumbnail)
+                            : OutcomeOf(origin->AttachFile(native, stopToken), QImage());
+                    if (outcome.accepted)
+                    {
+                        TrackStagedAttachment(outcome.chip.id, audienceRevision);
+                        if (prepared && !prepared->notice.isEmpty())
+                            outcome.message = prepared->notice;
+                    }
+                    outcomes.push_back(std::move(outcome));
                 }
                 catch (const std::exception& error)
                 {
@@ -4267,21 +4375,48 @@ void ReviaWindow::AttachPaths(const QStringList& paths)
                     outcomes.push_back(failed);
                 }
             }
+            const bool cancelled = stopToken.stop_requested();
             QMetaObject::invokeMethod(
                 this,
-                [this, epoch, outcomes]()
+                [this, origin, epoch, audienceRevision, conversationId, outcomes, cancelled]()
                 {
                     if (epoch != sessionUiEpoch.load() || shuttingDown.load())
                         return;
-                    QStringList refused;
+                    if (attachmentWorker.joinable())
+                        attachmentWorker.join();
+                    if (cancelled)
+                    {
+                        for (const auto& outcome : outcomes)
+                            if (outcome.accepted)
+                            {
+                                origin->RemoveAttachment(outcome.chip.id);
+                                ReleaseStagedAttachments({outcome.chip.id});
+                            }
+                        attachmentRunning.store(false);
+                        attachmentTray->SetStatus(QStringLiteral("Attachment intake cancelled."));
+                        UpdateSendState();
+                        return;
+                    }
+                    if (audienceRevision != origin->Audience().revision || conversationId != origin->CurrentConversationId())
+                    {
+                        DiscardStagedAttachments(*origin);
+                        attachmentTray->Clear();
+                        attachmentTray->SetStatus(
+                            QStringLiteral("Attachment intake was cancelled because the conversation or audience changed."));
+                        UpdateSendState();
+                        return;
+                    }
+                    QStringList notices;
                     for (const AttachmentOutcome& outcome : outcomes)
                     {
                         if (outcome.accepted)
                             attachmentTray->Add(outcome.chip);
-                        else
-                            refused << outcome.message;
+                        if (!outcome.message.isEmpty())
+                            notices << outcome.message;
                     }
-                    attachmentTray->SetStatus(refused.join(QStringLiteral(" ")));
+                    attachmentTray->SetStatus(notices.join(QStringLiteral(" ")));
+                    attachmentRunning.store(false);
+                    UpdateSendState();
                     messageInput->setFocus();
                 },
                 Qt::QueuedConnection);
@@ -4290,12 +4425,23 @@ void ReviaWindow::AttachPaths(const QStringList& paths)
 
 void ReviaWindow::AttachPastedImage(const QImage& image)
 {
+    if (shuttingDown.load() || switchingCompanion)
+        return;
+    RevalidateAttachmentPresentation();
+    if (attachmentRunning.load())
+    {
+        attachmentTray->SetStatus(QStringLiteral("Still reading the previous attachment. Try again in a moment."));
+        return;
+    }
     if (attachmentTray->Chips().size() >= revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn)
     {
         attachmentTray->SetStatus(QStringLiteral("A message can carry at most %1 files.")
                                       .arg(revia::attachments::AttachmentLimits{}.maxAttachmentsPerTurn));
         return;
     }
+    auto* origin = &Session();
+    const auto audienceRevision = origin->Audience().revision;
+    const std::string conversationId = origin->CurrentConversationId();
     const PreparedImage prepared = PrepareImageForAttachment(image, static_cast<int>(revia::attachments::DesktopImageSide));
     if (prepared.png.isEmpty())
     {
@@ -4303,17 +4449,243 @@ void ReviaWindow::AttachPastedImage(const QImage& image)
         return;
     }
     const QString name = QStringLiteral("pasted-image-%1.png").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
-    const AttachmentOutcome outcome = OutcomeOf(Session().AttachImageData(name.toStdString(), prepared.png.toStdString()), prepared.thumbnail);
+    const AttachmentOutcome outcome =
+        OutcomeOf(origin->AttachImageData(name.toStdString(), prepared.png.toStdString()), prepared.thumbnail);
+    if (audienceRevision != origin->Audience().revision || conversationId != origin->CurrentConversationId())
+    {
+        if (outcome.accepted)
+            origin->RemoveAttachment(outcome.chip.id);
+        attachmentTray->SetStatus(QStringLiteral("Attachment intake was cancelled because the conversation or audience changed."));
+        return;
+    }
     if (outcome.accepted)
+    {
+        TrackStagedAttachment(outcome.chip.id, audienceRevision);
         attachmentTray->Add(outcome.chip);
-    attachmentTray->SetStatus(outcome.accepted ? QString() : outcome.message);
+    }
+    attachmentTray->SetStatus(outcome.accepted && !prepared.notice.isEmpty() ? prepared.notice : outcome.message);
 }
 
 void ReviaWindow::RemoveAttachmentChip(const std::string& id)
 {
     (void)Session().RemoveAttachment(id);
+    ReleaseStagedAttachments({id});
     attachmentTray->Remove(id);
     attachmentTray->SetStatus(QString());
+}
+
+void ReviaWindow::TrackStagedAttachment(const std::string& id, const std::uint64_t audienceRevision)
+{
+    std::lock_guard lock(stagedAttachmentMutex);
+    stagedAttachmentAudienceRevision = audienceRevision;
+    stagedAttachmentIds.push_back(id);
+}
+
+void ReviaWindow::ReleaseStagedAttachments(const std::vector<std::string>& ids)
+{
+    std::lock_guard lock(stagedAttachmentMutex);
+    stagedAttachmentIds.erase(std::remove_if(stagedAttachmentIds.begin(), stagedAttachmentIds.end(),
+                                  [&](const auto& id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); }),
+        stagedAttachmentIds.end());
+}
+
+void ReviaWindow::DiscardStagedAttachments(revia::runtime::ReviaSession& owner)
+{
+    std::vector<std::string> ids;
+    {
+        std::lock_guard lock(stagedAttachmentMutex);
+        ids = std::exchange(stagedAttachmentIds, {});
+    }
+    for (const auto& id : ids)
+        owner.RemoveAttachment(id);
+    attachmentRunning.store(false);
+}
+
+void ReviaWindow::RevalidateAttachmentPresentation()
+{
+    if (switchingCompanion || shuttingDown.load())
+        return;
+    const auto audience = Session().Audience();
+    const bool privateAudience = audience.kind == revia::identity::AudienceKind::Private;
+    if (documentsDialog && (!privateAudience || audience.revision != documentsAudienceRevision))
+        delete documentsDialog.data();
+    bool stale = false;
+    {
+        std::lock_guard lock(stagedAttachmentMutex);
+        stale = !stagedAttachmentIds.empty() && (!privateAudience || audience.revision != stagedAttachmentAudienceRevision);
+    }
+    if (stale)
+    {
+        attachmentWorker.request_stop();
+        attachmentTray->Clear();
+        attachmentTray->SetStatus(QString());
+        if (!attachmentRunning.load())
+            DiscardStagedAttachments(Session());
+        UpdateSendState();
+    }
+    RevalidateTranscriptMedia();
+}
+
+void ReviaWindow::RevalidateTranscriptMedia()
+{
+    const auto epoch = sessionUiEpoch.load();
+    const auto revision = Session().MediaPresentationRevision();
+    const auto audience = Session().Audience();
+    const auto conversationEpoch = Session().ConversationMediaEpoch();
+    const auto stamp = Session().Stamp();
+    const bool scopeChanged =
+        transcriptMediaInitialized && (epoch != transcriptMediaEpoch || audience.revision != transcriptAudienceRevision ||
+                                          conversationEpoch != transcriptConversationEpoch || !stamp.SameSession(transcriptMediaStamp) ||
+                                          stamp.policyVersion != transcriptMediaStamp.policyVersion);
+    if (transcriptMediaInitialized && !scopeChanged && revision == transcriptMediaRevision)
+        return;
+    const bool initialPresentation = transcriptMediaEpoch == 0 && revision == 0;
+    transcriptMediaInitialized = true;
+    transcriptMediaEpoch = epoch;
+    transcriptMediaRevision = revision;
+    transcriptAudienceRevision = audience.revision;
+    transcriptConversationEpoch = conversationEpoch;
+    transcriptMediaStamp = stamp;
+    std::set<std::string> presented;
+    std::map<std::string, std::string> generatedDigests;
+    if (scopeChanged || audience.kind != revia::identity::AudienceKind::Private)
+    {
+        if (canvasPanel)
+            canvasPanel->Clear();
+        std::set<std::string> expired;
+        for (const auto& entry : chatEntries)
+            for (const auto& reference : entry.generatedMediaReferences)
+                expired.insert(reference.id);
+        InvalidateTranscriptMedia(expired);
+    }
+    for (const auto& entry : chatEntries)
+    {
+        for (const auto& reference : entry.generatedMediaReferences)
+            generatedDigests[reference.id] = reference.digest;
+        for (const auto& chip : entry.attachments)
+            if (!chip.thumbnail.isNull() || chip.video)
+                presented.insert(chip.id);
+    }
+    if (canvasPanel)
+        for (const auto& reference : canvasPanel->GeneratedMediaReferences())
+        {
+            presented.insert(reference.id);
+            generatedDigests[reference.id] = reference.digest;
+        }
+    if (presented.empty() && initialPresentation)
+        return;
+    if (!presented.empty())
+        for (const auto& document : Session().Documents())
+            if (!generatedDigests.contains(document.id) ||
+                (document.origin == MediaOrigin::GeneratedArtifact && generatedDigests[document.id] == document.digest))
+                presented.erase(document.id);
+    InvalidateTranscriptMedia(presented);
+}
+
+void ReviaWindow::InvalidateTranscriptMedia(const std::set<std::string>& ids)
+{
+    if (canvasPanel)
+        canvasPanel->RemoveMedia(ids);
+    for (auto& entry : chatEntries)
+        for (auto& chip : entry.attachments)
+            if (ids.contains(chip.id) && (!chip.thumbnail.isNull() || chip.video))
+            {
+                chip.thumbnail = {};
+                chip.video = false;
+                chip.durationMs = 0;
+            }
+    const int scroll = chatHistory->verticalScrollBar()->value();
+    const bool pinned = transcriptPinned;
+    const QString archivedHtml = viewingArchivedChat.empty() ? QString() : chatHistory->toHtml();
+    QPointer<QTextDocument> previous = chatHistory->document();
+    auto* fresh = new QTextDocument(chatHistory);
+    fresh->setDefaultFont(previous->defaultFont());
+    fresh->setDocumentMargin(previous->documentMargin());
+    // setHtml alone retains image resources that are no longer referenced by its markup.
+    chatHistory->setDocument(fresh);
+    if (previous)
+        delete previous.data();
+    if (viewingArchivedChat.empty())
+        RenderChat();
+    else
+    {
+        fresh->setDefaultStyleSheet(TranscriptCss());
+        chatHistory->setHtml(archivedHtml);
+        ApplyChatMeasure();
+    }
+    chatHistory->verticalScrollBar()->setValue(scroll);
+    transcriptPinned = pinned;
+}
+
+std::optional<QImage> ReviaWindow::GeneratedMediaPreview(const conversationMediaReference& reference)
+{
+    if (shuttingDown.load() || switchingCompanion || reference.origin != MediaOrigin::GeneratedArtifact || reference.id.empty() ||
+        reference.digest.empty())
+        return {};
+    const auto stamp = Session().Stamp();
+    const auto audience = Session().Audience();
+    const auto epoch = Session().ConversationMediaEpoch();
+    const auto revision = Session().MediaPresentationRevision();
+    if (audience.kind != revia::identity::AudienceKind::Private)
+        return {};
+    const auto documents = Session().Documents();
+    if (std::none_of(documents.begin(), documents.end(),
+            [&](const auto& document)
+            {
+                return document.id == reference.id && document.digest == reference.digest && document.mimeType == reference.mimeType &&
+                       document.origin == MediaOrigin::GeneratedArtifact;
+            }))
+        return {};
+    const auto preview = Session().DocumentImagePreview(reference.id);
+    if (!preview || !preview->bytes || preview->bytes->empty() || !stamp.SameSession(Session().Stamp()) ||
+        stamp.policyVersion != Session().Stamp().policyVersion || audience.revision != Session().Audience().revision ||
+        epoch != Session().ConversationMediaEpoch() || revision != Session().MediaPresentationRevision())
+        return {};
+    QImage image = QImage::fromData(reinterpret_cast<const uchar*>(preview->bytes->data()), static_cast<int>(preview->bytes->size()));
+    return image.isNull() ? std::nullopt : std::optional<QImage>(std::move(image));
+}
+
+void ReviaWindow::PresentGeneratedMedia(const std::vector<conversationMediaReference>& references)
+{
+    if (references.empty() || Session().Audience().kind != revia::identity::AudienceKind::Private)
+        return;
+    RevalidateAttachmentPresentation();
+    const auto documents = Session().Documents();
+    ChatEntry entry;
+    entry.speaker = QString::fromStdString(Session().DisplayName());
+    for (const auto& reference : references)
+    {
+        if (reference.origin != MediaOrigin::GeneratedArtifact)
+            continue;
+        const auto document = std::find_if(documents.begin(), documents.end(),
+            [&](const auto& item)
+            {
+                return item.id == reference.id && item.digest == reference.digest && item.mimeType == reference.mimeType &&
+                       item.origin == MediaOrigin::GeneratedArtifact;
+            });
+        if (document == documents.end())
+            continue;
+        const bool video = reference.mimeType == "video/mp4" || reference.mimeType == "video/webm";
+        const auto preview = GeneratedMediaPreview(reference);
+        if (!video && (!reference.mimeType.starts_with("image/") || !preview))
+            continue;
+        AttachmentChip chip;
+        chip.id = reference.id;
+        chip.name = QString::fromStdString(reference.name);
+        chip.size = QString::fromStdString(revia::attachments::HumanSize(document->bytes));
+        chip.video = video;
+        chip.durationMs = reference.durationMs;
+        if (preview)
+            chip.thumbnail = preview->scaled(160, 100, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        entry.attachments.push_back(std::move(chip));
+        entry.generatedMediaReferences.push_back(reference);
+    }
+    if (!entry.attachments.empty())
+    {
+        chatEntries.push_back(std::move(entry));
+        TrimTranscript();
+        RenderChat();
+    }
 }
 
 bool ReviaWindow::HandleAttachmentDrag(QEvent* event)
@@ -4352,12 +4724,30 @@ bool ReviaWindow::HandleAttachmentDrag(QEvent* event)
 
 void ReviaWindow::ShowDocuments()
 {
+    if (shuttingDown.load() || switchingCompanion)
+        return;
+    RevalidateAttachmentPresentation();
+    if (Session().Audience().kind != revia::identity::AudienceKind::Private)
+    {
+        ShowStatus(QStringLiteral("Documents are available only in a private audience."), 6000);
+        return;
+    }
     if (!documentsDialog)
     {
         DocumentControls controls;
-        controls.list = [this]() { return Session().Documents(); };
-        controls.preview = [this](const std::string& id) { return Session().DocumentPreview(id); };
-        controls.forget = [this](const std::string& id, std::string& error) { return Session().ForgetDocument(id, error); };
+        auto* origin = &Session();
+        documentsAudienceRevision = origin->Audience().revision;
+        controls.list = [origin]() { return origin->Documents(); };
+        controls.preview = [origin](const std::string& id) { return origin->DocumentPreview(id); };
+        controls.imagePreview = [origin](const std::string& id) { return origin->DocumentImagePreview(id); };
+        controls.forget = [this, origin, epoch = sessionUiEpoch.load()](const std::string& id, std::string& error)
+        {
+            const bool forgotten = origin->ForgetDocument(id, error);
+            if (epoch == sessionUiEpoch.load() && origin == &Session())
+                RevalidateTranscriptMedia();
+            return forgotten;
+        };
+        controls.videoPreview = [this](const std::string& id) { OpenVideoPreview(id); };
         documentsDialog = new DocumentsDialog(std::move(controls), this);
         documentsDialog->setAttribute(Qt::WA_DeleteOnClose);
     }
@@ -4365,4 +4755,40 @@ void ReviaWindow::ShowDocuments()
     documentsDialog->show();
     documentsDialog->raise();
     documentsDialog->activateWindow();
+}
+
+void ReviaWindow::CloseVideoPreview()
+{
+    if (videoPreviewDialog)
+        delete videoPreviewDialog.data();
+}
+
+void ReviaWindow::OpenVideoPreview(const std::string& id)
+{
+    if (switchingCompanion || shuttingDown.load() || Session().Audience().kind != revia::identity::AudienceKind::Private)
+        return;
+    const auto documents = Session().Documents();
+    const auto found = std::find_if(documents.begin(), documents.end(),
+        [&](const auto& document) { return document.id == id && document.kind == revia::attachments::AttachmentKind::Video; });
+    if (found == documents.end())
+    {
+        ShowStatus(QStringLiteral("That stored video is unavailable."), 6000);
+        return;
+    }
+    CloseVideoPreview();
+    auto* origin = &Session();
+    const auto epoch = sessionUiEpoch.load();
+    const auto audienceRevision = origin->Audience().revision;
+    const auto conversationId = origin->CurrentConversationId();
+    const auto mediaRevision = origin->MediaPresentationRevision();
+    videoPreviewDialog = new VideoPreviewDialog(QString::fromStdString(found->name),
+        [origin, id](const std::stop_token stopToken) { return origin->DocumentVideoPreview(id, stopToken); },
+        [this, origin, epoch, audienceRevision, conversationId, mediaRevision]()
+        {
+            return !shuttingDown.load() && !switchingCompanion && epoch == sessionUiEpoch.load() &&
+                   origin->Audience().kind == revia::identity::AudienceKind::Private && origin->Audience().revision == audienceRevision &&
+                   origin->CurrentConversationId() == conversationId && origin->MediaPresentationRevision() == mediaRevision;
+        }, this);
+    videoPreviewDialog->setAttribute(Qt::WA_DeleteOnClose);
+    videoPreviewDialog->show();
 }

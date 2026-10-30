@@ -28,6 +28,31 @@ std::string Trim(const std::string& value)
     return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
 }
 
+std::size_t LeadingRuntimeEchoEnd(const std::string& value)
+{
+    namespace markers = revia::identity::markers;
+    constexpr std::size_t maximumEchoBytes = 16384;
+    const std::string_view bounded(value.data(), std::min(value.size(), maximumEchoBytes));
+    const std::size_t first = bounded.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos || bounded.substr(first, markers::RuntimeTurnContext.size()) != markers::RuntimeTurnContext)
+        return 0;
+    std::size_t body = first + markers::RuntimeTurnContext.size();
+    if (bounded.substr(body, 2) == "\r\n")
+        body += 2;
+    else if (bounded.substr(body, 1) == "\n")
+        ++body;
+    else
+        return 0;
+    const std::size_t close = bounded.find(markers::RuntimeTurnContextEnd, body);
+    if (close == std::string_view::npos || bounded[close - 1] != '\n' ||
+        bounded.substr(body, close - body).find(markers::RuntimeTurnContext) != std::string_view::npos)
+        return 0;
+    const std::size_t end = close + markers::RuntimeTurnContextEnd.size();
+    if (end != value.size() && value[end] != '\n' && value.compare(end, 2, "\r\n") != 0)
+        return 0;
+    return end;
+}
+
 std::string Lower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
@@ -409,26 +434,25 @@ std::string ResponseFilterContext::Describe() const
         // The other half of the same sentence, and the half that was missing. Saying
         // only the first taught her that claiming sight is always the safe answer.
         description += " No screen observation was taken this turn. You do not know what "
-            "is on the screen, what is open, or which window is in front. Do not say you "
-            "are looking at, watching, or can see anything on it, and do not describe "
-            "what is there.";
+                       "is on the screen, what is open, or which window is in front. Do not say you "
+                       "are looking at, watching, or can see anything on it, and do not describe "
+                       "what is there.";
     }
     if (desktopStateKnown && !AnyDesktopHands())
     {
-        description += " Desktop control is off: pointer, keyboard and application "
-            "launch are all disabled in settings. You cannot click, type, open an "
-            "application or navigate a browser at all this turn. If asked to, say plainly "
-            "that the permission is off rather than agreeing, stalling, or describing the "
-            "action as already underway.";
+        description += " Desktop control is off: pointer, keyboard and application launch are all disabled in settings. "
+                       "Native desktop clicks, keystrokes and app launches are unavailable. This limits desktop interaction, "
+                       "not composing replies in this chat. If asked for one of those desktop actions, explain that its "
+                       "permission is off.";
     }
     return description;
 }
 
-HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
-    const std::string& candidate, const ResponseFilterContext& context, const int maxCharacters) const
+HardFilterResult ResponseFilter::ApplyHard(
+    const std::string& userInput, const std::string& candidate, const ResponseFilterContext& context, const int maxCharacters) const
 {
     HardFilterResult result;
-    const bool jsonReply = IsCompleteJsonReply(candidate);
+    bool jsonReply = false;
     // Every exit, including a grounded replacement, observes the same encoding and
     // byte budget. Validation happens before trimming so malformed bytes cannot be
     // accidentally hidden by a control-character or size repair.
@@ -470,16 +494,22 @@ HardFilterResult ResponseFilter::ApplyHard(const std::string& userInput,
         result.reason = "Hard response filter replaced malformed UTF-8.";
         return finish();
     }
-    const auto first = candidate.find_first_not_of(" \t\r\n");
-    if (candidate.size() > MaximumJsonReplyBytes && first != std::string::npos && (candidate[first] == '{' || candidate[first] == '['))
+    // Only a complete leading host block can be discarded. The raw stream stays
+    // quarantined by its marker guard, and the remaining answer faces every filter.
+    const std::size_t echoEnd = LeadingRuntimeEchoEnd(candidate);
+    const std::string reply = echoEnd == 0 ? candidate : candidate.substr(echoEnd);
+    result.changed = echoEnd != 0;
+    jsonReply = IsCompleteJsonReply(reply);
+    const auto first = reply.find_first_not_of(" \t\r\n");
+    if (reply.size() > MaximumJsonReplyBytes && first != std::string::npos && (reply[first] == '{' || reply[first] == '['))
     {
         result.text = "That JSON reply exceeded the response limit. Ask for a smaller result.";
         result.changed = result.blocked = true;
         result.reason = "Hard response filter refused a JSON reply above the parsing limit.";
         return finish();
     }
-    result.text.reserve(candidate.size());
-    for (const unsigned char character : candidate)
+    result.text.reserve(reply.size());
+    for (const unsigned char character : reply)
     {
         if (character == '\0' || (character < 0x20 && character != '\n' &&
                 character != '\r' && character != '\t'))

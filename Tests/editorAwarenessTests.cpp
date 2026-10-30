@@ -46,7 +46,8 @@ void TestFocusDoesNotReviveAnOldNomination()
     Check(fixture.session.UserPreferences().initiativeMode == "focus", "Focus was saved without being applied to the running session.");
     Check(fixture.session.SetPreference("initiative.mode", "normal").succeeded, "Normal preference failed.");
     Check(!cues.front().admission(), "Returning from Focus revived a pre-Focus source nomination.");
-    Check(Access::EditorContext(fixture.session).find("RetainedSource") != std::string::npos,
+    Check(Access::EditorSourceAvailable(fixture.session) &&
+              Access::EditorContext(fixture.session).find("RetainedSource") != std::string::npos,
         "Focus discarded code that should remain available to direct conversation.");
 }
 
@@ -71,6 +72,7 @@ void TestChangingFilesRetiresAnOptionalAttemptEvenWithIdenticalBytes()
 void TestAuthorizedSourceRevisionsAndSuppression()
 {
     Fixture fixture;
+    Check(!Access::EditorSourceAvailable(fixture.session), "A session without a saved snapshot reported current source availability.");
     auto request = fixture.Save("const char* Label() { return \"ready\"; }\n");
     const auto received = fixture.session.ObserveEditorFile(request);
     Check(received.accepted, "An approved saved source event was refused: " + received.reason);
@@ -78,12 +80,13 @@ void TestAuthorizedSourceRevisionsAndSuppression()
     Check(cues.size() == 1 && cues.front().optionalObservation && cues.front().admission(),
         "A saved source receipt did not reach the actual initiative cue owner with current admission.");
     const auto guard = cues.front().admission;
-    Check(Access::EditorContext(fixture.session).find("Label") != std::string::npos,
+    Check(Access::EditorSourceAvailable(fixture.session) && Access::EditorContext(fixture.session).find("Label") != std::string::npos,
         "The current source was unavailable for a coherent follow-up.");
     Check(fixture.session.ObserveEditorFile(request).accepted && Access::EditorCues(fixture.session).empty(),
         "An unchanged revision scheduled another model call.");
     std::ofstream(fixture.file) << "const char* Label() { return \"changed\"; }\n";
-    Check(!guard() && Access::EditorContext(fixture.session).find("no longer current") != std::string::npos,
+    Check(!guard() && !Access::EditorSourceAvailable(fixture.session) &&
+              Access::EditorContext(fixture.session).find("no longer current") != std::string::npos,
         "A changed file kept an old comment or a falsely current follow-up source.");
     request = fixture.Save("const char* Label() { return \"new\"; }\n");
     Check(fixture.session.ObserveEditorFile(request).accepted, "A new stable revision was refused.");
@@ -94,7 +97,7 @@ void TestAuthorizedSourceRevisionsAndSuppression()
         "Related rapid revisions were not combined into the newest nomination.");
     fixture.session.SetPerceptionPaused(true);
     Check(!cues.front().admission() && !fixture.session.ObserveEditorFile(request).accepted &&
-        Access::EditorContext(fixture.session).find("paused") != std::string::npos,
+              !Access::EditorSourceAvailable(fixture.session) && Access::EditorContext(fixture.session).find("paused") != std::string::npos,
         "Pausing left source context or a queued comment active.");
 }
 
@@ -136,7 +139,7 @@ void TestTransientSourceRetention()
             pending.subject.find("PrivateFunctionLabel") == std::string::npos && !pending.admission,
             "The outcome ledger retained raw source or its owning admission closure.");
     Access::ExpireEditorSnapshot(fixture.session);
-    Check(!cues.front().admission() && Access::EditorContext(fixture.session).empty(),
+    Check(!cues.front().admission() && !Access::EditorSourceAvailable(fixture.session) && Access::EditorContext(fixture.session).empty(),
         "Expired source remained available or alive through a captured speech/cue guard.");
 }
 
@@ -153,9 +156,11 @@ void TestRevokedSourceAndFocusAdmission()
         {"mode", "approved_scope"}, {"approvedRoots", nlohmann::json::array()}, {"createMissingApprovedRoots", false}}.dump();
     std::string error;
     Check(Access::Actions(fixture.session).Initialize(fixture.temporary.root / "revoked.json", fixture.temporary.root / "revoked-audit.jsonl", error), error);
-    Check(!cues.front().admission(), "Revoked file access retained source admission.");
+    Check(!cues.front().admission() && !Access::EditorSourceAvailable(fixture.session),
+        "Revoked file access retained source admission or current source availability.");
     fixture.session.ForgetActivity();
-    Check(Access::EditorContext(fixture.session).empty() && Access::EditorCues(fixture.session).empty(),
+    Check(!Access::EditorSourceAvailable(fixture.session) && Access::EditorContext(fixture.session).empty() &&
+              Access::EditorCues(fixture.session).empty(),
         "Forget retained a saved source snapshot or nomination.");
 }
 
@@ -239,7 +244,8 @@ void TestExpiryAndFreshSavePreserveTheCurrentSnapshotInEitherOrder()
         if (expireFirst)
         {
             Access::ExpireEditorSnapshotAt(fixture.session, oldDeadline);
-            Check(Access::EditorContext(fixture.session).empty() && Access::EditorCues(fixture.session).empty(),
+            Check(!Access::EditorSourceAvailable(fixture.session) && Access::EditorContext(fixture.session).empty() &&
+                      Access::EditorCues(fixture.session).empty(),
                 "Expired source or its queued bytes survived retirement.");
         }
 
@@ -249,8 +255,9 @@ void TestExpiryAndFreshSavePreserveTheCurrentSnapshotInEitherOrder()
         Access::ExpireEditorSnapshotAt(fixture.session, oldDeadline);
         const auto freshCues = Access::EditorCues(fixture.session);
         Check(!token.stop_requested() && freshCues.size() == 1 && freshCues.front().admission() &&
-                freshCues.front().evidence.find("FreshSavedValue") != std::string::npos &&
-                Access::EditorContext(fixture.session).find("FreshSavedValue") != std::string::npos,
+                  freshCues.front().evidence.find("FreshSavedValue") != std::string::npos &&
+                  Access::EditorSourceAvailable(fixture.session) &&
+                  Access::EditorContext(fixture.session).find("FreshSavedValue") != std::string::npos,
             "The old expiry deadline cleared or cancelled the fresh saved revision.");
         Check(!oldCues.front().admission(), "Replacement or expiry revived the old source nomination.");
         Access::ReleaseOptionalEditorAttempt(fixture.session);

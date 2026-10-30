@@ -1,9 +1,12 @@
 #pragma once
 
+#include "Attachments/videoDecoder.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,7 +18,8 @@ enum class AttachmentKind
     Image,
     Text,
     Pdf,
-    Docx
+    Docx,
+    Video
 };
 
 [[nodiscard]] std::string ToString(AttachmentKind kind);
@@ -38,6 +42,7 @@ struct AttachmentLimits
     std::size_t inlineTextBytes = 6000;
     std::size_t maxAttachmentsPerTurn = 8;
     std::size_t maxImagesPerTurn = 4;
+    VideoLimits video;
 };
 
 inline constexpr std::uint32_t DesktopImageSide = 1024;
@@ -65,6 +70,8 @@ struct StagedAttachment
     std::filesystem::path storedPath;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    VideoInfo video;
+    std::optional<conversationImage> poster;
     // Documents only: the extracted UTF-8 text and where each page starts in it.
     std::string text;
     std::vector<std::size_t> pageOffsets;

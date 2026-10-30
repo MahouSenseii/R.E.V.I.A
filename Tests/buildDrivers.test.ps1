@@ -40,6 +40,103 @@ $pipedHash = Get-Item -LiteralPath $knownPath | Get-ReviaFileHash
 if ($knownHash.Hash -ne 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD' -or $pipedHash.Hash -ne $knownHash.Hash -or $pipedHash.Path -ne $knownHash.Path) { throw 'SHA256 known-answer or pipeline hash failed.' }
 $knownHash | ConvertTo-Json | Set-Content (Join-Path $fixtureRoot 'file-hash-known-answer.json')
 $results = @($processTreeResult)
+$missingToolMessage = 'Short-video support needs the installed local FFmpeg and ffprobe executables in ThirdParty/ffmpeg/bin.'
+$decoderMissing = 'SKIP: Actual video decoder checks require local FFmpeg/ffprobe. ' + $missingToolMessage
+$previewMissing = 'SKIP: Preview lifetime/admission checks passed; actual playback requires local FFmpeg/ffprobe. ' + $missingToolMessage
+$decoderEncoder = 'SKIP: Actual video decoder fixtures require the CPU libopenh264 or libx264 encoder; neither is installed.'
+$previewEncoder = 'SKIP: Preview lifetime/admission checks passed; the actual fixture requires CPU libopenh264 or libx264.'
+foreach ($case in @('optional-default-reject', 'optional-missing-tools', 'optional-cpu-encoder', 'optional-disabled', 'optional-wrong-reason', 'optional-wrong-code', 'optional-unknown', 'optional-failure', 'optional-normal-pass', 'optional-timeout', 'optional-unavailable-executable', 'optional-extra-output', 'optional-name-case', 'optional-regex-skip', 'optional-discovery-mismatch'))
+{
+    $fixturePath = Join-Path $fixtureRoot $case
+    New-Item -ItemType Directory -Path $fixturePath | Out-Null
+    $source = "cmake_minimum_required(VERSION 3.20)`nproject(OptionalVideoPrerequisiteFixture NONE)`nenable_testing()`n" + 'add_test(NAME Fixture.Pass COMMAND "${CMAKE_COMMAND}" -E true)' + "`n"
+    $names = @('ReviaVideoDecoderTests')
+    if ($case -in @('optional-missing-tools', 'optional-cpu-encoder', 'optional-normal-pass')) { $names += 'Revia.VideoPreview' }
+    if ($case -eq 'optional-unknown') { $names = @('Fixture.Unknown') }
+    if ($case -eq 'optional-name-case') { $names = @('reviavideodecodertests') }
+    foreach ($name in $names)
+    {
+        $message = if ($name -eq 'Revia.VideoPreview') { $previewMissing } else { $decoderMissing }
+        if ($case -eq 'optional-cpu-encoder') { $message = if ($name -eq 'Revia.VideoPreview') { $previewEncoder } else { $decoderEncoder } }
+        if ($case -eq 'optional-wrong-reason') { $message = 'SKIP: Some other optional dependency is unavailable.' }
+        if ($case -eq 'optional-extra-output') { $message += "`nUnexpected additional output" }
+        $returnCode = if ($case -eq 'optional-wrong-code') { 78 } elseif ($case -eq 'optional-failure') { 1 } elseif ($case -eq 'optional-normal-pass') { 0 } else { 77 }
+        $child = Join-Path $fixturePath ($name + '.ps1')
+        $script = "Write-Output '" + $message.Replace("'", "''") + "'`n"
+        if ($case -eq 'optional-timeout') { $script += "Start-Sleep -Seconds 5`n" }
+        $script += "exit $returnCode`n"
+        $script | Set-Content $child
+        $command = '"' + $shell.Replace('\', '/') + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $child.Replace('\', '/') + '"'
+        if ($case -eq 'optional-unavailable-executable') { $command = '"' + (Join-Path $fixturePath 'missing-executable.exe').Replace('\', '/') + '"' }
+        $source += "add_test(NAME $name COMMAND $command)`n"
+        $skipCode = if ($case -eq 'optional-wrong-code') { 78 } else { 77 }
+        if ($case -eq 'optional-regex-skip') { $source += 'set_tests_properties(' + $name + ' PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")' + "`n" }
+        else { $source += "set_tests_properties($name PROPERTIES SKIP_RETURN_CODE $skipCode)`n" }
+        if ($case -eq 'optional-disabled') { $source += "set_tests_properties($name PROPERTIES DISABLED TRUE)`n" }
+    }
+    $source | Set-Content (Join-Path $fixturePath 'CMakeLists.txt')
+    @('Fixture.Pass') + $names | Set-Content (Join-Path $fixturePath 'expected.txt')
+    & cmake -S $fixturePath -B (Join-Path $fixturePath 'build') -G Ninja *> (Join-Path $fixturePath 'configure.log')
+    if ($LASTEXITCODE -ne 0) { throw "Optional prerequisite fixture configure failed: $case" }
+    $arguments = @('-BuildDirectory', (Join-Path $fixturePath 'build'), '-ExpectedInventory', (Join-Path $fixturePath 'expected.txt'), '-EvidenceDirectory', (Join-Path $fixturePath 'results'))
+    if ($case -ne 'optional-default-reject') { $arguments += '-AllowOptionalVideoPrerequisites' }
+    if ($case -eq 'optional-timeout') { $arguments += @('-TimeoutSeconds', '1') }
+    $checkedDriver = $driver
+    if ($case -eq 'optional-discovery-mismatch')
+    {
+        $checkedDriver = Join-Path $fixturePath 'discovery-mismatch.ps1'
+        $wrapper = @'
+param([string]$BuildDirectory, [string]$ExpectedInventory, [string]$EvidenceDirectory, [int]$TimeoutSeconds = 600, [switch]$AllowOptionalVideoPrerequisites)
+$realCTest = '__CTEST__'
+function global:ctest
+{
+    $output = & $realCTest @args
+    $code = $LASTEXITCODE
+    if ($args -contains '--show-only=json-v1')
+    {
+        $inventory = ($output -join "`n") | ConvertFrom-Json
+        foreach ($test in $inventory.tests)
+        {
+            foreach ($property in $test.properties)
+            {
+                if ($property.name -ceq 'SKIP_RETURN_CODE') { $property.value = 78 }
+            }
+        }
+        $inventory | ConvertTo-Json -Depth 12
+    }
+    else { $output }
+    $global:LASTEXITCODE = $code
+}
+& '__DRIVER__' -BuildDirectory $BuildDirectory -ExpectedInventory $ExpectedInventory -EvidenceDirectory $EvidenceDirectory -TimeoutSeconds $TimeoutSeconds -AllowOptionalVideoPrerequisites:$AllowOptionalVideoPrerequisites
+exit $LASTEXITCODE
+'@
+        $wrapper.Replace('__CTEST__', (Get-Command ctest -CommandType Application | Select-Object -First 1).Source.Replace("'", "''")).Replace('__DRIVER__', $driver.Replace("'", "''")) | Set-Content $checkedDriver
+    }
+    $actualExit = RunDriver $checkedDriver $arguments (Join-Path $fixturePath 'driver.log')
+    $expectedExit = if ($case -in @('optional-missing-tools', 'optional-cpu-encoder', 'optional-normal-pass')) { 0 } else { 1 }
+    if ($actualExit -ne $expectedExit) { throw "$case expected exit $expectedExit, got $actualExit" }
+    $summary = Get-Content (Join-Path $fixturePath 'results/test-result.json') -Raw | ConvertFrom-Json
+    [xml]$actualJUnit = Get-Content (Join-Path $fixturePath 'results/ctest.junit.xml') -Raw
+    $videoResults = @($actualJUnit.SelectNodes('//testcase') | Where-Object { $_.name -in $names })
+    if ($case -in @('optional-default-reject', 'optional-missing-tools', 'optional-cpu-encoder', 'optional-wrong-reason', 'optional-unknown', 'optional-extra-output', 'optional-name-case', 'optional-discovery-mismatch'))
+    {
+        if (@($videoResults | Where-Object { $_.status -cne 'notrun' -or $_.SelectSingleNode('skipped').message -cne 'SKIP_RETURN_CODE=77' }).Count -ne 0) { throw 'Real return-77 CTest JUnit no longer has the observed prerequisite-skip representation.' }
+    }
+    $approvedCount = @($summary.approvedPrereqSkips | Where-Object { $null -ne $_ }).Count
+    if ($case -in @('optional-missing-tools', 'optional-cpu-encoder'))
+    {
+        if ($summary.executedCount -ne 1 -or $summary.skippedCount -ne 2 -or $approvedCount -ne 2 -or $summary.unverifiedOptionalVideoCount -ne 2) { throw 'Approved prerequisite skips were counted as executed or lost their unverified status.' }
+        foreach ($result in $videoResults)
+        {
+            $reason = [string]$result.SelectSingleNode('system-out').InnerText
+            if (@($summary.approvedPrereqSkips | Where-Object { $_.name -ceq $result.name -and $_.reason -ceq $reason.TrimEnd([char[]]"`r`n") }).Count -ne 1) { throw 'Approved reason differs from actual CTest stdout.' }
+        }
+    }
+    elseif ($approvedCount -ne 0) { throw 'An unapproved or normally passing test was recorded as a prerequisite skip.' }
+    if ($case -eq 'optional-normal-pass' -and ($summary.executedCount -ne 3 -or $summary.skippedCount -ne 0)) { throw 'Available optional video checks were not counted as actual executions.' }
+    if ($case -in @('optional-failure', 'optional-timeout') -and ($summary.failedCount -ne 1 -or $summary.ctestExitCode -eq 0)) { throw 'Optional prerequisite policy hid a real failure or timeout.' }
+    $results += [ordered]@{ case = $case; exitCode = $actualExit; expectedExitCode = $expectedExit; result = $summary }
+}
 foreach ($case in @('empty', 'missing', 'extra', 'failure', 'skipped', 'untrusted-source', 'hash-command-unavailable', 'success'))
 {
     $fixturePath = Join-Path $fixtureRoot $case
@@ -99,4 +196,4 @@ if (-not $interrupted.timedOut -or -not (Test-Path (Join-Path $interruptPath 're
 if ($interrupted.observedProcesses.Count -lt 2 -or @($interrupted.observedProcesses | Where-Object { -not $_.createdUtc }).Count -ne 0 -or 'cmake.exe' -notin $interrupted.observedProcesses.name -or 'ninja.exe' -notin $interrupted.observedProcesses.name) { throw 'Real build sampling lost root/child creation identities.' }
 $results += [ordered]@{ case = 'interrupted-build'; result = $interrupted }
 $results | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $evidencePath 'results.json')
-Write-Output 'Passed 10 build-driver fixtures: process creation identity, empty, missing, extra, failed, skipped, untrusted source, unavailable hash command, complete inventory and duplicate-PATH interrupted build.'
+Write-Output "Passed $($results.Count) build-driver fixtures: strict inventories, explicit optional video prerequisite policy, source/hash identity, failures/timeouts and duplicate-PATH interrupted build."

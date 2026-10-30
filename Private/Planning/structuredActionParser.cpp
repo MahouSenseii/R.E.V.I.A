@@ -194,6 +194,8 @@ ParsedAction StructuredActionParser::ParseObject(const nlohmann::json& data)
             result.succeeded = true;
             return result;
         }
+        if (result.request.type == actions::ActionType::GenerateVideo)
+            return Error(true, "Video generation requires a runtime-resolved request and source; model action JSON cannot supply it.");
         if (result.request.type == actions::ActionType::ExecuteProcess)
         {
             for (const auto& entry : data.items())

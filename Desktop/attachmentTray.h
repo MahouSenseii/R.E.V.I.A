@@ -6,6 +6,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,6 +22,8 @@ struct AttachmentChip
     QString size;
     // Images only: a small preview, shown on the chip and in the transcript.
     QImage thumbnail;
+    bool video = false;
+    std::int64_t durationMs = 0;
 };
 
 // The row of attachment chips above the message box. It only presents: the window
@@ -58,6 +61,7 @@ struct PreparedImage
     QByteArray png;
     QImage thumbnail;
     QString error;
+    QString notice;
 };
 [[nodiscard]] PreparedImage PrepareImageForAttachment(const QImage& image, int maxSide);
 [[nodiscard]] std::optional<PreparedImage> PrepareImageFileForAttachment(const QString& path, int maxSide);

@@ -2,9 +2,11 @@
 
 #include "Runtime/runtimeEvents.h"
 #include "Runtime/sessionResult.h"
+#include "Visual/imageTypes.h"
 
 #include <cstdint>
 #include <stop_token>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -108,6 +110,7 @@ struct TurnOutcome
 {
     SessionResult result;
     std::vector<TurnEvent> events;
+    std::optional<visual::ImageResult> generatedImage;
 
     TurnOutcome& Then(TurnEvent event)
     {

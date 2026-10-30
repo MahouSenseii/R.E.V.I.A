@@ -1,5 +1,6 @@
 #include "Actions/actionRuntime.h"
 #include "Agents/chatTools.h"
+#include "Agents/compositionRequest.h"
 #include "Agents/conversationAgent.h"
 #include "Agents/sandboxTools.h"
 #include "Audit/contentDigest.h"
@@ -464,6 +465,46 @@ void TestLoopSearchesThenAnswersThroughTheGate()
         "The executed call was not audited.");
 }
 
+void TestGeneratedArtifactsStayOutsideModelToolText()
+{
+    for (const bool retireAfterEffect : {false, true})
+    {
+        revia::tests::ScopedTestDirectory directory;
+        ScriptedBackend backend;
+        messageRouter router((directory.root / "generated.db").string());
+        Configure(router, backend.port);
+        backend.Then({ScriptedBackend::Call(0, "picture", "generate_image", R"({"prompt":"a paper boat"})", "tool_calls")});
+        backend.Then({ScriptedBackend::Text("The image job finished.", "stop")});
+        bool admitted = true;
+        conversationMediaReference reference{"owned-generated-id", std::string(64, 'a'), "result.png", "image/png", 256, 256};
+        reference.origin = MediaOrigin::GeneratedArtifact;
+        ToolPermissions permissions;
+        permissions.privateAudience = permissions.imageGenerationEnabled = true;
+        ToolExecutors executors;
+        executors.generateImage = [&](const std::string&, const ToolCallContext&)
+        {
+            auto result = ToolExecution::Ok("The image job finished.");
+            result.generatedMediaReferences.push_back(reference);
+            if (retireAfterEffect)
+                admitted = false;
+            return result;
+        };
+        ToolLoop loop(ToolRegistry::Project(permissions, executors));
+        std::vector<conversationMediaReference> received;
+        loop.SetAdmission([&] { return admitted; });
+        loop.SetGeneratedMediaHandler(
+            [&](const auto& references) { received.insert(received.end(), references.begin(), references.end()); });
+        const auto result = loop.Run(
+            router, "Draw a paper boat.", {{"user", "Draw a paper boat."}}, {}, {}, {}, revia::llm::PrivateMemoryAccess::ProfileSetting);
+        Check(received == std::vector<conversationMediaReference>{reference},
+            "The owner lost a completed artifact receipt needed for delivery or cancellation cleanup.");
+        Check(result.bSuccess != retireAfterEffect, "Retired image narration was delivered.");
+        for (const auto& request : backend.Requests())
+            Check(request.dump().find(reference.id) == std::string::npos && request.dump().find(reference.digest) == std::string::npos,
+                "Host generated-artifact metadata entered model tool text.");
+    }
+}
+
 // Several steps, with read-only calls the model asked for together running together.
 void TestMultiStepLoopRunsReadOnlyCallsTogether()
 {
@@ -772,6 +813,59 @@ struct RuntimeToolFixture
     std::vector<std::string> components;
     revia::runtime::RuntimeEventBus::SubscriptionId subscription = 0;
 };
+
+void TestRuntimeOwnsGeneratedArtifactDelivery()
+{
+    for (const int scenario : {0, 1, 2})
+    {
+        RuntimeToolFixture fixture(32768);
+        fixture.backend.Then({ScriptedBackend::Call(0, "picture", "generate_image", R"({"prompt":"a paper boat"})", "tool_calls")});
+        if (scenario == 1)
+            fixture.backend.ThenError(500, R"({"error":{"message":"narration fixture failed"}})");
+        else
+            fixture.backend.Then({ScriptedBackend::Text("The picture is ready.", "stop")});
+        bool admitted = true;
+        fixture.runtime.SetPrivateAdmissionFactory([&] { return [&] { return admitted; }; });
+        conversationMediaReference reference{"owned-generated-id", std::string(64, 'a'), "result.png", "image/png", 256, 256};
+        reference.origin = MediaOrigin::GeneratedArtifact;
+        std::vector<conversationMediaReference> discarded;
+        fixture.runtime.SetChatToolProvider(
+            [&](const auto&, auto)
+            {
+                revia::runtime::ConversationRuntime::ChatToolGrant grant;
+                grant.imageGenerationEnabled = true;
+                grant.discardGeneratedMedia = [&](const auto& references)
+                { discarded.insert(discarded.end(), references.begin(), references.end()); };
+                grant.executors.generateImage = [&](const std::string&, const ToolCallContext&)
+                {
+                    auto result = ToolExecution::Ok("Generated a verified image.");
+                    result.generatedMediaReferences = {reference};
+                    if (scenario == 2)
+                        admitted = false;
+                    return result;
+                };
+                return grant;
+            });
+        const auto result = fixture.runtime.Reply("Make something cheerful.", fixture.profile, true, false);
+        if (scenario == 2)
+        {
+            Check(!result.succeeded && result.generatedMediaReferences.empty() &&
+                      discarded == std::vector<conversationMediaReference>{reference},
+                "A retired turn retained or delivered its newly generated artifact.");
+        }
+        else
+        {
+            const auto messages = fixture.context.GetRecentMessages();
+            Check(result.succeeded && result.generatedMediaReferences == std::vector<conversationMediaReference>{reference} &&
+                      discarded.empty() && !messages.empty() && messages.back().role == "assistant" &&
+                      messages.back().mediaReferences == result.generatedMediaReferences,
+                "A completed image was lost when committing its assistant turn or when final narration failed.");
+            if (scenario == 1)
+                Check(result.text.find("haven't inspected") != std::string::npos,
+                    "A completed image with failed narration falsely claimed an artistic inspection.");
+        }
+    }
+}
 
 void TestRuntimeLetsTheModelSearchInPrivateChat()
 {
@@ -1419,10 +1513,85 @@ void TestUnifiedDiffsRoundTrip()
     Check(NumberedLines("a\nb\nc\n", 2, 9, 400) == "2| b\n3| c\n" && NumberedLines("a\n", 5, 6, 400).find("only 1") != std::string::npos,
         "Line ranges were not numbered or bounded.");
 }
+
+void TestSelfContainedCompositionRequestsKeepDependencies()
+{
+    const std::pair<const char*, bool> cases[] = {
+        {"Tell me a brief imaginary story about a paper boat, in two sentences.", true},
+        {"Write a playful four-line poem about a stubborn umbrella.", true},
+        {"Please compose a haiku about rain.", true},
+        {"Make up a short story about a fox and rabbit.", true},
+        {"Tell me a story about a fox and a rabbit.", true},
+        {"Write a poem about a blue boat and a red boat.", true},
+        {"Invent a scene about a robot and a gardener.", true},
+        {"Give me a funny joke about telescopes.", true},
+        {"Write a playful story about a C++ function.", true},
+        {"Write a poem about myth and afterglow.", true},
+        {"  WRITE an original fable about an elephant and a mouse!  ", true},
+        {"Tell me a story.", true},
+        {"", false},
+        {"What should I cook for dinner tonight?", false},
+        {"Continue that story.", false},
+        {"Write another poem like before.", false},
+        {"Write a story about this.", false},
+        {"Write a story about my childhood.", false},
+        {"Write a poem about our holiday.", false},
+        {"Write a poem about what you remember.", false},
+        {"Write a story based on our earlier conversation.", false},
+        {"Write a story from the attached document.", false},
+        {"Write a poem about the saved file.", false},
+        {"Write a poem about the code.", false},
+        {"Write a poem about the source.", false},
+        {"Read the file and write a story.", false},
+        {"Write a story using C:/notes/source.txt.", false},
+        {"Write a poem about https://example.com.", false},
+        {"Write a scene about the latest news.", false},
+        {"Write a poem about today's weather.", false},
+        {"Write a joke about the current price.", false},
+        {"Write a story about recent election results.", false},
+        {"Write a poem with factual statistics about whales.", false},
+        {"Write a story containing actual facts about Mars.", false},
+        {"Write a poem with citations about Saturn.", false},
+        {"Write a story and save it to a file.", false},
+        {"Write a poem and email it to me.", false},
+        {"Tell me a joke and set a reminder.", false},
+        {"Write a scene then explain recursion.", false},
+        {"Write a scene and launch Notepad.", false},
+        {"Write a joke and text Alex.", false},
+        {"Write a story and purchase flowers.", false},
+        {"Tell me a joke and wake me in ten minutes.", false},
+        {"Write a story and message Alex.", false},
+        {"Tell me a joke and reschedule a reminder.", false},
+        {"Write a story as a PDF.", false},
+        {"Write a story about a fox and message Alex.", false},
+        {"Write a story about a fox as a PDF.", false},
+        {"Write a poem and a joke about rain.", false},
+        {"Write a story; publish it.", false},
+        {"Write a story. Also calculate 17 times 43.", false},
+        {"Write a story\nOpen the browser.", false},
+        {"Use your agents to write a story.", false},
+        {"Write a story with your workers.", false},
+        {"Write a poem and generate an image.", false},
+        {"Compose a song and sing it.", false},
+        {"Write a story about the screenshot.", false},
+        {"Write a story with audio.", false},
+        {"Write a poem with images.", false},
+        {"Someone said: \"Write a story about a boat.\"", false},
+        {"'Write a poem about rain'", false},
+        {"Can you research whales and write a poem?", false},
+        {"Write a script to rename files.", false},
+        {"Explain what a haiku is.", false},
+    };
+    for (const auto& [input, expected] : cases)
+        Check(IsSelfContainedCompositionRequest(input) == expected, std::string("Composition tool relevance was misclassified: ") + input);
+}
 }
 
 void RunToolLoopTests()
 {
+    TestRuntimeOwnsGeneratedArtifactDelivery();
+    TestGeneratedArtifactsStayOutsideModelToolText();
+    TestSelfContainedCompositionRequestsKeepDependencies();
     TestRegistryProjectsTheTurnsEffectivePermissions();
     TestArgumentsAreValidatedStrictly();
     TestChatActionsKeepTheApprovalStep();

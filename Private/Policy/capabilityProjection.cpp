@@ -128,6 +128,8 @@ actions::CapabilitySettings ProjectCapabilityScope(const actions::CapabilitySett
     result.camera.enabled &= current.camera.enabled;
     result.image.enabled &= current.image.enabled && Key(result.image.outputRoot) == Key(current.image.outputRoot);
     result.image.autonomous &= current.image.autonomous;
+    result.video.enabled &= current.video.enabled && Key(result.video.outputRoot) == Key(current.video.outputRoot);
+    result.video.autonomous &= current.video.autonomous;
     result.camera.autonomousCapture &= current.camera.autonomousCapture;
     result.browser = browser::IntersectSettings(captured.browser, current.browser);
     result.guest = IntersectGuestCapabilities(captured.guest, current.guest);

@@ -2,9 +2,11 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +50,8 @@ class OwnedProcess
     [[nodiscard]] std::string Read(std::chrono::milliseconds wait);
     // False once the child has exited or been stopped and all its output was read.
     [[nodiscard]] bool Running() const;
+    // Empty until the child exits. Reading its output to EOF does not itself prove success.
+    [[nodiscard]] std::optional<std::int64_t> ExitCode() const;
     // The newest standard error, bounded, for a status line.
     [[nodiscard]] std::string ErrorOutput() const;
     // The same once the child has gone, after its standard error has been read to the end

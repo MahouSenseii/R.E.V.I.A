@@ -14,9 +14,11 @@
 #include "learningStudioPanel.h"
 #include "answerFeedbackDialog.h"
 #include "attachmentTray.h"
+#include "canvasPanel.h"
 #include "chatMarkdown.h"
 #include "chatSessionsPanel.h"
 #include "documentsDialog.h"
+#include "videoPreviewDialog.h"
 #include "Memory/conversationArchive.h"
 #include "memoryPanel.h"
 #include "Memory/longTermMemory.h"
@@ -24,11 +26,16 @@
 #include "Policy/desktopAuthorization.h"
 #include "reviaSessionTestAccess.h"
 #include "Core/runtimePath.h"
+#include "Core/configManager.h"
+#include "Core/appSettings.h"
+#include "Core/profile.h"
 
 #include <QApplication>
+#include <QBuffer>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QColor>
 #include <QEvent>
 #include <QDir>
 #include <QElapsedTimer>
@@ -43,6 +50,7 @@
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QImage>
+#include <QImageReader>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
@@ -66,7 +74,10 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QTextFrame>
+#include <QTextDocument>
 #include <QWidgetAction>
+
+#include <sqlite3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -75,10 +86,12 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <condition_variable>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <stdexcept>
 
 struct ReviaWindowStopTests
 {
@@ -265,6 +278,8 @@ struct ReviaWindowStopTests
         window.cloudUseForCombo->setEnabled(true);
         emit window.cloudUseForCombo->activated(1);
         expect(!window.cloudUseForCombo->isEnabled(), "the cloud choice must wait while its write is queued");
+        emit window.imageMinTokensCombo->activated(window.imageMinTokensCombo->findData(QStringLiteral("1024")));
+        expect(!window.imageMinTokensCombo->isEnabled(), "the picture-detail choice must wait while its write is queued");
         window.SwitchCompanion(second.id);
         expect(window.navigationLocked && !window.navigationSidebar->isEnabled() && !window.chatColumn->isEnabled(),
             "mutable companion controls remain enabled while the outgoing runtime retires");
@@ -282,6 +297,8 @@ struct ReviaWindowStopTests
         expect(window.Session().Stamp().companionId == second.id && window.chatEntries.empty(), "queued A result reached selected B UI");
         expect(!window.cloudUseForCombo->testAttribute(Qt::WA_ForceDisabled),
             "a Settings write queued before a companion switch must not leave its control disabled");
+        expect(!window.imageMinTokensCombo->testAttribute(Qt::WA_ForceDisabled),
+            "a picture-detail write queued before retirement left the incoming companion's choice disabled");
         window.findChild<QPushButton*>("voiceHealthDetailsButton")->click();
         expect(window.findChild<QWidget*>("voiceTab")->isVisible(), "Voice Details must still reach Voice after companion replacement");
         for (auto* group : window.findChildren<QTabWidget*>())
@@ -479,7 +496,7 @@ struct ReviaWindowStopTests
             event.component = "Voice health";
             event.phase = phase;
             event.message = "private-worker-body-must-not-reach-health-view";
-            window.session.Events().Publish(event);
+            window.Session().Events().Publish(event);
             QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
             QCoreApplication::processEvents();
         };
@@ -559,7 +576,7 @@ struct ReviaWindowStopTests
             cue.component = "System cues";
             cue.phase = "Prepared";
             cue.message = "private-worker-body-must-not-reach-health-view";
-            window.session.Events().Publish(cue);
+            window.Session().Events().Publish(cue);
             QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
             auto* cueLabel = window.findChild<QLabel*>("voiceCueStatus");
             expect(cueLabel && cueLabel->text().contains("validated") && !cueLabel->text().contains("private-worker"),
@@ -1534,12 +1551,46 @@ struct ReviaWindowStopTests
 
         // The window's own controls in Settings take the wheel only once focused, and choosing Hard
         // questions, which sends turns to the cloud without asking each time, asks first.
+        const auto settingsPath = window.Session().Paths().InstallRoot() / "Config/settings.json";
+        const bool createSettings = !std::filesystem::exists(settingsPath);
+        struct RestoreSettingsFile
+        {
+            std::filesystem::path path;
+            bool created;
+            ~RestoreSettingsFile()
+            {
+                std::error_code error;
+                if (created)
+                    std::filesystem::remove(path, error);
+            }
+        } restoreSettings{settingsPath, createSettings};
+        if (createSettings)
+            std::ofstream(settingsPath) << nlohmann::json{{"llm", {{"backend", "None"}, {"autoStartServer", false}}},
+                {"intelligence", {{"enabled", false}}}, {"embedding", {{"enabled", false}}},
+                {"speechRecognition",
+                    {{"enabled", false}}}}.dump();
         window.OpenSettings("Models");
         SettleLayouts();
         expect(window.cloudUseForCombo->focusPolicy() == Qt::StrongFocus && window.initiativeMaxSpin->focusPolicy() == Qt::StrongFocus &&
                    window.resourceSampleSpin->focusPolicy() == Qt::StrongFocus,
             "the window's Settings controls must not change under a passing wheel");
         const QString savedUse = window.cloudUseForReader ? window.cloudUseForReader("llm.cloud.useFor") : QString();
+        expect(window.imageMinTokensCombo && window.imageMinTokensCombo->count() == 6 &&
+                   window.imageMinTokensCombo->itemData(0).toString() == "0" &&
+                   window.imageMinTokensCombo->itemText(0).contains("backend default", Qt::CaseInsensitive) &&
+                   window.imageMinTokensCombo->itemData(5).toString() == "4096" &&
+                   window.imageMinTokensCombo->toolTip().contains("restart", Qt::CaseInsensitive),
+            "image detail does not expose its bounded choices, backend default and restart requirement");
+        const std::string savedImageDetail = window.Session().OwnerChoice("llm.imageMinTokens");
+        const int detail = window.imageMinTokensCombo->findData(QStringLiteral("1024"));
+        window.imageMinTokensCombo->setCurrentIndex(detail);
+        emit window.imageMinTokensCombo->activated(detail);
+        drainWrites();
+        expect(
+            window.Session().OwnerChoice("llm.imageMinTokens") == "1024" && window.imageMinTokensCombo->currentData().toString() == "1024",
+            "image detail choice was not persisted and read back through the owner settings worker");
+        window.Session().SetOwnerChoice("llm.imageMinTokens", savedImageDetail.empty() ? "0" : savedImageDetail);
+        window.RefreshImageMinTokens();
         const int hard = window.cloudUseForCombo->findData(QStringLiteral("hardTurns"));
         window.cloudUseForCombo->setCurrentIndex(hard);
         emit window.cloudUseForCombo->activated(hard);
@@ -2233,6 +2284,920 @@ struct ReviaWindowStopTests
         window.RenderChat();
     }
 
+    static void RunAttachmentLifecycleUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        const auto wait = [&](const std::function<bool()>& ready)
+        {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (!ready() && std::chrono::steady_clock::now() < deadline)
+            {
+                QCoreApplication::processEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            expect(ready(), "attachment lifecycle operation did not finish in its bounded window");
+        };
+        auto* tray = window.attachmentTray;
+        tray->Clear();
+        tray->SetStatus("The picture could not be decoded.");
+        expect(!tray->isHidden(), "a first-attachment refusal is hidden with its empty tray");
+        tray->SetStatus(QString());
+        expect(tray->isHidden(), "clearing the last attachment status left an empty tray visible");
+        QTemporaryDir animatedFiles;
+        const QString animated = animatedFiles.filePath("motion.gif");
+        {
+            QFile gif(animated);
+            expect(gif.open(QIODevice::WriteOnly), "the animation fixture could not be written");
+            gif.write(QByteArray::fromHex("47494638396101000100800000000000ffffff"
+                                          "21f90400010000002c0000000001000100000202440100"
+                                          "21f90400010000002c00000000010001000002024401003b"));
+        }
+        QImageReader animation(animated);
+        expect(animation.imageCount() == 2, "the GIF fixture does not contain two decodable frames");
+        window.AttachPaths({animated});
+        if (window.attachmentWorker.joinable())
+            window.attachmentWorker.join();
+        const auto pendingConversation = window.Session().CurrentConversationId();
+        const bool pendingWasStarted = window.Session().IsStarted();
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        std::string pendingError;
+        expect(window.attachmentRunning.load() && tray->IsEmpty() && !window.StartNewChat(pendingError) &&
+                   window.Session().CurrentConversationId() == pendingConversation,
+            "completed attachment intake became idle before its queued chips were adopted");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), pendingWasStarted);
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        expect(tray->Chips().size() == 1 && !tray->Chips().front().thumbnail.isNull() &&
+                   window.findChild<QLabel*>("attachmentStatus")->text().contains("first frame", Qt::CaseInsensitive),
+            "an animated GIF silently became an attachment without its still-only notice");
+        const auto stagedAnimation = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).Staged();
+        expect(stagedAnimation.size() == 1 && stagedAnimation.front().displayName == "motion.gif" &&
+                   stagedAnimation.front().note.find("still image") != std::string::npos,
+            "desktop GIF conversion lost its original name or runtime still-image provenance");
+        for (const auto& id : tray->Ids())
+            window.RemoveAttachmentChip(id);
+        window.AttachPaths({animated});
+        if (window.attachmentWorker.joinable())
+            window.attachmentWorker.join();
+        std::string audienceError;
+        window.Session().SetAudience({revia::identity::AudienceKind::Shared, "attachment-scope-changed", 0, {"viewer"}}, audienceError);
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        expect(tray->IsEmpty() && revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).Staged().empty(),
+            "an attachment accepted before an audience change published a private thumbnail into the new audience");
+        window.Session().SetAudience({revia::identity::AudienceKind::Private, "attach-private", 0, {}}, audienceError);
+        tray->SetStatus(QString());
+        QImage picture(32, 16, QImage::Format_RGB32);
+        picture.fill(Qt::yellow);
+        window.attachmentRunning.store(true);
+        window.AttachPastedImage(picture);
+        expect(tray->IsEmpty(), "pasted pictures can bypass an attachment intake already in progress");
+        for (const auto& id : tray->Ids())
+            window.RemoveAttachmentChip(id);
+
+        std::string error;
+        const bool wasStarted = window.Session().IsStarted();
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        expect(!window.StartNewChat(error), "a new conversation can replace the origin of unfinished attachment intake");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), wasStarted);
+        window.messageInput->setPlainText("Wait for the picture.");
+        window.SendMessage();
+        expect(window.messageInput->toPlainText() == "Wait for the picture.",
+            "a typed turn can run before its pending picture has become an attachment chip");
+        if (window.operationWorker.joinable())
+            window.operationWorker.join();
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        window.messageInput->clear();
+        window.attachmentRunning.store(false);
+
+        QTemporaryDir chatArchive;
+        const auto archivePath = std::filesystem::path(chatArchive.path().toStdWString()) / "attachments-chats.db";
+        {
+            revia::memory::ConversationArchive seed(archivePath.string());
+            expect(seed.BeginSession("attachments-earlier", error), "attachment continuation fixture could not be archived");
+        }
+        revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.Session(), archivePath, "attachments-current");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        const auto participant = revia::runtime::ReviaSessionTestAccess::IntroduceTaskSpeaker(window.Session(), "Attachment Owner");
+        expect(!participant.empty(), "attachment continuation fixture could not identify its typist");
+        {
+            revia::memory::ConversationArchive seed(archivePath.string());
+            const revia::memory::MemoryScope scope{participant, window.Session().Audience(),
+                revia::identity::SpeakerSource::ExplicitIntroduction, 0, window.Session().Stamp().companionId};
+            expect(seed.Record("attachments-earlier", "user", "A harmless earlier private chat.", error, scope),
+                "attachment continuation fixture could not record its attributed earlier turn");
+        }
+        window.AttachPastedImage(picture);
+        const auto beforeRefusal = tray->Ids();
+        window.operationRunning.store(true);
+        expect(!window.StartNewChat(error) && tray->Ids() == beforeRefusal, "a refused new chat removed the unsent attachment draft");
+        window.viewingArchivedChat = "attachments-earlier";
+        window.ContinueArchivedChat();
+        expect(tray->Ids() == beforeRefusal && window.Session().CurrentConversationId() == "attachments-current",
+            "a refused continuation removed the unsent attachment draft");
+        window.operationRunning.store(false);
+        expect(window.StartNewChat(error) && tray->IsEmpty() &&
+                   revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).Staged().empty(),
+            "a new chat inherited the previous chat's adopted unsent picture");
+        window.AttachPastedImage(picture);
+        window.viewingArchivedChat = "attachments-earlier";
+        window.ContinueArchivedChat();
+        expect(window.Session().CurrentConversationId() == "attachments-earlier" && tray->IsEmpty() &&
+                   revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).Staged().empty(),
+            "a continued chat inherited the previous chat's adopted unsent picture");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), wasStarted);
+        window.AttachPastedImage(picture);
+        expect(tray->Chips().size() == 1, "the outgoing attachment fixture could not stage its picture");
+        auto* origin = &window.Session();
+        const auto outgoingDirectory = origin->Paths().Resolve("RuntimeData/Attachments/Files");
+        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(*origin);
+        const auto keptPreview = library.StageBytes("private-preview.md", "Outgoing companion preview sentinel.\n");
+        (void)library.PrepareTurn("preview", library.TakeStaged({keptPreview.attachment.id}), {});
+        window.ShowDocuments();
+        window.documentsDialog->Select(keptPreview.attachment.id);
+        window.documentsDialog->ViewSelected();
+        expect(window.documentsDialog->PreviewText().contains("Outgoing companion preview sentinel"),
+            "the outgoing document preview fixture was not displayed");
+
+        std::mutex gateMutex;
+        std::condition_variable gate;
+        bool released = false;
+        window.attachmentRunning.store(true);
+        window.attachmentWorker = std::jthread(
+            [&]()
+            {
+                std::unique_lock lock(gateMutex);
+                gate.wait(lock, [&]() { return released; });
+            });
+        const auto intakeStop = window.attachmentWorker.get_stop_token();
+        revia::runtime::CompanionDescriptor destination;
+        expect(window.companions->Create("Attachment lifetime target", "assistant", destination, error),
+            "attachment lifetime companion fixture could not be created");
+        window.SwitchCompanion(destination.id);
+        wait([&]() { return intakeStop.stop_requested() || !window.switchingCompanion; });
+        expect(intakeStop.stop_requested() && window.switchingCompanion && &window.Session() == origin,
+            "companion replacement retires its attachment session before cancelling and joining intake");
+        {
+            std::lock_guard lock(gateMutex);
+            released = true;
+        }
+        gate.notify_all();
+        wait([&]() { return !window.switchingCompanion; });
+        if (window.attachmentWorker.joinable())
+            window.attachmentWorker.join();
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        expect(tray->IsEmpty() && window.findChild<QLabel*>("attachmentStatus")->text().isEmpty(),
+            "the incoming companion retained outgoing attachment chips or status");
+        expect(!window.documentsDialog, "the incoming companion retained a cached outgoing Documents preview");
+        std::error_code directoryError;
+        std::size_t outgoingFiles = 0;
+        for (const auto& file : std::filesystem::directory_iterator(outgoingDirectory, directoryError))
+            outgoingFiles += file.is_regular_file() ? 1 : 0;
+        expect(outgoingFiles == 1, "retired intake kept its unsent copy or removed a committed document");
+        window.SwitchCompanion("legacy");
+        wait([&]() { return !window.switchingCompanion; });
+        expect(window.Session().ForgetDocument(keptPreview.attachment.id, error), "the retained preview fixture could not be forgotten");
+        window.attachmentRunning.store(false);
+    }
+
+    static void RunGeneratedCanvasDefaultDenyUi(int& failures)
+    {
+        QTemporaryDir directory;
+        QImage image(32, 16, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        const QString path = directory.filePath("unverified-generated.png");
+        if (!image.save(path))
+        {
+            ++failures;
+            return;
+        }
+        CanvasPanel panel;
+        revia::runtime::RuntimeEvent event;
+        event.kind = revia::runtime::RuntimeEventKind::Diagram;
+        event.phase = "Image";
+        event.resource = path.toStdString();
+        conversationMediaReference reference;
+        reference.id = "unverified-generated";
+        reference.digest = std::string(64, 'a');
+        reference.mimeType = "image/png";
+        reference.origin = MediaOrigin::GeneratedArtifact;
+        event.generatedMediaReference = reference;
+        panel.Observe(event);
+        if (panel.findChild<QListWidget*>()->count() != 0)
+        {
+            std::cerr << "FAIL: Canvas trusted a generated path without a current host source resolver.\n";
+            ++failures;
+        }
+    }
+
+    static void RunGeneratedMediaUi(int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir directory;
+        ReviaWindow window(false, false);
+        const auto archivePath = std::filesystem::path(directory.path().toStdWString()) / "generated-ui.db";
+        revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.Session(), archivePath, "generated-ui");
+        const auto participant = revia::runtime::ReviaSessionTestAccess::IntroduceTaskSpeaker(window.Session(), "Generated Media Owner");
+        expect(!participant.empty(), "generated continuation fixture could not identify its typist");
+        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
+        const auto outputRoot = std::filesystem::path(directory.path().toStdWString()) / "output";
+        std::filesystem::create_directory(outputRoot);
+        const auto importImage = [&](const char* job, const QColor color)
+        {
+            QImage pixels(32, 16, QImage::Format_RGB32);
+            pixels.fill(color);
+            revia::visual::ImageResult artifact;
+            artifact.succeeded = true;
+            artifact.path = outputRoot / (std::string(job) + ".png");
+            expect(pixels.save(QString::fromStdWString(artifact.path.wstring())), "could not encode the generated CPU image fixture");
+            QFile file(QString::fromStdWString(artifact.path.wstring()));
+            expect(file.open(QIODevice::ReadOnly), "could not read generated CPU image fixture bytes");
+            const auto bytes = file.readAll().toStdString();
+            file.close();
+            auto& expected = artifact.expectedArtifact;
+            expected.path = artifact.path;
+            expected.jobId = job;
+            expected.model = "sd-turbo";
+            expected.width = 32;
+            expected.height = 16;
+            expected.pipeline = "StableDiffusionPipeline";
+            expected.variant = "fp16";
+            expected.seed = 42;
+            expected.requestedSteps = expected.totalInferenceSteps = expected.denoisingSteps = 4;
+            auto& receipt = artifact.receipt;
+            receipt.path = expected.path;
+            receipt.jobId = expected.jobId;
+            receipt.model = expected.model;
+            receipt.width = expected.width;
+            receipt.height = expected.height;
+            receipt.provider = expected.provider;
+            receipt.pipeline = expected.pipeline;
+            receipt.variant = expected.variant;
+            receipt.seed = expected.seed;
+            receipt.requestedSteps = receipt.totalInferenceSteps = receipt.denoisingSteps = 4;
+            receipt.sha256 = revia::audit::ContentDigest(bytes);
+            return library.ImportGeneratedImage(artifact, outputRoot, [] { return true; });
+        };
+        const auto generated = importImage("generated-ui-red", Qt::red);
+        expect(generated.succeeded, "strict generated CPU fixture import failed");
+        if (!generated.succeeded)
+            return;
+        const auto present = [&](const conversationMediaReference& reference)
+        {
+            revia::runtime::SessionResult result;
+            result.fromAssistant = true;
+            result.text = "A generated CPU fixture is ready.";
+            result.stamp = window.Session().Stamp();
+            result.audienceRevision = window.Session().Audience().revision;
+            result.generatedMediaReferences = {reference};
+            window.PresentSessionResult(result);
+        };
+        present(generated.reference);
+        expect(!window.chatEntries.back().generatedMediaReferences.empty() &&
+                   !window.chatEntries.back().attachments.front().thumbnail.isNull() &&
+                   window.chatHistory->toPlainText().contains("Generated:"),
+            "host generated references did not produce a clearly labeled image card");
+        const auto cardCount = [&]()
+        {
+            return std::count_if(window.chatEntries.begin(), window.chatEntries.end(),
+                [](const auto& entry) { return !entry.generatedMediaReferences.empty(); });
+        };
+        const auto beforeForgery = cardCount();
+        auto forged = generated.reference;
+        forged.digest = std::string(64, 'f');
+        present(forged);
+        expect(cardCount() == beforeForgery, "a forged digest produced a generated image card");
+        revia::runtime::RuntimeEvent event;
+        event.kind = revia::runtime::RuntimeEventKind::Diagram;
+        event.phase = "Image";
+        event.message = "Generated CPU fixture";
+        event.resource = "This path must never supply generated pixels.png";
+        event.stamp = window.Session().Stamp();
+        event.audienceRevision = window.Session().Audience().revision;
+        event.conversationMediaEpoch = window.Session().ConversationMediaEpoch();
+        event.generatedMediaReference = generated.reference;
+        window.HandleRuntimeEvent(event);
+        auto* picture = window.canvasPanel->findChild<QLabel*>("canvasImagePreview");
+        expect(!picture->pixmap().isNull() && picture->pixmap().toImage().pixelColor(0, 0) == QColor(Qt::red),
+            "Canvas did not use verified stored PNG bytes independently of the event's path");
+        std::string error;
+        expect(window.Session().ForgetDocument(generated.reference.id, error), "generated image could not be forgotten");
+        window.RevalidateAttachmentPresentation();
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && picture->pixmap().isNull(),
+            "Forget retained a generated Canvas record or cached pixels");
+        expect(window.chatEntries.front().body == "A generated CPU fixture is ready." &&
+                   window.chatEntries[1].attachments.front().thumbnail.isNull(),
+            "generated Forget removed unrelated reply text or retained its thumbnail");
+
+        const auto second = importImage("generated-ui-blue", Qt::blue);
+        expect(second.succeeded, "second generated CPU fixture import failed");
+        if (!second.succeeded)
+            return;
+        {
+            revia::memory::ConversationArchive archive(archivePath.string());
+            const revia::memory::MemoryScope scope{participant, window.Session().Audience(),
+                revia::identity::SpeakerSource::ExplicitIntroduction, 0, window.Session().Stamp().companionId};
+            expect(archive.BeginSession("generated-earlier", error) &&
+                       archive.Record("generated-earlier", "user", "A harmless earlier image request.", error, scope) &&
+                       archive.RecordGeneratedAssistant("generated-earlier", "An earlier generated image is ready.", {second.reference},
+                           error, scope, [] { return true; }),
+                "generated continuation fixture could not record its host-associated earlier turn");
+        }
+        event.generatedMediaReference = second.reference;
+        event.conversationMediaEpoch = window.Session().ConversationMediaEpoch();
+        window.HandleRuntimeEvent(event);
+        window.Session().Events().Publish(event);
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        expect(window.StartNewChat(error), "generated-media fixture could not start a new chat");
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && picture->pixmap().isNull(),
+            "a queued old generated event revived pixels in a new conversation");
+        window.viewingArchivedChat = "generated-earlier";
+        window.ContinueArchivedChat();
+        expect(window.Session().CurrentConversationId() == "generated-earlier" && cardCount() == 1 &&
+                   !window.chatEntries.back().attachments.front().thumbnail.isNull() &&
+                   window.chatHistory->toPlainText().contains("Generated:"),
+            "explicit continuation did not restore a verified assistant-generated image card");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), false);
+        expect(window.Session().ForgetDocument(second.reference.id, error),
+            "the generated UI fixture could not clean up its retained artifact");
+    }
+
+    static void RunForgottenTranscriptMediaUi(int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir archiveRoot;
+        ReviaWindow window(false, false);
+        const auto archive = std::filesystem::path(archiveRoot.path().toStdWString()) / "forget-posters.db";
+        revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.Session(), archive, "forget-posters");
+        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
+        std::vector<AttachmentChip> chips;
+        for (const auto color : {Qt::red, Qt::blue, Qt::green})
+        {
+            QImage picture(32, 16, QImage::Format_RGB32);
+            picture.fill(color);
+            QByteArray bytes;
+            QBuffer buffer(&bytes);
+            buffer.open(QIODevice::WriteOnly);
+            expect(picture.save(&buffer, "PNG"), "the sent-media cache fixture could not encode its pixels");
+            const auto staged = library.StageBytes("sent-poster.png", bytes.toStdString());
+            expect(staged.status == revia::attachments::IntakeStatus::Accepted, "the sent-media cache fixture could not stage its image");
+            revia::attachments::ImagePolicy policy;
+            policy.visionAvailable = true;
+            (void)library.PrepareTurn("Keep this private picture.", library.TakeStaged({staged.attachment.id}), policy);
+            chips.push_back({staged.attachment.id, QStringLiteral("Sent media"), QStringLiteral("32 x 16"), picture});
+        }
+        // Image thumbnails and video posters use the same trusted transcript chip/cache path.
+        chips.front().video = true;
+        chips.front().durationMs = 1000;
+        ReviaWindow::ChatEntry entry;
+        entry.speaker = QStringLiteral("You");
+        entry.body = QStringLiteral("Keep unrelated transcript text: forget-poster-sentinel.");
+        entry.userMessage = true;
+        entry.attachments = chips;
+        window.chatEntries.push_back(std::move(entry));
+        window.RenderChat();
+        const auto hasPixels = [&](const std::string& id)
+        {
+            const auto value = window.chatHistory->document()->resource(
+                QTextDocument::ImageResource, QUrl(QStringLiteral("revia-attachment:") + QString::fromStdString(id)));
+            return value.canConvert<QImage>() && !qvariant_cast<QImage>(value).isNull();
+        };
+        expect(hasPixels(chips[0].id) && hasPixels(chips[1].id) && hasPixels(chips[2].id) &&
+                   window.chatHistory->toHtml().contains(QStringLiteral("video:") + QString::fromStdString(chips[0].id)),
+            "the sent-media cache fixture did not render its image resources and playback link");
+        QPointer<QTextDocument> oldDocument = window.chatHistory->document();
+        window.ShowDocuments();
+        QString error;
+        expect(window.documentsDialog->ForgetDocument(chips[0].id, error), "the actual Documents Forget callback failed");
+        expect(window.chatEntries.back().attachments[0].thumbnail.isNull() && !window.chatEntries.back().attachments[0].video &&
+                   !hasPixels(chips[0].id) && !oldDocument &&
+                   !window.chatHistory->toHtml().contains(QStringLiteral("video:") + QString::fromStdString(chips[0].id)),
+            "Forget retained a sent poster, playback link or old QTextDocument image resource");
+        expect(hasPixels(chips[1].id) && hasPixels(chips[2].id) && !window.chatEntries.back().attachments[1].thumbnail.isNull(),
+            "forgetting one item cleared an unrelated retained attachment");
+
+        oldDocument = window.chatHistory->document();
+        std::string externalError;
+        expect(library.Forget(chips[1].id, externalError), "the external owner-revision Forget fixture failed");
+        window.RevalidateAttachmentPresentation();
+        expect(window.chatEntries.back().attachments[1].thumbnail.isNull() && !hasPixels(chips[1].id) && !oldDocument &&
+                   hasPixels(chips[2].id),
+            "an owner media revision left a forgotten sent image cached or cleared an unrelated image");
+
+        sqlite3* database = nullptr;
+        const bool opened = sqlite3_open(archive.string().c_str(), &database) == SQLITE_OK;
+        const bool broken = opened && sqlite3_exec(database, "DROP TABLE conversation_turns;", nullptr, nullptr, nullptr) == SQLITE_OK;
+        sqlite3_close(database);
+        expect(broken, "the partial-forget fixture could not force an archive-cleanup failure");
+        oldDocument = window.chatHistory->document();
+        error.clear();
+        expect(!window.documentsDialog->ForgetDocument(chips[2].id, error) && !error.isEmpty() && window.Session().Documents().empty(),
+            "the partial-forget fixture did not remove the file before reporting the archive error");
+        expect(window.chatEntries.back().attachments[2].thumbnail.isNull() && !hasPixels(chips[2].id) && !oldDocument,
+            "a false Forget return after removal retained private sent-image pixels");
+        expect(window.chatEntries.back().body == QStringLiteral("Keep unrelated transcript text: forget-poster-sentinel.") &&
+                   window.chatEntries.back().attachments.size() == 3 &&
+                   window.chatHistory->toPlainText().contains(QStringLiteral("forget-poster-sentinel")),
+            "media cache invalidation removed unrelated transcript text or attachment metadata");
+
+        QImage orphan(16, 16, QImage::Format_RGB32);
+        orphan.fill(Qt::yellow);
+        QByteArray orphanBytes;
+        QBuffer orphanBuffer(&orphanBytes);
+        orphanBuffer.open(QIODevice::WriteOnly);
+        expect(orphan.save(&orphanBuffer, "PNG"), "the orphaned-resource fixture could not encode its image");
+        const auto orphaned = library.StageBytes("orphaned-poster.png", orphanBytes.toStdString());
+        revia::attachments::ImagePolicy policy;
+        policy.visionAvailable = true;
+        (void)library.PrepareTurn("Keep an image.", library.TakeStaged({orphaned.attachment.id}), policy);
+        window.chatEntries.back().attachments.push_back(
+            {orphaned.attachment.id, QStringLiteral("Orphaned poster"), QStringLiteral("16 x 16"), orphan});
+        window.RenderChat();
+        expect(hasPixels(orphaned.attachment.id), "the orphaned-resource fixture did not register its image");
+        window.chatEntries.clear();
+        ReviaWindow::ChatEntry textOnly;
+        textOnly.speaker = QStringLiteral("You");
+        textOnly.body = QStringLiteral("A new transcript keeps this unrelated text.");
+        textOnly.userMessage = true;
+        window.chatEntries.push_back(std::move(textOnly));
+        window.RenderChat();
+        expect(hasPixels(orphaned.attachment.id), "the orphaned-resource fixture did not retain the old document cache");
+        oldDocument = window.chatHistory->document();
+        expect(library.Forget(orphaned.attachment.id, externalError), "the orphaned-resource Forget fixture failed");
+        window.RevalidateAttachmentPresentation();
+        expect(!hasPixels(orphaned.attachment.id) && !oldDocument &&
+                   window.chatHistory->toPlainText().contains(QStringLiteral("A new transcript keeps this unrelated text.")),
+            "Forget retained an orphaned document image after its sent chip was removed from the transcript");
+    }
+
+    static void RunDocumentImagePreviewUi(ReviaWindow& window, int& failures)
+    {
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        std::vector<revia::attachments::StoredDocument> inventory(1);
+        inventory.front().id = "partial-forget";
+        inventory.front().name = "partial.md";
+        DocumentControls partialControls;
+        partialControls.list = [&]() { return inventory; };
+        partialControls.preview = [](const std::string&) { return std::string("Preview before a partial forget."); };
+        partialControls.forget = [&](const std::string&, std::string& error)
+        {
+            inventory.clear();
+            error = "The record was removed but its stored copy could not be deleted.";
+            return false;
+        };
+        DocumentsDialog partial(std::move(partialControls), &window);
+        partial.Select("partial-forget");
+        partial.ViewSelected();
+        QString error;
+        expect(!partial.ForgetDocument("partial-forget", error) && !error.isEmpty() && partial.RowCount() == 0 &&
+                   partial.PreviewText().isEmpty(),
+            "partial physical deletion left an obsolete document inventory or preview visible");
+
+        QImage picture(32, 16, QImage::Format_RGB32);
+        picture.fill(Qt::green);
+        QByteArray bytes;
+        QBuffer encoded(&bytes);
+        encoded.open(QIODevice::WriteOnly);
+        expect(picture.save(&encoded, "PNG"), "the private preview fixture could not be encoded");
+        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
+        const auto staged = library.StageBytes("preview.png", bytes.toStdString());
+        revia::attachments::ImagePolicy policy;
+        policy.visionAvailable = true;
+        (void)library.PrepareTurn("preview", library.TakeStaged({staged.attachment.id}), policy);
+        window.ShowDocuments();
+        window.documentsDialog->Select(staged.attachment.id);
+        window.documentsDialog->ViewSelected();
+        auto* preview = window.documentsDialog->findChild<QLabel*>("documentImagePreview");
+        expect(preview && !preview->pixmap().isNull(), "validated image preview did not render its owned bytes");
+        const QPointer<DocumentsDialog> privatePreview = window.documentsDialog;
+        window.AttachPastedImage(picture);
+        std::string audienceError;
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Shared, "preview-room", 0, {"viewer"}}, audienceError),
+            "the preview audience fixture could not enter its shared scope");
+        QElapsedTimer privacyDeadline;
+        privacyDeadline.start();
+        while (privatePreview && privacyDeadline.elapsed() < 1500)
+        {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        expect(!privatePreview && window.attachmentTray->IsEmpty() && library.Staged().empty(),
+            "an audience change retained cached private document pixels or adopted attachment chips");
+        window.Session().SetAudience({revia::identity::AudienceKind::Private, "preview-private", 0, {}}, audienceError);
+        window.ShowDocuments();
+        window.documentsDialog->Select(staged.attachment.id);
+        window.documentsDialog->ViewSelected();
+        preview = window.documentsDialog->findChild<QLabel*>("documentImagePreview");
+        {
+            std::ofstream changed(staged.attachment.storedPath, std::ios::binary | std::ios::app);
+            changed.put('x');
+        }
+        window.documentsDialog->ViewSelected();
+        expect(preview && preview->pixmap().isNull() && !preview->text().isEmpty(),
+            "tampered stored image was rendered through an unchecked cached path");
+        std::string forgetError;
+        (void)window.Session().ForgetDocument(staged.attachment.id, forgetError);
+        window.documentsDialog->Refresh();
+        window.documentsDialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    static void RunVisionLive(ReviaWindow& window, const std::filesystem::path& fixtures, const std::filesystem::path& evidence,
+        std::ofstream& output, const std::string& secret, const bool videoMode = false, const bool generationMode = false,
+        const bool videoGenerationMode = false)
+    {
+        using Json = nlohmann::json;
+        std::mutex outputMutex;
+        std::size_t outputBytes = 0;
+        const auto record = [&](Json row)
+        {
+            std::string text = row.dump();
+            if (!secret.empty())
+                for (std::size_t at = 0; (at = text.find(secret, at)) != std::string::npos; at += 10)
+                    text.replace(at, secret.size(), "[redacted]");
+            std::lock_guard lock(outputMutex);
+            if (outputBytes + text.size() + 1 > 8 * 1024 * 1024)
+                return;
+            output << text << '\n';
+            output.flush();
+            outputBytes += text.size() + 1;
+        };
+        const auto require = [](const bool condition, const char* message)
+        {
+            if (!condition)
+                throw std::runtime_error(message);
+        };
+        const auto wait = [&](const std::function<bool()>& ready, const char* message)
+        {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(generationMode || videoGenerationMode ? 600 : 180);
+            while (!ready() && std::chrono::steady_clock::now() < deadline)
+            {
+                QCoreApplication::processEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            require(ready(), message);
+            if (window.operationWorker.joinable())
+                window.operationWorker.join();
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        };
+        const auto subscription = window.Session().Events().Subscribe(
+            [&](const revia::runtime::RuntimeEvent& event)
+            {
+                if (event.component == "Attachments" || event.component == "Intelligence router" || event.component == "Conversation" ||
+                    ((generationMode || videoGenerationMode) &&
+                        (event.component == "Canvas" || event.component == "Image generation" || event.component == "Video generation")) ||
+                    event.kind == revia::runtime::RuntimeEventKind::Timing || event.kind == revia::runtime::RuntimeEventKind::Error)
+                    record({{"kind", "native_event"}, {"component", event.component}, {"phase", event.phase}, {"message", event.message},
+                        {"turnId", event.turnId}, {"elapsedMs", event.elapsedMilliseconds}});
+            });
+        struct Finish
+        {
+            ReviaWindow& window;
+            revia::runtime::RuntimeEventBus::SubscriptionId subscription;
+            ~Finish()
+            {
+                window.Session().RequestStop();
+                if (window.attachmentWorker.joinable())
+                    window.attachmentWorker.join();
+                if (window.operationWorker.joinable())
+                    window.operationWorker.join();
+                window.Session().Stop();
+                window.Session().Events().Unsubscribe(subscription);
+            }
+        } finish{window, subscription};
+        window.resize(1040, 720);
+        window.show();
+        window.StartRuntime();
+        wait([&]() { return !window.operationRunning.load(); }, "The borrowed-server Desktop session did not finish startup.");
+        require(window.Session().IsStarted(), "The borrowed-server Desktop session refused startup.");
+        record({{"kind", "session_started"}, {"runtimeRoot", window.Session().Paths().InstallRoot().string()},
+            {"profile", window.Session().DisplayName()}, {"serverOwnership", "borrowed; not started or stopped by this fixture"}});
+        const auto captureChips = [&](const char* phase, const std::size_t expected)
+        {
+            wait([&]() { return !window.attachmentRunning.load(); }, "Desktop attachment intake did not finish.");
+            require(window.attachmentTray->Chips().size() == expected, "The actual UI handler did not produce the expected chips.");
+            const auto staged = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).Staged();
+            require(staged.size() == expected, "The UI chips did not match the actual staged attachments.");
+            Json accepted = Json::array();
+            for (const auto& item : staged)
+            {
+                require(videoMode ? (item.kind == revia::attachments::AttachmentKind::Video && item.bytes <= 64 * 1024 * 1024 &&
+                                        item.video.durationMs > 0 && item.video.durationMs <= 60000 && item.poster.has_value())
+                                  : (item.kind == revia::attachments::AttachmentKind::Image && item.bytes <= 8 * 1024 * 1024),
+                    "A live UI attachment exceeded its bounded media contract or lost its poster.");
+                const auto stored = evidence / (std::string(phase) + "-" + item.id + item.storedPath.extension().string());
+                std::filesystem::copy_file(item.storedPath, stored);
+                accepted.push_back(
+                    {{"id", item.id}, {"name", item.displayName}, {"digest", item.digest}, {"bytes", item.bytes}, {"width", item.width},
+                        {"height", item.height}, {videoMode ? "acceptedClip" : "acceptedPng", stored.filename().string()},
+                        {"durationMs", item.video.durationMs}, {"kind", revia::attachments::ToString(item.kind)}});
+            }
+            record({{"kind", "ui_attachments"}, {"phase", phase}, {"accepted", accepted}});
+            SettleLayouts();
+            require(window.grab().save(QString::fromStdWString((evidence / (std::string(phase) + ".png")).wstring())),
+                "The live UI attachment screenshot could not be saved.");
+        };
+        const auto submit = [&](const char* phase, const QString& prompt)
+        {
+            const auto before = window.chatEntries.size();
+            window.messageInput->setPlainText(prompt);
+            window.SendMessage();
+            require(window.messageInput->toPlainText().isEmpty(), "The actual Send handler refused the live request.");
+            wait([&]() { return !window.operationRunning.load(); }, "The live UI turn did not finish in its bounded window.");
+            Json transcript = Json::array();
+            bool answered = false;
+            for (std::size_t index = before; index < window.chatEntries.size(); ++index)
+            {
+                const auto& entry = window.chatEntries[index];
+                if (entry.kind != ReviaWindow::EntryKind::Message)
+                    continue;
+                transcript.push_back(
+                    {{"speaker", entry.speaker.toStdString()}, {"body", entry.body.toStdString()}, {"user", entry.userMessage}});
+                answered |= !entry.userMessage && entry.markdown && !entry.body.trimmed().isEmpty();
+            }
+            record({{"kind", "ui_turn"}, {"phase", phase}, {"prompt", prompt.toStdString()}, {"transcript", transcript},
+                {"nonemptyAssistantReply", answered}, {"turnError", window.lastTurnError.has_value()}, {"semanticQualified", false}});
+            require(answered && !window.lastTurnError.has_value(), "The live UI turn did not deliver an admitted assistant reply.");
+            require(window.grab().save(QString::fromStdWString((evidence / (std::string(phase) + "-reply.png")).wstring())),
+                "The live UI reply screenshot could not be saved.");
+        };
+        if (videoGenerationMode)
+        {
+            auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
+            submit("video-generation-owner", "My name is Morgan.");
+            submit(
+                "video-generation-start", "Create a short video of a red ball rolling slowly across a wooden table, with a fixed camera.");
+            wait([&]() { return window.Session().VideoGenerationSnapshot().state == "generating"; },
+                "The actual video worker did not enter its generating phase.");
+            const auto active = window.Session().VideoGenerationSnapshot();
+            const auto began = std::chrono::steady_clock::now();
+            submit("video-generation-chat", "Explain in one short sentence why C++ range-for loops are useful.");
+            const auto chatMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+            require(chatMs <= 10000, "Ordinary Desktop chat waited behind the active video job.");
+            record({{"kind", "video_generation_concurrency"}, {"activeJobId", active.jobId}, {"activeState", active.state},
+                {"ordinaryChatMs", chatMs}, {"ordinaryChatLimitMs", 10000}});
+            std::optional<conversationMediaReference> selected;
+            wait(
+                [&]()
+                {
+                    for (const auto& entry : window.chatEntries)
+                        for (const auto& reference : entry.generatedMediaReferences)
+                            if (reference.mimeType == "video/mp4" && reference.origin == MediaOrigin::GeneratedArtifact)
+                                selected = reference;
+                    return selected.has_value();
+                },
+                "The actual background video job did not publish a typed assistant clip card.");
+            require(library.ImageReferencesCurrent({*selected}), "The generated video card is not a current canonical artifact.");
+            const auto context = revia::runtime::ReviaSessionTestAccess::WorkingContext(window.Session());
+            require(std::any_of(context.begin(), context.end(),
+                        [&](const auto& message)
+                        {
+                            return message.role == "assistant" && std::find(message.mediaReferences.begin(), message.mediaReferences.end(),
+                                                                      *selected) != message.mediaReferences.end();
+                        }),
+                "The generated clip association did not enter actual assistant history.");
+            const auto documents = window.Session().Documents();
+            const auto document =
+                std::find_if(documents.begin(), documents.end(), [&](const auto& item) { return item.id == selected->id; });
+            require(document != documents.end() && document->generated && document->digest == selected->digest &&
+                        document->generated->mode == "text_to_video" && document->generated->sourceId.empty() &&
+                        document->generated->sourceDigest.empty() && selected->width == 384 && selected->height == 256 &&
+                        selected->durationMs == 1960,
+                "The actual generated video lost its verified mode, source independence, geometry or duration.");
+            const auto playback = window.Session().DocumentVideoPreview(selected->id);
+            require(playback && playback->reference == *selected, "The generated video card cannot open its validated canonical clip.");
+            const auto actualClip = evidence / "video-generation-actual.mp4";
+            std::filesystem::copy_file(playback->path, actualClip);
+            record({{"kind", "generated_video_artifact"}, {"id", selected->id}, {"digest", selected->digest}, {"name", selected->name},
+                {"width", selected->width}, {"height", selected->height}, {"durationMs", selected->durationMs},
+                {"mode", document->generated->mode}, {"jobId", document->generated->jobId}, {"provider", document->generated->provider},
+                {"model", document->generated->model}, {"modelRevision", document->generated->modelRevision},
+                {"seed", document->generated->seed}, {"actualMp4", actualClip.filename().string()}, {"semanticQualified", false}});
+            window.OpenVideoPreview(selected->id);
+            auto* viewer = dynamic_cast<VideoPreviewDialog*>(window.videoPreviewDialog.data());
+            require(viewer != nullptr, "The actual generated video card did not open the trusted player.");
+            wait([&]() { return viewer->CurrentTimestampMs() >= 0 && !viewer->IsRunning(); }, "The generated video poster did not render.");
+            auto* play = viewer->findChild<QPushButton*>("videoPlayButton");
+            auto* pause = viewer->findChild<QPushButton*>("videoPauseButton");
+            require(play && pause, "The generated clip player is missing playback controls.");
+            play->click();
+            wait([&]() { return viewer->CurrentTimestampMs() >= 500; },
+                "Generated clip playback did not advance at least 500 milliseconds.");
+            require(viewer->QueuedFrameCount() <= 3, "Generated clip playback retained an unbounded queue.");
+            pause->click();
+            record({{"kind", "generated_video_playback"}, {"timestampMs", viewer->CurrentTimestampMs()},
+                {"queuedFrames", viewer->QueuedFrameCount()}, {"silent", true}});
+            require(viewer->grab().save(QString::fromStdWString((evidence / "video-generation-playing.png").wstring())),
+                "The actual generated player screenshot could not be saved.");
+            require(window.grab().save(QString::fromStdWString((evidence / "video-generation-card.png").wstring())),
+                "The actual generated video card screenshot could not be saved.");
+            submit("video-generation-inspect", "Inspect the generated clip. Describe only what the sampled frames visibly show and give "
+                                               "their timestamps. Do not infer continuous motion between samples.");
+            std::string error;
+            require(window.Session().ForgetDocument(selected->id, error), "The generated clip could not be forgotten.");
+            window.RevalidateAttachmentPresentation();
+            wait([&]() { return !window.videoPreviewDialog; }, "Forget retained the generated video player.");
+            require(!window.Session().DocumentVideoPreview(selected->id) && !library.ImageReferencesCurrent({*selected}),
+                "Forget retained canonical generated clip access.");
+            for (const auto& entry : window.chatEntries)
+                for (const auto& chip : entry.attachments)
+                    require(chip.id != selected->id || (!chip.video && chip.thumbnail.isNull()),
+                        "Forget retained generated clip card playback or cached poster pixels.");
+            require(window.grab().save(QString::fromStdWString((evidence / "video-generation-forgotten.png").wstring())),
+                "The generated clip Forget screenshot could not be saved.");
+            record({{"kind", "complete"}, {"videoGenerationUiHandlersVerified", true}, {"turns", 4}, {"semanticQualified", false},
+                {"qualification",
+                    "Actual Send, background generation/import, responsive ordinary chat, typed generated card, trusted playback, visual "
+                    "follow-up and Forget. Explicit diagnostic MP4 remains retained; no fake Session result was injected."}});
+            return;
+        }
+        if (generationMode)
+        {
+            auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
+            const auto generated = [&](const char* phase, const std::string_view expectedMode)
+            {
+                std::optional<conversationMediaReference> selected;
+                for (auto entry = window.chatEntries.rbegin(); entry != window.chatEntries.rend() && !selected; ++entry)
+                    if (!entry->userMessage && !entry->generatedMediaReferences.empty())
+                    {
+                        require(
+                            entry->generatedMediaReferences.size() == 1, "The image request did not deliver exactly one generated card.");
+                        selected = entry->generatedMediaReferences.front();
+                    }
+                require(selected && selected->origin == MediaOrigin::GeneratedArtifact && library.ImageReferencesCurrent({*selected}),
+                    "The actual assistant card has no current native generated image association.");
+                const auto pixels = window.Session().DocumentImagePreview(selected->id);
+                require(pixels && pixels->bytes && revia::audit::ContentDigest(*pixels->bytes) == selected->digest,
+                    "The generated card is not backed by validated canonical image bytes.");
+                const auto context = revia::runtime::ReviaSessionTestAccess::WorkingContext(window.Session());
+                require(std::any_of(context.begin(), context.end(),
+                            [&](const auto& message)
+                            {
+                                return message.role == "assistant" &&
+                                       std::find(message.mediaReferences.begin(), message.mediaReferences.end(), *selected) !=
+                                           message.mediaReferences.end();
+                            }),
+                    "The native generated assistant association did not enter conversation history.");
+                const auto canvas = window.canvasPanel->GeneratedMediaReferences();
+                auto* preview = window.canvasPanel->findChild<QLabel*>("canvasImagePreview");
+                require(std::find(canvas.begin(), canvas.end(), *selected) != canvas.end() && preview && !preview->pixmap().isNull(),
+                    "The actual generated image did not reach Canvas pixels.");
+                const auto png = evidence / (std::string(phase) + "-actual.png");
+                std::ofstream bytes(png, std::ios::binary);
+                bytes.write(pixels->bytes->data(), static_cast<std::streamsize>(pixels->bytes->size()));
+                bytes.close();
+                require(static_cast<bool>(bytes), "The explicit qualification image export failed.");
+                const auto documents = window.Session().Documents();
+                const auto document =
+                    std::find_if(documents.begin(), documents.end(), [&](const auto& item) { return item.id == selected->id; });
+                require(document != documents.end() && document->generated && document->digest == selected->digest &&
+                            document->generated->mode == expectedMode,
+                    "The actual generated card has no persisted provider provenance.");
+                record({{"kind", "generated_artifact"}, {"phase", phase}, {"id", selected->id}, {"digest", selected->digest},
+                    {"name", selected->name}, {"width", selected->width}, {"height", selected->height},
+                    {"actualPng", png.filename().string()}, {"mode", document->generated->mode},
+                    {"sourceId", document->generated->sourceId}, {"sourceDigest", document->generated->sourceDigest},
+                    {"jobId", document->generated->jobId}, {"provider", document->generated->provider},
+                    {"model", document->generated->model}, {"seed", document->generated->seed},
+                    {"settingsDigest", document->generated->settingsDigest}, {"semanticQualified", false}});
+                return *selected;
+            };
+            submit("generation-owner", "My name is Morgan.");
+            submit("generation-anime",
+                "Draw an anime illustration of an adult explorer with teal hair and a red scarf holding a warm lantern. "
+                "Use clean line art and cel shading. No text or logos.");
+            const auto first = generated("generation-anime", "text_to_image");
+            submit(
+                "generation-inspect", "Inspect the image you generated. Describe only the visible person, colors, clothing and objects.");
+            submit("generation-edit", "Change the image you generated into a watercolor painting while keeping the red scarf.");
+            const auto second = generated("generation-edit", "reference_to_image");
+            require(first.id != second.id && first.digest != second.digest,
+                "The reference edit reused the original artifact instead of producing a distinct output.");
+            const auto documents = window.Session().Documents();
+            const auto edited = std::find_if(documents.begin(), documents.end(), [&](const auto& item) { return item.id == second.id; });
+            require(edited != documents.end() && edited->generated && edited->generated->mode == "reference_to_image" &&
+                        edited->generated->sourceId == first.id && edited->generated->sourceDigest == first.digest,
+                "The actual reference edit lost the selected original source identity or provider mode.");
+            submit("generation-compare",
+                QString::fromStdString("Compare " + first.name + " with " + second.name + ". Describe only visible differences."));
+            for (const auto& reference : {first, second})
+            {
+                std::string error;
+                require(window.Session().ForgetDocument(reference.id, error), "The actual generated artifact could not be forgotten.");
+                window.RevalidateAttachmentPresentation();
+                require(!window.Session().DocumentImagePreview(reference.id), "Forget retained canonical generated pixels.");
+                for (const auto& entry : window.chatEntries)
+                    for (const auto& chip : entry.attachments)
+                        require(chip.id != reference.id || chip.thumbnail.isNull(), "Forget retained a generated chat thumbnail.");
+                const auto canvas = window.canvasPanel->GeneratedMediaReferences();
+                require(std::none_of(canvas.begin(), canvas.end(), [&](const auto& item) { return item.id == reference.id; }),
+                    "Forget retained a generated Canvas association.");
+                if (reference.id == first.id)
+                    require(library.ImageReferencesCurrent({second}),
+                        "Forgetting the source silently removed its independently stored edited result.");
+            }
+            auto* preview = window.canvasPanel->findChild<QLabel*>("canvasImagePreview");
+            require(preview && preview->pixmap().isNull(), "Forgetting all generated results retained Canvas pixels.");
+            require(window.grab().save(QString::fromStdWString((evidence / "generation-forgotten.png").wstring())),
+                "The Forget screenshot could not be saved.");
+            record({{"kind", "complete"}, {"generationUiHandlersVerified", true}, {"turns", 5}, {"semanticQualified", false},
+                {"generatedClipUiQualified", false},
+                {"qualification",
+                    "Actual Send, native generation/import, Canvas/card, visual follow-up, reference edit, comparison and Forget. Explicit "
+                    "diagnostic PNG exports are retained; no fake Session result or video card was injected."}});
+            return;
+        }
+        if (videoMode)
+        {
+            window.AttachPaths({QString::fromStdWString((fixtures / "clip-01.mp4").wstring())});
+            captureChips("video-attach", 1);
+            const auto id = window.attachmentTray->Ids().front();
+            submit("video-attach", "Describe the supplied video frames in chronological order. Give each sampled timestamp, its literal "
+                                   "label and the two colored shapes. State the limits of this sampling.");
+            window.OpenVideoPreview(id);
+            auto* viewer = dynamic_cast<VideoPreviewDialog*>(window.videoPreviewDialog.data());
+            require(viewer != nullptr, "The transcript video did not open the trusted local player.");
+            wait([&]() { return viewer->CurrentTimestampMs() >= 0 && !viewer->IsRunning(); },
+                "The local video poster did not finish decoding and rendering.");
+            require(viewer->grab().save(QString::fromStdWString((evidence / "video-player-poster.png").wstring())),
+                "The video player poster capture could not be saved.");
+            auto* play = viewer->findChild<QPushButton*>("videoPlayButton");
+            require(play != nullptr, "The local player did not expose its Play control.");
+            play->click();
+            wait([&]() { return viewer->CurrentTimestampMs() >= 500; }, "Local playback did not advance its timestamp.");
+            require(viewer->QueuedFrameCount() <= 3, "Local playback retained an unbounded frame queue.");
+            record({{"kind", "ui_video_playback"}, {"timestampMs", viewer->CurrentTimestampMs()},
+                {"queuedFrames", viewer->QueuedFrameCount()}, {"silent", true}, {"scope", "trusted local clip"}});
+            require(viewer->grab().save(QString::fromStdWString((evidence / "video-player-playing.png").wstring())),
+                "The playing video capture could not be saved.");
+            window.CloseVideoPreview();
+            submit("video-followup", "Inspect 00:11.500 to 00:12.500 in that clip. Read the literal label and identify what appears in the "
+                                     "center at each sampled timestamp. Do not infer events between frames.");
+            QMimeData dropped;
+            dropped.setUrls({QUrl::fromLocalFile(QString::fromStdWString((fixtures / "clip-02.webm").wstring()))});
+            QDragEnterEvent enter(QPoint(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+            QDropEvent drop(QPointF(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(window.messageInput->viewport(), &enter);
+            QCoreApplication::sendEvent(window.messageInput->viewport(), &drop);
+            require(enter.isAccepted() && drop.isAccepted(), "The actual drag/drop handler refused a supported local video.");
+            captureChips("video-drop", 1);
+            submit("video-drop", "Inspect 00:05 to 00:06 in the attached clip. Read its literal label and describe the two colored shapes.");
+            record({{"kind", "complete"}, {"videoUiHandlersVerified", true}, {"turns", 3}, {"semanticQualified", false},
+                {"qualification", "Await independent clip/frame wire and answer review; actual Attach, Drop, Send and local playback ran."}});
+            return;
+        }
+        window.AttachPaths({QString::fromStdWString((fixtures / "asset-01.png").wstring())});
+        captureChips("attach", 1);
+        submit("attach", "Describe the picture I attached. Include its shapes, colors, positions and exact visible text.");
+        submit("followup", "Look at that image again. What is the exact text visible in it?");
+        const QImage pasted(QString::fromStdWString((fixtures / "asset-02.png").wstring()));
+        require(!pasted.isNull(), "The clipboard image fixture could not be decoded.");
+        QApplication::clipboard()->setImage(pasted);
+        QKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+        QCoreApplication::sendEvent(window.messageInput, &paste);
+        require(window.attachmentTray->Chips().size() == 1, "The actual clipboard handler did not attach the picture.");
+        QMimeData dropped;
+        dropped.setUrls({QUrl::fromLocalFile(QString::fromStdWString((fixtures / "asset-01.png").wstring()))});
+        QDragEnterEvent enter(QPoint(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+        QDropEvent drop(QPointF(5, 5), Qt::CopyAction, &dropped, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(window.messageInput->viewport(), &enter);
+        QCoreApplication::sendEvent(window.messageInput->viewport(), &drop);
+        require(enter.isAccepted() && drop.isAccepted(), "The actual drag/drop handler did not accept the file.");
+        captureChips("paste-drop", 2);
+        submit("paste-drop", "Compare only the two pictures attached to this message. For each picture give its exact visible text, "
+                             "shape colors and their positions. State their differences.");
+        record({{"kind", "complete"}, {"uiHandlersVerified", true}, {"turns", 3}, {"semanticQualified", false},
+            {"qualification", "Await independent exact-wire image audit and semantic review of these actual replies."}});
+    }
+
     static void RunRegenerateAndEditUi(ReviaWindow& window, int& failures)
     {
         const auto expect = [&](const bool condition, const char* message)
@@ -2550,6 +3515,9 @@ int RunPolicySuite(int, char**)
         ReviaWindowStopTests::RunRegenerateAndEditUi(window, failures);
         ReviaWindowStopTests::RunDelegationCardUi(window, failures);
         ReviaWindowStopTests::RunAttachmentUi(window, failures);
+        ReviaWindowStopTests::RunAttachmentLifecycleUi(window, failures);
+        ReviaWindowStopTests::RunDocumentImagePreviewUi(window, failures);
+        ReviaWindowStopTests::RunForgottenTranscriptMediaUi(failures);
         ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
         ReviaWindowStopTests::RunConversationQualityUi(window, failures);
         ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
@@ -2568,6 +3536,156 @@ int RunPolicySuite(int, char**)
 }
 
 REVIA_DESKTOP_SUITE("policy", RunPolicySuite);
+
+namespace
+{
+int RunAttachmentSuite(int, char**)
+{
+    int failures = 0;
+    ReviaWindow window(false, false);
+    ReviaWindowStopTests::RunAttachmentUi(window, failures);
+    ReviaWindowStopTests::RunAttachmentLifecycleUi(window, failures);
+    ReviaWindowStopTests::RunDocumentImagePreviewUi(window, failures);
+    ReviaWindowStopTests::RunForgottenTranscriptMediaUi(failures);
+    ReviaWindowStopTests::RunGeneratedCanvasDefaultDenyUi(failures);
+    ReviaWindowStopTests::RunGeneratedMediaUi(failures);
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("attachments", RunAttachmentSuite);
+
+namespace
+{
+int RunAttachmentForgetSuite(int, char**)
+{
+    int failures = 0;
+    ReviaWindowStopTests::RunForgottenTranscriptMediaUi(failures);
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("attachment-forget", RunAttachmentForgetSuite);
+
+namespace
+{
+int RunVisionLiveSuite(int argc, char** argv)
+{
+    std::ofstream output;
+    std::string secret;
+    try
+    {
+        const auto argument = [&](const std::string_view prefix)
+        {
+            for (int index = 1; index < argc; ++index)
+                if (const std::string_view value = argv[index]; value.starts_with(prefix))
+                    return std::filesystem::absolute(std::filesystem::u8path(value.substr(prefix.size())));
+            throw std::runtime_error("vision-live requires --vision-config-root=, --vision-fixtures= and --vision-evidence=.");
+        };
+        const auto configRoot = std::filesystem::canonical(argument("--vision-config-root="));
+        const auto fixtures = std::filesystem::canonical(argument("--vision-fixtures="));
+        const auto evidence = argument("--vision-evidence=");
+        if (std::filesystem::exists(evidence) || !std::filesystem::create_directory(evidence))
+            throw std::runtime_error("Choose a new evidence directory under an existing parent; prior evidence is never replaced.");
+        output.open(evidence / "desktop-vision-live.jsonl", std::ios::binary);
+        if (!output.is_open())
+            throw std::runtime_error("The fresh Desktop vision report could not be opened.");
+        const auto destination = revia::core::RuntimeRoot() / "Config";
+        std::uintmax_t total = 0;
+        std::size_t files = 0;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(configRoot / "Config"))
+        {
+            if (entry.is_symlink() || (!entry.is_directory() && !entry.is_regular_file()))
+                throw std::runtime_error("The disposable Config must contain ordinary directories and files only.");
+            const auto target = destination / std::filesystem::relative(entry.path(), configRoot / "Config");
+            if (entry.is_directory())
+                std::filesystem::create_directories(target);
+            else
+            {
+                const auto bytes = entry.file_size();
+                total += bytes;
+                if (bytes > 1024 * 1024 || total > 16 * 1024 * 1024 || ++files > 128)
+                    throw std::runtime_error("The disposable Config exceeds its bounded fixture limits.");
+                std::filesystem::copy_file(entry.path(), target);
+            }
+        }
+        configManager config((destination / "settings.json").string(), (destination / "Profiles").string());
+        appSettings settings;
+        aiProfile profile;
+        if (!config.LoadSettings(settings) || !config.LoadProfile(settings.activeProfile, profile))
+            throw std::runtime_error("The disposable Desktop settings/profile did not load.");
+        secret = settings.llm.apiKey;
+        const bool videoMode =
+            std::any_of(argv + 1, argv + argc, [](const char* value) { return std::string_view(value) == "--video-mode"; });
+        const bool generationMode =
+            std::any_of(argv + 1, argv + argc, [](const char* value) { return std::string_view(value) == "--generation-mode"; });
+        const bool videoGenerationMode =
+            std::any_of(argv + 1, argv + argc, [](const char* value) { return std::string_view(value) == "--video-generation-mode"; });
+        if (static_cast<int>(videoMode) + static_cast<int>(generationMode) + static_cast<int>(videoGenerationMode) > 1)
+            throw std::runtime_error("Choose one live UI media mode.");
+        const float temperature = profile.bHasTemperatureOverride ? profile.temperature : settings.llm.temperature;
+        if (settings.llm.backend != "LLamaCpp" || settings.llm.host != "127.0.0.1" || settings.llm.bAutoStartServer ||
+            settings.llm.bShutdownServerOnExit || !settings.llm.bVisionEnabled || settings.llm.cloud.bEnabled ||
+            settings.llm.contextSize != 32768 || settings.llm.imageMinTokens != 1024 || std::abs(temperature - 0.75F) > 0.001F)
+            throw std::runtime_error(
+                "Use the borrowed local Main vision1024/context32768/profile.75 server, with automatic start/shutdown off.");
+        if (profile.bMemoryEnabled || settings.speech.bEnabled || settings.speechRecognition.bEnabled || settings.embedding.bEnabled ||
+            settings.intelligence.bEnabled || settings.vision.bEnabled || settings.vision.bContinuousAwareness ||
+            settings.perception.bEnabled || settings.initiative.bEnabled || settings.image.bEnabled != generationMode ||
+            settings.video.bEnabled != videoGenerationMode || settings.performance.bEnabled || settings.improvement.bEnabled ||
+            settings.presence.bEnabled || settings.presence.bAvatarBridgeEnabled || settings.presence.bExternalAdaptersEnabled ||
+            settings.localApi.bEnabled || !settings.mcp.servers.empty())
+            throw std::runtime_error("Disable auxiliary models, memory, audio, screenshots, app awareness, initiative, adapters and MCP; "
+                                     "generation is allowed only in its matching opt-in mode.");
+        if (generationMode &&
+            (settings.image.model != "stabilityai/sd-turbo" || settings.image.device != "cuda:1" || settings.image.width != 512 ||
+                settings.image.height != 512 || settings.image.steps != 4 || settings.image.seed != 42 || !settings.image.bOffline ||
+                settings.image.bKeepLoaded || !settings.image.bShutdownOnExit || settings.image.host != "127.0.0.1"))
+            throw std::runtime_error("Generation UI qualification requires offline SD-Turbo/cuda1/512px/4steps/seed42 with owned release.");
+        if (videoGenerationMode &&
+            (settings.video.modelDirectory.empty() || settings.video.runtimeOverlayDirectory.empty() || settings.video.width != 384 ||
+                settings.video.height != 256 || settings.video.frameCount != 49 || settings.video.fps != 25 || settings.video.steps != 50 ||
+                settings.video.gpuIndex != 1 || settings.video.cpuThreads != 6 || settings.video.requestTimeoutSeconds != 600))
+            throw std::runtime_error(
+                "Video generation UI qualification requires the approved LTX secondary-GPU/384x256/49frames/25fps/50steps/CPU6 route.");
+        for (const char* name : generationMode || videoGenerationMode ? std::initializer_list<const char*>{}
+                                : videoMode                           ? std::initializer_list<const char*>{"clip-01.mp4", "clip-02.webm"}
+                                                                      : std::initializer_list<const char*>{"asset-01.png", "asset-02.png"})
+            if (!std::filesystem::is_regular_file(fixtures / name) ||
+                std::filesystem::file_size(fixtures / name) > (videoMode ? 64 : 8) * 1024 * 1024)
+                throw std::runtime_error("Two bounded neutral media fixtures are required.");
+        output << nlohmann::json{{"kind", "preflight"}, {"contextSize", settings.llm.contextSize},
+                      {"imageMinTokens", settings.llm.imageMinTokens}, {"temperature", temperature}, {"model", settings.llm.modelName},
+                      {"port", settings.llm.port}, {"fixtureRoot", fixtures.string()}, {"generationMode", generationMode},
+                      {"videoGenerationMode", videoGenerationMode}, {"imageGenerationEnabled", settings.image.bEnabled},
+                      {"videoGenerationEnabled", settings.video.bEnabled}, {"imageGenerationModel", settings.image.model},
+                      {"imageGenerationDevice", settings.image.device}, {"imageGenerationSeed", settings.image.seed},
+                      {"semanticQualified", false}}
+                      .dump()
+               << '\n';
+        output.flush();
+        ReviaWindow window(false, false);
+        ReviaWindowStopTests::RunVisionLive(window, fixtures, evidence, output, secret, videoMode, generationMode, videoGenerationMode);
+        if (!output.good())
+            throw std::runtime_error("Desktop vision evidence could not be saved completely.");
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::string message = error.what();
+        if (!secret.empty())
+            for (std::size_t at = 0; (at = message.find(secret, at)) != std::string::npos; at += 10)
+                message.replace(at, secret.size(), "[redacted]");
+        if (output.is_open())
+            output << nlohmann::json{{"kind", "failed"}, {"message", message}, {"semanticQualified", false}}.dump() << '\n';
+        std::cerr << "FAIL: " << message << '\n';
+        return 1;
+    }
+}
+}
+
+// Explicit opt-in only: this suite borrows an already-owned server and is never a normal CTest.
+REVIA_DESKTOP_SUITE("vision-live", RunVisionLiveSuite);
 
 int main(int argc, char** argv)
 {

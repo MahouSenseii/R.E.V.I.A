@@ -38,6 +38,7 @@ struct OwnedProcess::Impl
     bool outputClosed = true;
     bool errorsClosed = true;
     bool started = false;
+    mutable std::optional<std::int64_t> exitCode;
     std::atomic<bool> stopping{false};
     std::size_t maxPendingOutput = 0;
     std::size_t maxErrors = 0;
@@ -434,6 +435,30 @@ bool OwnedProcess::Running() const
     return impl->started && !impl->stopping.load() && (!impl->outputClosed || !impl->output.empty());
 }
 
+std::optional<std::int64_t> OwnedProcess::ExitCode() const
+{
+    std::lock_guard lock(impl->mutex);
+    if (impl->exitCode || !impl->started)
+        return impl->exitCode;
+#ifdef _WIN32
+    if (!impl->child.Valid() || WaitForSingleObject(impl->child.Get(), 0) != WAIT_OBJECT_0)
+        return std::nullopt;
+    DWORD code = 0;
+    if (GetExitCodeProcess(impl->child.Get(), &code))
+        impl->exitCode = static_cast<std::int64_t>(code);
+#else
+    siginfo_t status{};
+    if (waitid(P_PID, static_cast<id_t>(impl->child), &status, WEXITED | WNOHANG | WNOWAIT) == 0 && status.si_pid == impl->child)
+    {
+        if (status.si_code == CLD_EXITED)
+            impl->exitCode = status.si_status;
+        else if (status.si_code == CLD_KILLED || status.si_code == CLD_DUMPED)
+            impl->exitCode = 128 + status.si_status;
+    }
+#endif
+    return impl->exitCode;
+}
+
 std::string OwnedProcess::ErrorOutput() const
 {
     std::lock_guard lock(impl->mutex);
@@ -466,6 +491,7 @@ void OwnedProcess::Terminate()
 #ifdef _WIN32
     if (impl->child.Valid())
         WaitForSingleObject(impl->child.Get(), 5000);
+    static_cast<void>(ExitCode());
     impl->input.Reset();
     impl->outputRead.Reset();
     impl->errorRead.Reset();
@@ -473,7 +499,17 @@ void OwnedProcess::Terminate()
     impl->job.Reset();
 #else
     if (impl->child > 0)
-        waitpid(impl->child, nullptr, 0);
+    {
+        int status = 0;
+        if (waitpid(impl->child, &status, 0) == impl->child)
+        {
+            std::lock_guard lock(impl->mutex);
+            if (WIFEXITED(status))
+                impl->exitCode = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status))
+                impl->exitCode = 128 + WTERMSIG(status);
+        }
+    }
     for (int* descriptor : {&impl->input, &impl->outputRead, &impl->errorRead})
     {
         if (*descriptor >= 0)

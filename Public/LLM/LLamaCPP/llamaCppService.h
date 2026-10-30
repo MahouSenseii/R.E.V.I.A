@@ -1,4 +1,5 @@
 #pragma once
+#include "LLM/codeReviewPurpose.h"
 
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
@@ -40,6 +41,8 @@ public:
     // request shape does not.
     void SetPosture(std::string posture);
     void SetReplyNote(std::string note);
+    // Applies to source explanations until SetPosture resets the turn state.
+    void SetSourceExplanation(bool enabled);
 
     healthOutput CheckHealth(std::stop_token stopToken = {}) const;
     // onDelta receives visible text as it is generated, so a caller can begin speaking
@@ -71,8 +74,8 @@ public:
     responseOutput Deliberate(const std::string& boundedInquiryPrompt, std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     // Structured source review uses background priority and yields to conversation.
-    responseOutput GenerateCodeReview(const std::string& instructions,
-        const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;
+    responseOutput GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
+        std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
     // Bounded subgoal grammar uses the whole instruction as its system prompt.
     responseOutput GenerateComputerSubgoal(const std::string& instruction,
         const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
@@ -109,7 +112,7 @@ private:
     responseOutput GeneratePlannerResponse(const std::string& systemPrompt, const std::string& userRequest, int maxTokens,
         bool structuredJson = true, std::stop_token stopToken = {},
         revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive, float requestTemperature = 0.1F,
-        const std::string& operation = "structured planning", const std::string& responseSchema = {}) const;
+        const std::string& operation = "structured planning", const std::string& responseSchema = {}, int reasoningBudget = 0) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;
@@ -124,6 +127,7 @@ private:
     int thinkingTokens = 3072;
     bool bVisionExpected = false;
     int configuredContextTokens = 4096;
+    int imageMinTokens = 0;
     mutable std::atomic<int> effectiveContextTokens = 0;
     mutable std::atomic<int> effectiveParallelSlots = 0;
     // Set when this server refused a request for offering tools. Later turns then skip
@@ -136,5 +140,6 @@ private:
     mutable std::mutex postureMutex;
     std::string activePosture;
     std::string activeReplyNote;
+    bool activeSourceExplanation = false;
     mutable revia::llm::InferenceScheduler inferenceScheduler;
 };

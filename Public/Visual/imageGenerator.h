@@ -1,7 +1,7 @@
 #pragma once
 
-
 #include "Visual/imageSettings.h"
+#include "Visual/imageRequest.h"
 #include "Visual/imageTypes.h"
 #include <atomic>
 #include <filesystem>
@@ -73,6 +73,8 @@ public:
     [[nodiscard]] bool IsAvailable(std::string& outDetail);
     ImageResult Generate(const std::string& prompt, const std::string& negativePrompt = {}, std::stop_token stopToken = {},
         std::function<bool()> admission = {}, const std::filesystem::path& expectedOutputRoot = {});
+    ImageResult Generate(const ImageRequest& request, std::stop_token stopToken = {}, std::function<bool()> admission = {},
+        const std::filesystem::path& expectedOutputRoot = {});
     void Cancel();
     void Unload();
     [[nodiscard]] ImageJobSnapshot Snapshot() const;

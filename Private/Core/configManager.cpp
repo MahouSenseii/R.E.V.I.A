@@ -12,6 +12,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <regex>
+#include <stdexcept>
 
 
 using json = nlohmann::json;
@@ -52,11 +53,25 @@ namespace
         return std::regex_match(value, Types);
     }
 
+    void ReadImageMinimum(const json& data, int& output)
+    {
+        if (!data.contains("imageMinTokens"))
+            return;
+        const auto& value = data["imageMinTokens"];
+        if (!value.is_number_integer() || value < 0 || value > 4096)
+            throw std::invalid_argument("imageMinTokens must be an integer from 0 through 4096.");
+        output = value.get<int>();
+    }
+
     void ReadModelTier(const json& data, modelTierSettings& output)
     {
-        if (data.contains("enabled")) output.bEnabled = data["enabled"].get<bool>();
-        if (data.contains("host")) output.host = data["host"].get<std::string>();
-        if (data.contains("port")) output.port = data["port"].get<int>();
+        ReadImageMinimum(data, output.imageMinTokens);
+        if (data.contains("enabled"))
+            output.bEnabled = data["enabled"].get<bool>();
+        if (data.contains("host"))
+            output.host = data["host"].get<std::string>();
+        if (data.contains("port"))
+            output.port = data["port"].get<int>();
         if (data.contains("modelName"))
             output.modelName = data["modelName"].get<std::string>();
         if (data.contains("modelPath"))
@@ -64,8 +79,7 @@ namespace
         if (data.contains("visionEnabled"))
             output.bVisionEnabled = data["visionEnabled"].get<bool>();
         if (data.contains("multimodalProjectorPath"))
-            output.multimodalProjectorPath =
-                data["multimodalProjectorPath"].get<std::string>();
+            output.multimodalProjectorPath = data["multimodalProjectorPath"].get<std::string>();
         if (data.contains("contextSize"))
             output.contextSize = data["contextSize"].get<int>();
         if (data.contains("maxTokens"))
@@ -89,16 +103,16 @@ namespace
 
     bool IsValidModelTier(const modelTierSettings& tier)
     {
-        if (!tier.bEnabled) return true;
-        return tier.host == "127.0.0.1" && tier.port > 0 && tier.port <= 65535 &&
-            !tier.modelName.empty() && !tier.modelPath.empty() &&
-            tier.contextSize >= 512 && tier.contextSize <= 1048576 &&
-            tier.maxTokens >= 1 && tier.maxTokens <= 32768 &&
-            tier.temperature >= 0.0F && tier.temperature <= 2.0F &&
-            tier.startupTimeoutSeconds >= 1 && tier.startupTimeoutSeconds <= 600 &&
-            (!tier.bVisionEnabled || !tier.multimodalProjectorPath.empty());
+        if (tier.imageMinTokens < 0 || tier.imageMinTokens > 4096)
+            return false;
+        if (!tier.bEnabled)
+            return true;
+        return tier.host == "127.0.0.1" && tier.port > 0 && tier.port <= 65535 && !tier.modelName.empty() && !tier.modelPath.empty() &&
+               tier.contextSize >= 512 && tier.contextSize <= 1048576 && tier.maxTokens >= 1 && tier.maxTokens <= 32768 &&
+               tier.temperature >= 0.0F && tier.temperature <= 2.0F && tier.startupTimeoutSeconds >= 1 &&
+               tier.startupTimeoutSeconds <= 600 && (!tier.bVisionEnabled || !tier.multimodalProjectorPath.empty());
     }
-}
+    }
 
 configManager::configManager() = default;
 
@@ -206,10 +220,10 @@ bool ReadSettings(json& data, appSettings& outSettings)
             {
                 outSettings.llm.bVisionEnabled = llmData["visionEnabled"].get<bool>();
             }
+            ReadImageMinimum(llmData, outSettings.llm.imageMinTokens);
             if (llmData.contains("multimodalProjectorPath"))
             {
-                outSettings.llm.multimodalProjectorPath =
-                    llmData["multimodalProjectorPath"].get<std::string>();
+                outSettings.llm.multimodalProjectorPath = llmData["multimodalProjectorPath"].get<std::string>();
             }
             if (llmData.contains("mediaPath"))
             {
@@ -1231,6 +1245,26 @@ bool ReadSettings(json& data, appSettings& outSettings)
             if (imageData.contains("keepLoaded")) outSettings.image.bKeepLoaded = imageData["keepLoaded"].get<bool>();
             if (imageData.contains("offline")) outSettings.image.bOffline = imageData["offline"].get<bool>();
         }
+        if (data.contains("video"))
+        {
+            const auto& video = data.at("video");
+            outSettings.video.bEnabled = video.value("enabled", outSettings.video.bEnabled);
+            outSettings.video.pythonExecutable = video.value("pythonExecutable", outSettings.video.pythonExecutable);
+            outSettings.video.workerScript = video.value("workerScript", outSettings.video.workerScript);
+            outSettings.video.modelDirectory = video.value("modelDirectory", outSettings.video.modelDirectory);
+            outSettings.video.runtimeOverlayDirectory = video.value("runtimeOverlayDirectory", outSettings.video.runtimeOverlayDirectory);
+            outSettings.video.outputPath = video.value("outputPath", outSettings.video.outputPath);
+            outSettings.video.ffmpegPath = video.value("ffmpegPath", outSettings.video.ffmpegPath);
+            outSettings.video.ffprobePath = video.value("ffprobePath", outSettings.video.ffprobePath);
+            outSettings.video.requestTimeoutSeconds = video.value("requestTimeoutSeconds", outSettings.video.requestTimeoutSeconds);
+            outSettings.video.width = video.value("width", outSettings.video.width);
+            outSettings.video.height = video.value("height", outSettings.video.height);
+            outSettings.video.frameCount = video.value("frameCount", outSettings.video.frameCount);
+            outSettings.video.fps = video.value("fps", outSettings.video.fps);
+            outSettings.video.steps = video.value("steps", outSettings.video.steps);
+            outSettings.video.gpuIndex = video.value("gpuIndex", outSettings.video.gpuIndex);
+            outSettings.video.cpuThreads = video.value("cpuThreads", outSettings.video.cpuThreads);
+        }
         if (data.contains("conversation"))
         {
             const json& conversationData = data["conversation"];
@@ -1425,35 +1459,26 @@ bool ReadSettings(json& data, appSettings& outSettings)
           outSettings.intelligence.expert.bEnabled &&
           outSettings.intelligence.fast.port == outSettings.intelligence.expert.port));
 
-    if (outSettings.activeProfile.empty() || outSettings.llm.host.empty() ||
-        outSettings.llm.modelName.empty() || outSettings.llm.port < 1 ||
-        outSettings.llm.port > 65535 || outSettings.llm.temperature < 0.0f ||
-        outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 ||
-        outSettings.llm.maxTokens > 32768 ||
+    if (outSettings.activeProfile.empty() || outSettings.llm.host.empty() || outSettings.llm.modelName.empty() ||
+        outSettings.llm.port < 1 || outSettings.llm.port > 65535 || outSettings.llm.temperature < 0.0f ||
+        outSettings.llm.temperature > 2.0f || outSettings.llm.maxTokens < 1 || outSettings.llm.maxTokens > 32768 ||
         outSettings.llm.thinkingTokens < 0 || outSettings.llm.thinkingTokens > 32768 ||
         (outSettings.llm.cloud.provider != "openai-compatible" && outSettings.llm.cloud.provider != "anthropic") ||
-        (outSettings.llm.cloud.useFor != "never" && outSettings.llm.cloud.useFor != "ask" &&
-            outSettings.llm.cloud.useFor != "hardTurns") ||
-        outSettings.llm.cloud.maxTokens < 1 || outSettings.llm.cloud.maxTokens > 128000 ||
-        outSettings.llm.cloud.timeoutSeconds < 1 || outSettings.llm.cloud.timeoutSeconds > 600 ||
-        outSettings.llm.contextSize < 512 || outSettings.llm.contextSize > 1048576 ||
-        !IsKvCacheType(outSettings.llm.kvCacheType) ||
-        outSettings.llm.parallelRequests < 1 || outSettings.llm.parallelRequests > 16 ||
-        outSettings.llm.autoFitTargetMiB < 256 ||
-        outSettings.llm.autoFitTargetMiB > 32768 ||
-        outSettings.llm.startupTimeoutSeconds < 1 ||
+        (outSettings.llm.cloud.useFor != "never" && outSettings.llm.cloud.useFor != "ask" && outSettings.llm.cloud.useFor != "hardTurns") ||
+        outSettings.llm.cloud.maxTokens < 1 || outSettings.llm.cloud.maxTokens > 128000 || outSettings.llm.cloud.timeoutSeconds < 1 ||
+        outSettings.llm.cloud.timeoutSeconds > 600 || outSettings.llm.contextSize < 512 || outSettings.llm.contextSize > 1048576 ||
+        outSettings.llm.imageMinTokens < 0 || outSettings.llm.imageMinTokens > 4096 || !IsKvCacheType(outSettings.llm.kvCacheType) ||
+        outSettings.llm.parallelRequests < 1 || outSettings.llm.parallelRequests > 16 || outSettings.llm.autoFitTargetMiB < 256 ||
+        outSettings.llm.autoFitTargetMiB > 32768 || outSettings.llm.startupTimeoutSeconds < 1 ||
         outSettings.llm.startupTimeoutSeconds > 600 ||
         // The local API never shares a port with a model server it would then shadow.
-        outSettings.localApi.port < 1024 || outSettings.localApi.port > 65535 ||
-        outSettings.localApi.port == outSettings.llm.port || outSettings.localApi.port == outSettings.embedding.port ||
+        outSettings.localApi.port < 1024 || outSettings.localApi.port > 65535 || outSettings.localApi.port == outSettings.llm.port ||
+        outSettings.localApi.port == outSettings.embedding.port ||
         (outSettings.llm.backend == "LLamaCpp" && outSettings.llm.bAutoStartServer &&
             (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty())) ||
-        (outSettings.llm.bVisionEnabled &&
-            (outSettings.llm.multimodalProjectorPath.empty() || outSettings.llm.mediaPath.empty())) ||
-        (outSettings.intelligence.bEnabled &&
-            (!IsValidModelTier(outSettings.intelligence.fast) ||
-             !IsValidModelTier(outSettings.intelligence.expert) ||
-             intelligencePortsConflict)) ||
+        (outSettings.llm.bVisionEnabled && (outSettings.llm.multimodalProjectorPath.empty() || outSettings.llm.mediaPath.empty())) ||
+        (outSettings.intelligence.bEnabled && (!IsValidModelTier(outSettings.intelligence.fast) ||
+                                                  !IsValidModelTier(outSettings.intelligence.expert) || intelligencePortsConflict)) ||
         (outSettings.memoryReranker.enabled &&
             (outSettings.memoryReranker.pythonExecutable.empty() || outSettings.memoryReranker.workerScript.empty() ||
                 outSettings.memoryReranker.modelDirectory.empty() || outSettings.memoryReranker.cpuThreads < 1 ||
@@ -1461,257 +1486,149 @@ bool ReadSettings(json& data, appSettings& outSettings)
                 outSettings.memoryReranker.timeoutMs > 10000 || outSettings.memoryReranker.startupTimeoutMs < 1 ||
                 outSettings.memoryReranker.startupTimeoutMs > 120000)) ||
         (outSettings.embedding.bEnabled &&
-            (outSettings.embedding.host.empty() || outSettings.embedding.modelName.empty() ||
-                outSettings.embedding.port < 1 || outSettings.embedding.port > 65535 ||
-                outSettings.embedding.port == outSettings.llm.port ||
-                outSettings.embedding.contextSize < 128 ||
-                outSettings.embedding.contextSize > 1048576 ||
-                outSettings.embedding.parallelRequests < 1 ||
-                outSettings.embedding.parallelRequests > 16 ||
-                outSettings.embedding.startupTimeoutSeconds < 1 ||
-                outSettings.embedding.startupTimeoutSeconds > 600 ||
-                outSettings.embedding.pooling != "mean" ||
-                outSettings.embedding.device.empty() ||
-                outSettings.embedding.queryPrefix.empty() ||
-                outSettings.embedding.documentPrefix.empty() ||
+            (outSettings.embedding.host.empty() || outSettings.embedding.modelName.empty() || outSettings.embedding.port < 1 ||
+                outSettings.embedding.port > 65535 || outSettings.embedding.port == outSettings.llm.port ||
+                outSettings.embedding.contextSize < 128 || outSettings.embedding.contextSize > 1048576 ||
+                outSettings.embedding.parallelRequests < 1 || outSettings.embedding.parallelRequests > 16 ||
+                outSettings.embedding.startupTimeoutSeconds < 1 || outSettings.embedding.startupTimeoutSeconds > 600 ||
+                outSettings.embedding.pooling != "mean" || outSettings.embedding.device.empty() ||
+                outSettings.embedding.queryPrefix.empty() || outSettings.embedding.documentPrefix.empty() ||
                 (outSettings.embedding.bAutoStartServer &&
-                    (outSettings.embedding.serverExecutable.empty() ||
-                        outSettings.embedding.modelPath.empty())))) ||
+                    (outSettings.embedding.serverExecutable.empty() || outSettings.embedding.modelPath.empty())))) ||
         outSettings.speech.volume < 0 || outSettings.speech.volume > 100 ||
-        (outSettings.speech.backend != "Auto" &&
-            outSettings.speech.backend != "WindowsSapi" &&
-            outSettings.speech.backend != "Qwen3TTS") ||
-        outSettings.speech.pythonExecutable.empty() ||
-        outSettings.speech.qwenServiceScript.empty() ||
-        outSettings.speech.qwenHost != "127.0.0.1" ||
-        outSettings.speech.qwenPort < 1 || outSettings.speech.qwenPort > 65535 ||
-        outSettings.speech.qwenPort == outSettings.llm.port ||
-        outSettings.speech.qwenPort == outSettings.embedding.port ||
-        outSettings.speech.qwenStartupTimeoutSeconds < 1 ||
-        outSettings.speech.qwenStartupTimeoutSeconds > 300 ||
-        outSettings.speech.qwenRequestTimeoutSeconds < 30 ||
-        outSettings.speech.qwenRequestTimeoutSeconds > 3600 ||
-        outSettings.speech.qwenMinimumFreeVramMiB < 512 ||
-        outSettings.speech.qwenMinimumFreeVramMiB > 65536 ||
+        (outSettings.speech.backend != "Auto" && outSettings.speech.backend != "WindowsSapi" && outSettings.speech.backend != "Qwen3TTS") ||
+        outSettings.speech.pythonExecutable.empty() || outSettings.speech.qwenServiceScript.empty() ||
+        outSettings.speech.qwenHost != "127.0.0.1" || outSettings.speech.qwenPort < 1 || outSettings.speech.qwenPort > 65535 ||
+        outSettings.speech.qwenPort == outSettings.llm.port || outSettings.speech.qwenPort == outSettings.embedding.port ||
+        outSettings.speech.qwenStartupTimeoutSeconds < 1 || outSettings.speech.qwenStartupTimeoutSeconds > 300 ||
+        outSettings.speech.qwenRequestTimeoutSeconds < 30 || outSettings.speech.qwenRequestTimeoutSeconds > 3600 ||
+        outSettings.speech.qwenMinimumFreeVramMiB < 512 || outSettings.speech.qwenMinimumFreeVramMiB > 65536 ||
         // A batch of one is the unbatched path with extra bookkeeping, and an unbounded
         // batch is an allocation failure on the first long reply. Both ceilings are
         // required to be sane whether or not batching is currently enabled, so turning
         // it on later cannot activate a configuration that was never checked.
-        outSettings.speech.qwenMaxBatchPhrases < 2 ||
-        outSettings.speech.qwenMaxBatchPhrases > 32 ||
-        outSettings.speech.qwenMaxBatchCharacters < 64 ||
-        outSettings.speech.qwenMaxBatchCharacters > 4096 ||
+        outSettings.speech.qwenMaxBatchPhrases < 2 || outSettings.speech.qwenMaxBatchPhrases > 32 ||
+        outSettings.speech.qwenMaxBatchCharacters < 64 || outSettings.speech.qwenMaxBatchCharacters > 4096 ||
         outSettings.speech.qwenDevices.empty() ||
-        std::any_of(outSettings.speech.qwenDevices.begin(),
-            outSettings.speech.qwenDevices.end(),
+        std::any_of(outSettings.speech.qwenDevices.begin(), outSettings.speech.qwenDevices.end(),
             [](const std::string& device) { return !IsDeviceSelector(device, true); }) ||
-        outSettings.speech.qwenMaxWorkers < 1 || outSettings.speech.qwenMaxWorkers > 8 ||
-        outSettings.speech.qwenPrefetchFragments < 1 ||
-        outSettings.speech.qwenPrefetchFragments > 16 ||
-        outSettings.speech.qwenFirstPhraseCharacters < 16 ||
-        outSettings.speech.qwenFirstPhraseCharacters > 128 ||
-        outSettings.speech.qwenPhraseCharacters < 32 ||
+        outSettings.speech.qwenMaxWorkers < 1 || outSettings.speech.qwenMaxWorkers > 8 || outSettings.speech.qwenPrefetchFragments < 1 ||
+        outSettings.speech.qwenPrefetchFragments > 16 || outSettings.speech.qwenFirstPhraseCharacters < 16 ||
+        outSettings.speech.qwenFirstPhraseCharacters > 128 || outSettings.speech.qwenPhraseCharacters < 32 ||
         outSettings.speech.qwenPhraseCharacters > 512 ||
-        outSettings.speech.qwenFirstPhraseCharacters >
-            outSettings.speech.qwenPhraseCharacters ||
-        (outSettings.speech.qwenAttentionBackend != "adaptive" &&
-            outSettings.speech.qwenAttentionBackend != "auto" &&
-            outSettings.speech.qwenAttentionBackend != "eager" &&
-            outSettings.speech.qwenAttentionBackend != "sdpa" &&
+        outSettings.speech.qwenFirstPhraseCharacters > outSettings.speech.qwenPhraseCharacters ||
+        (outSettings.speech.qwenAttentionBackend != "adaptive" && outSettings.speech.qwenAttentionBackend != "auto" &&
+            outSettings.speech.qwenAttentionBackend != "eager" && outSettings.speech.qwenAttentionBackend != "sdpa" &&
             outSettings.speech.qwenAttentionBackend != "flash_attention_2") ||
-        (outSettings.speech.qwenInputMode != "complete" &&
-            outSettings.speech.qwenInputMode != "simulated-stream") ||
-        outSettings.speech.qwenMaxBufferedAudioMiB < 16 ||
-        outSettings.speech.qwenMaxBufferedAudioMiB > 2048 ||
-        outSettings.speech.qwenVoiceDesignModel.empty() ||
-        outSettings.speech.qwenCloneModel.empty() ||
-        outSettings.speech.voiceDataPath.empty() ||
-        outSettings.speech.rate < -10 || outSettings.speech.rate > 10 ||
-        outSettings.speech.maxCharacters < 64 || outSettings.speech.maxCharacters > 10000 ||
-        outSettings.speech.maxQueuedUtterances < 1 ||
+        (outSettings.speech.qwenInputMode != "complete" && outSettings.speech.qwenInputMode != "simulated-stream") ||
+        outSettings.speech.qwenMaxBufferedAudioMiB < 16 || outSettings.speech.qwenMaxBufferedAudioMiB > 2048 ||
+        outSettings.speech.qwenVoiceDesignModel.empty() || outSettings.speech.qwenCloneModel.empty() ||
+        outSettings.speech.voiceDataPath.empty() || outSettings.speech.rate < -10 || outSettings.speech.rate > 10 ||
+        outSettings.speech.maxCharacters < 64 || outSettings.speech.maxCharacters > 10000 || outSettings.speech.maxQueuedUtterances < 1 ||
         outSettings.speech.maxQueuedUtterances > 16 ||
         (outSettings.speechRecognition.bEnabled &&
-            (outSettings.speechRecognition.executable.empty() ||
-                outSettings.speechRecognition.modelPath.empty() ||
+            (outSettings.speechRecognition.executable.empty() || outSettings.speechRecognition.modelPath.empty() ||
                 outSettings.speechRecognition.language.empty() ||
                 (outSettings.speechRecognition.bUseServer &&
-                    (outSettings.speechRecognition.serverExecutable.empty() ||
-                     outSettings.speechRecognition.serverHost != "127.0.0.1" ||
-                     outSettings.speechRecognition.serverPort < 1 ||
-                     outSettings.speechRecognition.serverPort > 65535 ||
-                     outSettings.speechRecognition.serverPort == outSettings.llm.port ||
-                     outSettings.speechRecognition.serverPort == outSettings.embedding.port ||
-                     outSettings.speechRecognition.serverPort == outSettings.speech.qwenPort ||
-                     outSettings.speechRecognition.serverStartupTimeoutSeconds < 1 ||
-                     outSettings.speechRecognition.serverStartupTimeoutSeconds > 300 ||
-                     outSettings.speechRecognition.requestTimeoutSeconds < 10 ||
-                     outSettings.speechRecognition.requestTimeoutSeconds > 1800)) ||
-                outSettings.speechRecognition.sampleRate != 16000 ||
-                outSettings.speechRecognition.threads < 1 ||
-                outSettings.speechRecognition.threads > 64 ||
-                outSettings.speechRecognition.device.empty() ||
-                outSettings.speechRecognition.vadEnergyThreshold < 100 ||
-                outSettings.speechRecognition.vadEnergyThreshold > 30000 ||
-                outSettings.speechRecognition.vadSpeechFrames < 1 ||
-                outSettings.speechRecognition.vadSpeechFrames > 50 ||
-                outSettings.speechRecognition.vadSilenceMs < 200 ||
-                outSettings.speechRecognition.vadSilenceMs > 5000 ||
-                outSettings.speechRecognition.minimumUtteranceMs < 100 ||
-                outSettings.speechRecognition.minimumUtteranceMs > 5000 ||
-                outSettings.speechRecognition.maximumUtteranceSeconds < 2 ||
-                outSettings.speechRecognition.maximumUtteranceSeconds > 120 ||
-                outSettings.speechRecognition.followUpSeconds < 0 ||
-                outSettings.speechRecognition.followUpSeconds > 600 ||
-                (outSettings.speechRecognition.bRequireWakeWord &&
-                    outSettings.speechRecognition.wakeWords.empty()))) ||
-        outSettings.presence.statePath.empty() ||
-        outSettings.presence.eventPath.empty() ||
-        outSettings.presence.inboxPath.empty() ||
-        outSettings.presence.outboxPath.empty() ||
-        outSettings.presence.adapterPollMs < 50 ||
-        outSettings.presence.adapterPollMs > 10000 ||
-        outSettings.presence.maxAdapterEventsPerMinute < 1 ||
-        outSettings.presence.maxAdapterEventsPerMinute > 600 ||
-        outSettings.presence.maxAdapterTextCharacters < 64 ||
-        outSettings.presence.maxAdapterTextCharacters > 20000 ||
-        outSettings.presence.maxAvatarEventBytes < 65536 ||
-        outSettings.presence.maxAvatarEventBytes > 1073741824 ||
-        outSettings.presence.rememberedAdapterIds < 16 ||
-        outSettings.presence.rememberedAdapterIds > 100000 ||
-        outSettings.presence.publicContextTurns < 0 ||
-        outSettings.presence.publicContextTurns > 40 ||
-        outSettings.presence.streamReplyCooldownSeconds < 0 ||
-        outSettings.presence.streamReplyCooldownSeconds > 3600 ||
-        outSettings.presence.allowedAdapters.empty() ||
-        outSettings.resources.reserveLogicalCores < 0 ||
-        outSettings.resources.reserveLogicalCores > 64 ||
-        outSettings.resources.minimumFreeRamMiB < 1024 ||
-        outSettings.resources.minimumFreeRamMiB > 262144 ||
-        outSettings.resources.llamaPromptCacheMiB < 0 ||
-        outSettings.resources.llamaPromptCacheMiB > 65536 ||
-        outSettings.resources.sqliteCacheMiB < 0 ||
-        outSettings.resources.sqliteCacheMiB > 2048 ||
-        outSettings.resources.gpuReserveMiB < 256 ||
-        outSettings.resources.gpuReserveMiB > 32768 ||
-        outSettings.resources.usageSampleSeconds < 0 ||
-        outSettings.resources.usageSampleSeconds > 3600 ||
-        outSettings.conversation.maxSessions < 1 ||
-        outSettings.conversation.maxSessions > 10000 ||
-        outSettings.conversation.maxTurnsPerSession < 1 ||
-        outSettings.conversation.maxTurnsPerSession > 100000 ||
-        outSettings.conversation.maxTurnCharacters < 256 ||
-        outSettings.conversation.maxTurnCharacters > 1000000 ||
-        outSettings.conversation.restoreTurns < 0 ||
-        outSettings.conversation.restoreTurns > 40 ||
-        outSettings.conversation.selfInquiryCooldownTurns < 0 ||
+                    (outSettings.speechRecognition.serverExecutable.empty() || outSettings.speechRecognition.serverHost != "127.0.0.1" ||
+                        outSettings.speechRecognition.serverPort < 1 || outSettings.speechRecognition.serverPort > 65535 ||
+                        outSettings.speechRecognition.serverPort == outSettings.llm.port ||
+                        outSettings.speechRecognition.serverPort == outSettings.embedding.port ||
+                        outSettings.speechRecognition.serverPort == outSettings.speech.qwenPort ||
+                        outSettings.speechRecognition.serverStartupTimeoutSeconds < 1 ||
+                        outSettings.speechRecognition.serverStartupTimeoutSeconds > 300 ||
+                        outSettings.speechRecognition.requestTimeoutSeconds < 10 ||
+                        outSettings.speechRecognition.requestTimeoutSeconds > 1800)) ||
+                outSettings.speechRecognition.sampleRate != 16000 || outSettings.speechRecognition.threads < 1 ||
+                outSettings.speechRecognition.threads > 64 || outSettings.speechRecognition.device.empty() ||
+                outSettings.speechRecognition.vadEnergyThreshold < 100 || outSettings.speechRecognition.vadEnergyThreshold > 30000 ||
+                outSettings.speechRecognition.vadSpeechFrames < 1 || outSettings.speechRecognition.vadSpeechFrames > 50 ||
+                outSettings.speechRecognition.vadSilenceMs < 200 || outSettings.speechRecognition.vadSilenceMs > 5000 ||
+                outSettings.speechRecognition.minimumUtteranceMs < 100 || outSettings.speechRecognition.minimumUtteranceMs > 5000 ||
+                outSettings.speechRecognition.maximumUtteranceSeconds < 2 || outSettings.speechRecognition.maximumUtteranceSeconds > 120 ||
+                outSettings.speechRecognition.followUpSeconds < 0 || outSettings.speechRecognition.followUpSeconds > 600 ||
+                (outSettings.speechRecognition.bRequireWakeWord && outSettings.speechRecognition.wakeWords.empty()))) ||
+        outSettings.presence.statePath.empty() || outSettings.presence.eventPath.empty() || outSettings.presence.inboxPath.empty() ||
+        outSettings.presence.outboxPath.empty() || outSettings.presence.adapterPollMs < 50 || outSettings.presence.adapterPollMs > 10000 ||
+        outSettings.presence.maxAdapterEventsPerMinute < 1 || outSettings.presence.maxAdapterEventsPerMinute > 600 ||
+        outSettings.presence.maxAdapterTextCharacters < 64 || outSettings.presence.maxAdapterTextCharacters > 20000 ||
+        outSettings.presence.maxAvatarEventBytes < 65536 || outSettings.presence.maxAvatarEventBytes > 1073741824 ||
+        outSettings.presence.rememberedAdapterIds < 16 || outSettings.presence.rememberedAdapterIds > 100000 ||
+        outSettings.presence.publicContextTurns < 0 || outSettings.presence.publicContextTurns > 40 ||
+        outSettings.presence.streamReplyCooldownSeconds < 0 || outSettings.presence.streamReplyCooldownSeconds > 3600 ||
+        outSettings.presence.allowedAdapters.empty() || outSettings.resources.reserveLogicalCores < 0 ||
+        outSettings.resources.reserveLogicalCores > 64 || outSettings.resources.minimumFreeRamMiB < 1024 ||
+        outSettings.resources.minimumFreeRamMiB > 262144 || outSettings.resources.llamaPromptCacheMiB < 0 ||
+        outSettings.resources.llamaPromptCacheMiB > 65536 || outSettings.resources.sqliteCacheMiB < 0 ||
+        outSettings.resources.sqliteCacheMiB > 2048 || outSettings.resources.gpuReserveMiB < 256 ||
+        outSettings.resources.gpuReserveMiB > 32768 || outSettings.resources.usageSampleSeconds < 0 ||
+        outSettings.resources.usageSampleSeconds > 3600 || outSettings.conversation.maxSessions < 1 ||
+        outSettings.conversation.maxSessions > 10000 || outSettings.conversation.maxTurnsPerSession < 1 ||
+        outSettings.conversation.maxTurnsPerSession > 100000 || outSettings.conversation.maxTurnCharacters < 256 ||
+        outSettings.conversation.maxTurnCharacters > 1000000 || outSettings.conversation.restoreTurns < 0 ||
+        outSettings.conversation.restoreTurns > 40 || outSettings.conversation.selfInquiryCooldownTurns < 0 ||
         outSettings.conversation.selfInquiryCooldownTurns > 200 ||
-        (outSettings.conversation.selfInquiryScope != "hard" &&
-         outSettings.conversation.selfInquiryScope != "questions") ||
-        (outSettings.conversation.deliberation != "native" &&
-         outSettings.conversation.deliberation != "selfInquiry") ||
-        (outSettings.conversation.delegation != "off" &&
-         outSettings.conversation.delegation != "on_request" &&
-         outSettings.conversation.delegation != "auto") ||
-        outSettings.responseFilter.aiMaxReviewTokens < 64 ||
-        outSettings.responseFilter.aiMaxReviewTokens > 512 ||
-        outSettings.responseFilter.maxReplyCharacters < 256 ||
-        outSettings.responseFilter.maxReplyCharacters > 100000 ||
-        outSettings.image.port < 1 || outSettings.image.port > 65535 ||
-        outSettings.image.steps < 1 || outSettings.image.steps > 100 ||
-        outSettings.image.width < 256 || outSettings.image.width > 1024 ||
-        outSettings.image.height < 256 || outSettings.image.height > 1024 ||
-        outSettings.image.minimumFreeVramMiB < 0 || outSettings.image.minimumFreeVramMiB > 131072 ||
-        outSettings.image.gpuReserveMiB < 0 || outSettings.image.gpuReserveMiB > 131072 ||
-        outSettings.image.cpuThreads < 1 || outSettings.image.cpuThreads > 256 ||
-        outSettings.image.seed < -1 ||
-        outSettings.image.host.empty() || outSettings.image.model.empty() ||
-        !IsDeviceSelector(outSettings.image.device, true) ||
-        outSettings.resources.chat.empty() ||
-        outSettings.resources.voice.empty() ||
-        outSettings.resources.speechRecognition.empty() ||
-        outSettings.resources.embeddings.empty() ||
-        !IsDeviceSelector(outSettings.resources.chat, false) ||
-        !IsDeviceSelector(outSettings.resources.voice, true) ||
-        !IsDeviceSelector(outSettings.resources.speechRecognition, true) ||
-        !IsDeviceSelector(outSettings.resources.embeddings, false) ||
-        !IsDeviceSelector(outSettings.speechRecognition.device, true) ||
-        outSettings.vision.maxResponseTokens < 64 ||
-        outSettings.vision.maxResponseTokens > 4096 ||
-        outSettings.vision.awarenessDebounceMs < 250 ||
-        outSettings.vision.awarenessDebounceMs > 60000 ||
-        outSettings.vision.awarenessMinimumIntervalMs < 1000 ||
-        outSettings.vision.awarenessMinimumIntervalMs > 3600000 ||
-        outSettings.vision.awarenessRefreshSeconds < 10 ||
-        outSettings.vision.awarenessRefreshSeconds > 3600 ||
-        outSettings.vision.awarenessMaxResponseTokens < 64 ||
-        outSettings.vision.awarenessMaxResponseTokens > 512 ||
-        outSettings.vision.resolutionConfidence < 0.5 ||
-        outSettings.vision.resolutionConfidence > 1.0 ||
-        outSettings.vision.minimumNameAgreement < 0.1 ||
-        outSettings.vision.minimumNameAgreement > 1.0 ||
-        outSettings.vision.ambiguityMargin < 0.0 ||
-        outSettings.vision.ambiguityMargin > 0.5 ||
-        outSettings.vision.maxResolverElements < 25 ||
-        outSettings.vision.maxResolverElements > 5000 ||
-        outSettings.inputArbiter.mergeWindowMs < 0 ||
-        outSettings.inputArbiter.mergeWindowMs > 10000 ||
-        outSettings.inputArbiter.punctuatedMergeWindowMs < 0 ||
-        outSettings.inputArbiter.punctuatedMergeWindowMs > 10000 ||
-        outSettings.inputArbiter.minimumMeaningfulCharacters < 1 ||
-        outSettings.inputArbiter.minimumMeaningfulCharacters > 64 ||
-        outSettings.inputArbiter.maxQueuedInputs < 1 ||
-        outSettings.inputArbiter.maxQueuedInputs > 64 ||
+        (outSettings.conversation.selfInquiryScope != "hard" && outSettings.conversation.selfInquiryScope != "questions") ||
+        (outSettings.conversation.deliberation != "native" && outSettings.conversation.deliberation != "selfInquiry") ||
+        (outSettings.conversation.delegation != "off" && outSettings.conversation.delegation != "on_request" &&
+            outSettings.conversation.delegation != "auto") ||
+        outSettings.responseFilter.aiMaxReviewTokens < 64 || outSettings.responseFilter.aiMaxReviewTokens > 512 ||
+        outSettings.responseFilter.maxReplyCharacters < 256 || outSettings.responseFilter.maxReplyCharacters > 100000 ||
+        outSettings.image.port < 1 || outSettings.image.port > 65535 || outSettings.image.steps < 1 || outSettings.image.steps > 100 ||
+        outSettings.image.width < 256 || outSettings.image.width > 1024 || outSettings.image.height < 256 ||
+        outSettings.image.height > 1024 || outSettings.image.minimumFreeVramMiB < 0 || outSettings.image.minimumFreeVramMiB > 131072 ||
+        outSettings.image.gpuReserveMiB < 0 || outSettings.image.gpuReserveMiB > 131072 || outSettings.image.cpuThreads < 1 ||
+        outSettings.image.cpuThreads > 256 || outSettings.image.seed < -1 || outSettings.image.host.empty() ||
+        outSettings.image.model.empty() || !IsDeviceSelector(outSettings.image.device, true) || outSettings.resources.chat.empty() ||
+        outSettings.resources.voice.empty() || outSettings.resources.speechRecognition.empty() ||
+        outSettings.resources.embeddings.empty() || !IsDeviceSelector(outSettings.resources.chat, false) ||
+        !IsDeviceSelector(outSettings.resources.voice, true) || !IsDeviceSelector(outSettings.resources.speechRecognition, true) ||
+        !IsDeviceSelector(outSettings.resources.embeddings, false) || !IsDeviceSelector(outSettings.speechRecognition.device, true) ||
+        outSettings.vision.maxResponseTokens < 64 || outSettings.vision.maxResponseTokens > 4096 ||
+        outSettings.vision.awarenessDebounceMs < 250 || outSettings.vision.awarenessDebounceMs > 60000 ||
+        outSettings.vision.awarenessMinimumIntervalMs < 1000 || outSettings.vision.awarenessMinimumIntervalMs > 3600000 ||
+        outSettings.vision.awarenessRefreshSeconds < 10 || outSettings.vision.awarenessRefreshSeconds > 3600 ||
+        outSettings.vision.awarenessMaxResponseTokens < 64 || outSettings.vision.awarenessMaxResponseTokens > 512 ||
+        outSettings.vision.resolutionConfidence < 0.5 || outSettings.vision.resolutionConfidence > 1.0 ||
+        outSettings.vision.minimumNameAgreement < 0.1 || outSettings.vision.minimumNameAgreement > 1.0 ||
+        outSettings.vision.ambiguityMargin < 0.0 || outSettings.vision.ambiguityMargin > 0.5 ||
+        outSettings.vision.maxResolverElements < 25 || outSettings.vision.maxResolverElements > 5000 ||
+        outSettings.inputArbiter.mergeWindowMs < 0 || outSettings.inputArbiter.mergeWindowMs > 10000 ||
+        outSettings.inputArbiter.punctuatedMergeWindowMs < 0 || outSettings.inputArbiter.punctuatedMergeWindowMs > 10000 ||
+        outSettings.inputArbiter.minimumMeaningfulCharacters < 1 || outSettings.inputArbiter.minimumMeaningfulCharacters > 64 ||
+        outSettings.inputArbiter.maxQueuedInputs < 1 || outSettings.inputArbiter.maxQueuedInputs > 64 ||
         // Fails closed like every other section: a config that would observe faster than
         // a human can switch windows is rejected rather than quietly clamped into
         // something reasonable.
-        outSettings.perception.minimumEventIntervalMs < 100 ||
-        outSettings.perception.minimumEventIntervalMs > 60000 ||
-        outSettings.perception.maxObservationsPerMinute < 1 ||
-        outSettings.perception.maxObservationsPerMinute > 600 ||
+        outSettings.perception.minimumEventIntervalMs < 100 || outSettings.perception.minimumEventIntervalMs > 60000 ||
+        outSettings.perception.maxObservationsPerMinute < 1 || outSettings.perception.maxObservationsPerMinute > 600 ||
         // Config can only extend the deny lists, never shorten them, so this cannot fire
         // from a settings file. It guards the built-in defaults themselves: if those are
         // ever emptied in code, perception must refuse to start rather than watch
         // everything.
         (outSettings.perception.bEnabled &&
-            (outSettings.perception.excludedApplications.empty() ||
-                outSettings.perception.excludedTitleFragments.empty())) ||
+            (outSettings.perception.excludedApplications.empty() || outSettings.perception.excludedTitleFragments.empty())) ||
         // Speaking first fails closed too. A confidence floor at zero or an unbounded
         // hourly rate would turn "may occasionally offer something" into a nuisance, and
         // a config typo should not be the thing that decides that.
-        outSettings.initiative.minimumConfidence < 0.1f ||
-        outSettings.initiative.minimumConfidence > 1.0f ||
-        outSettings.initiative.maxUtterancesPerHour < 1 ||
-        outSettings.initiative.maxUtterancesPerHour > 30 ||
-        outSettings.initiative.cooldownSeconds < 30 ||
-        outSettings.initiative.quietInputSeconds < 1 ||
-        outSettings.initiative.curiosityCheckSeconds < 5 ||
-        outSettings.initiative.curiosityCheckSeconds > 3600 ||
-        outSettings.initiative.autonomousQuietSeconds < 5 ||
-        outSettings.initiative.autonomousQuietSeconds > 3600 ||
-        outSettings.initiative.curiosityTopicCooldownMinutes < 10 ||
-        outSettings.initiative.curiosityTopicCooldownMinutes > 10080 ||
-        outSettings.initiative.focusSessionMinutes < 2 ||
-        outSettings.initiative.focusSessionMinutes > 240 ||
-        outSettings.initiative.returnAfterMinutes < 2 ||
-        outSettings.initiative.returnAfterMinutes > 1440 ||
-        outSettings.initiative.contextSwitchWindowSeconds < 60 ||
-        outSettings.initiative.contextSwitchWindowSeconds > 3600 ||
-        outSettings.initiative.contextSwitchCount < 4 ||
-        outSettings.initiative.contextSwitchCount > 30 ||
-        outSettings.initiative.cueMaxAgeMinutes < 1 ||
-        outSettings.initiative.cueMaxAgeMinutes > 60 ||
-        outSettings.initiative.minimumPrecision < 0.0f ||
-        outSettings.initiative.minimumPrecision > 1.0f ||
-        outSettings.bargeIn.energyThreshold < 100 ||
-        outSettings.bargeIn.energyThreshold > 30000 ||
-        outSettings.bargeIn.consecutiveFramesRequired < 1 ||
-        outSettings.bargeIn.consecutiveFramesRequired > 200 ||
+        outSettings.initiative.minimumConfidence < 0.1f || outSettings.initiative.minimumConfidence > 1.0f ||
+        outSettings.initiative.maxUtterancesPerHour < 1 || outSettings.initiative.maxUtterancesPerHour > 30 ||
+        outSettings.initiative.cooldownSeconds < 30 || outSettings.initiative.quietInputSeconds < 1 ||
+        outSettings.initiative.curiosityCheckSeconds < 5 || outSettings.initiative.curiosityCheckSeconds > 3600 ||
+        outSettings.initiative.autonomousQuietSeconds < 5 || outSettings.initiative.autonomousQuietSeconds > 3600 ||
+        outSettings.initiative.curiosityTopicCooldownMinutes < 10 || outSettings.initiative.curiosityTopicCooldownMinutes > 10080 ||
+        outSettings.initiative.focusSessionMinutes < 2 || outSettings.initiative.focusSessionMinutes > 240 ||
+        outSettings.initiative.returnAfterMinutes < 2 || outSettings.initiative.returnAfterMinutes > 1440 ||
+        outSettings.initiative.contextSwitchWindowSeconds < 60 || outSettings.initiative.contextSwitchWindowSeconds > 3600 ||
+        outSettings.initiative.contextSwitchCount < 4 || outSettings.initiative.contextSwitchCount > 30 ||
+        outSettings.initiative.cueMaxAgeMinutes < 1 || outSettings.initiative.cueMaxAgeMinutes > 60 ||
+        outSettings.initiative.minimumPrecision < 0.0f || outSettings.initiative.minimumPrecision > 1.0f ||
+        outSettings.bargeIn.energyThreshold < 100 || outSettings.bargeIn.energyThreshold > 30000 ||
+        outSettings.bargeIn.consecutiveFramesRequired < 1 || outSettings.bargeIn.consecutiveFramesRequired > 200 ||
         // Below 1.0 the adaptive threshold would sit under the measured echo, which is
         // the configuration that makes Revia interrupt herself.
-        outSettings.bargeIn.echoMarginMultiplier < 1.2f ||
-        outSettings.bargeIn.echoMarginMultiplier > 20.0f ||
-        outSettings.bargeIn.startupGraceMs < 200 ||
-        outSettings.bargeIn.startupGraceMs > 10000)
+        outSettings.bargeIn.echoMarginMultiplier < 1.2f || outSettings.bargeIn.echoMarginMultiplier > 20.0f ||
+        outSettings.bargeIn.startupGraceMs < 200 || outSettings.bargeIn.startupGraceMs > 10000)
     {
         return false;
     }

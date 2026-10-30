@@ -22,6 +22,7 @@
 #include "Speech/speechSettings.h"
 #include "Vision/visionSettings.h"
 #include "Visual/imageSettings.h"
+#include "Visual/videoSettings.h"
 #include <string>
 
 struct appSettings
@@ -46,6 +47,7 @@ struct appSettings
     conversationSettings conversation;
     responseFilterSettings responseFilter;
     imageSettings image;
+    videoSettings video;
     inputArbiterSettings inputArbiter;
     computerControlSettings computerControl;
     mcpSettings mcp;

@@ -69,6 +69,11 @@ void ToolLoop::SetUnavailableHandler(UnavailableHandler handler)
     unavailable = std::move(handler);
 }
 
+void ToolLoop::SetGeneratedMediaHandler(GeneratedMediaHandler handler)
+{
+    generatedMedia = std::move(handler);
+}
+
 void ToolLoop::SetAdmission(std::function<bool()> inputAdmission)
 {
     admission = std::move(inputAdmission);
@@ -236,6 +241,8 @@ std::vector<llm::ToolResult> ToolLoop::Execute(
         const auto& outcome = *prepared[index].outcome;
         if (prepared[index].ran)
             ++executed;
+        if (prepared[index].ran && outcome.succeeded && !outcome.generatedMediaReferences.empty() && generatedMedia)
+            generatedMedia(outcome.generatedMediaReferences);
         const std::size_t remaining = limits.maxTranscriptBytes > transcriptBytes ? limits.maxTranscriptBytes - transcriptBytes : 0;
         const std::size_t allowance = std::min(limits.maxResultBytes, remaining);
         std::string content = allowance < MinimumUsefulResultBytes

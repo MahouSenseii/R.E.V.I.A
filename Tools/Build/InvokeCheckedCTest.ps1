@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$BuildDirectory,
     [Parameter(Mandatory = $true)][string]$EvidenceDirectory,
     [string]$ExpectedInventory = (Join-Path $PSScriptRoot 'ctest-windows-expected.txt'),
-    [int]$TimeoutSeconds = 600
+    [int]$TimeoutSeconds = 600,
+    [switch]$AllowOptionalVideoPrerequisites
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'FileHash.ps1')
@@ -19,6 +20,7 @@ $expected = @()
 $executed = @()
 $skipped = @()
 $failed = @()
+$approvedPrereqSkips = @()
 $diagnostic = ''
 try
 {
@@ -32,7 +34,7 @@ try
     $discovered = @($inventory.tests | ForEach-Object { $_.name })
     if ($discovered.Count -eq 0) { throw 'CTest discovered zero tests.' }
     $difference = @(Compare-Object -ReferenceObject ($expected | Sort-Object) -DifferenceObject ($discovered | Sort-Object) -CaseSensitive)
-    if ($difference.Count -gt 0) { $difference | ConvertTo-Json | Set-Content (Join-Path $evidencePath 'inventory-difference.json'); throw 'Discovered tests do not match the complete expected inventory.' }
+    if ($difference.Count -gt 0 -or $discovered.Count -ne $expected.Count) { $difference | ConvertTo-Json | Set-Content (Join-Path $evidencePath 'inventory-difference.json'); throw 'Discovered tests do not match the complete expected inventory.' }
     $junitPath = Join-Path $evidencePath 'ctest.junit.xml'
     $ErrorActionPreference = 'Continue'
     & ctest --test-dir $buildPath --output-on-failure --no-tests=error --timeout $TimeoutSeconds --output-junit $junitPath 2>&1 | Tee-Object (Join-Path $evidencePath 'ctest.log')
@@ -45,10 +47,35 @@ try
     $executed = @($cases | Where-Object { -not $_.SelectSingleNode('skipped') -and $_.status -notin @('disabled', 'notrun') } | ForEach-Object { $_.name })
     $skipped = @($cases | Where-Object { $_.SelectSingleNode('skipped') -or $_.status -in @('disabled', 'notrun') } | ForEach-Object { $_.name })
     $failed = @($cases | Where-Object { $_.SelectSingleNode('failure') -or $_.SelectSingleNode('error') } | ForEach-Object { $_.name })
+    if ($AllowOptionalVideoPrerequisites)
+    {
+        $missingTools = 'Short-video support needs the installed local FFmpeg and ffprobe executables in ThirdParty/ffmpeg/bin.'
+        $approvedReasons = @{
+            'ReviaVideoDecoderTests' = @(('SKIP: Actual video decoder checks require local FFmpeg/ffprobe. ' + $missingTools), 'SKIP: Actual video decoder fixtures require the CPU libopenh264 or libx264 encoder; neither is installed.')
+            'Revia.VideoPreview' = @(('SKIP: Preview lifetime/admission checks passed; actual playback requires local FFmpeg/ffprobe. ' + $missingTools), 'SKIP: Preview lifetime/admission checks passed; the actual fixture requires CPU libopenh264 or libx264.')
+        }
+        foreach ($case in $cases)
+        {
+            if ($case.name -cnotin @('ReviaVideoDecoderTests', 'Revia.VideoPreview')) { continue }
+            $skip = $case.SelectSingleNode('skipped')
+            # CTest uses "notrun" for an executed return-code skip; its explicit marker distinguishes that from disabled checks.
+            if (-not $skip -or $case.status -cne 'notrun' -or $skip.GetAttribute('message') -cne 'SKIP_RETURN_CODE=77' -or $case.SelectSingleNode('failure') -or $case.SelectSingleNode('error')) { continue }
+            $discovery = @($inventory.tests | Where-Object { $_.name -ceq $case.name })
+            if ($discovery.Count -ne 1) { continue }
+            $skipCode = @($discovery[0].properties | Where-Object { $_.name -ceq 'SKIP_RETURN_CODE' })
+            $disabled = @($discovery[0].properties | Where-Object { $_.name -ceq 'DISABLED' -and $_.value -ne $false })
+            if ($skipCode.Count -ne 1 -or [string]$skipCode[0].value -cne '77' -or $disabled.Count -ne 0) { continue }
+            $output = [string]$case.SelectSingleNode('system-out').InnerText
+            $reason = $output.TrimEnd([char[]]"`r`n")
+            if ($reason -cnotin $approvedReasons[$case.name]) { continue }
+            $approvedPrereqSkips += [ordered]@{ name = $case.name; skipReturnCode = 77; reason = $reason }
+        }
+    }
     $resultDifference = @(Compare-Object -ReferenceObject ($expected | Sort-Object) -DifferenceObject (@($cases | ForEach-Object { $_.name }) | Sort-Object) -CaseSensitive)
-    if ($resultDifference.Count -gt 0 -or $executed.Count -eq 0 -or $skipped.Count -gt 0) { throw 'Executed JUnit inventory is incomplete or contains skipped tests.' }
+    if ($resultDifference.Count -gt 0 -or $cases.Count -ne $expected.Count -or $executed.Count -eq 0 -or $skipped.Count -ne $approvedPrereqSkips.Count) { throw 'Executed JUnit inventory is incomplete or contains unapproved skipped tests.' }
     if ($ctestExit -ne 0 -or $failed.Count -gt 0) { throw "CTest failed: exit=$ctestExit failed=$($failed.Count)." }
     $validationExit = 0
+    Write-Output "CTest inventory: $($discovered.Count) discovered, $($executed.Count) executed, $($approvedPrereqSkips.Count) optional video prerequisite skips (unverified), $($failed.Count) failed."
 }
 catch
 {
@@ -101,6 +128,6 @@ finally
         $diagnostic = ($diagnostic + ' Source/build identity: ' + $_.Exception.Message).Trim()
         Write-Error $diagnostic -ErrorAction Continue
     }
-    [ordered]@{ buildDirectory = $buildPath; startedUtc = $started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; expectedCount = $expected.Count; discoveredCount = $discovered.Count; executedCount = $executed.Count; skippedCount = $skipped.Count; failedCount = $failed.Count; discoveryExitCode = $discoveryExit; ctestExitCode = $ctestExit; identityTrusted = $identityTrusted; identityExitCodes = $identityExits; validationExitCode = $validationExit; diagnostic = $diagnostic; executed = $executed; skipped = $skipped; failed = $failed } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $evidencePath 'test-result.json')
+    [ordered]@{ buildDirectory = $buildPath; startedUtc = $started.ToString('o'); finishedUtc = [DateTime]::UtcNow.ToString('o'); elapsedSeconds = $watch.Elapsed.TotalSeconds; expectedCount = $expected.Count; discoveredCount = $discovered.Count; executedCount = $executed.Count; skippedCount = $skipped.Count; failedCount = $failed.Count; allowOptionalVideoPrerequisites = [bool]$AllowOptionalVideoPrerequisites; unverifiedOptionalVideoCount = $approvedPrereqSkips.Count; approvedPrereqSkips = $approvedPrereqSkips; discoveryExitCode = $discoveryExit; ctestExitCode = $ctestExit; identityTrusted = $identityTrusted; identityExitCodes = $identityExits; validationExitCode = $validationExit; diagnostic = $diagnostic; executed = $executed; skipped = $skipped; failed = $failed } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $evidencePath 'test-result.json')
 }
 exit $validationExit

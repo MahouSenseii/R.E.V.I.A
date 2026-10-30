@@ -335,14 +335,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:native --prefix Tools/Presence/WebDemo 2>&1 | Tee-Object build/ci-evidence/native-relay.log
           exit $LASTEXITCODE
-      - name: Execute the complete expected CTest inventory
+      - name: Check the complete CTest inventory and report optional video prerequisites
         if: ${{ !cancelled() && steps.native_build.conclusion == 'success' }}
         timeout-minutes: 15
         shell: pwsh
         env:
           QT_QPA_PLATFORM: windows
         run: |
-          ./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/ci -EvidenceDirectory build/ci-evidence/tests
+          ./Tools/Build/InvokeCheckedCTest.ps1 -BuildDirectory build/ci -EvidenceDirectory build/ci-evidence/tests -AllowOptionalVideoPrerequisites
           exit $LASTEXITCODE
       - name: Retain source, build logs, resources, inventory and JUnit
         if: always()

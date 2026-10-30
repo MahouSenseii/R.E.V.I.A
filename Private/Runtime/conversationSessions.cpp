@@ -64,7 +64,8 @@ std::vector<memory::ArchivedTurn> ReviaSession::ConversationTranscript(const std
         outError = "That conversation is no longer in the archive.";
         return {};
     }
-    return conversationArchive.LoadSession(sessionId, static_cast<std::size_t>(std::clamp(settings.conversation.maxTurnsPerSession, 1, 5000)));
+    return conversationArchive.LoadSession(
+        sessionId, static_cast<std::size_t>(std::clamp(settings.conversation.maxTurnsPerSession, 1, 5000)));
 }
 
 bool ReviaSession::ExportConversation(const std::string& sessionId, const bool json, std::string& outText, std::string& outError) const
@@ -75,7 +76,8 @@ bool ReviaSession::ExportConversation(const std::string& sessionId, const bool j
         return false;
     memory::ArchivedSession described;
     described.id = sessionId;
-    for (const memory::ArchivedSession& session : conversationArchive.RecentSessions(static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions))))
+    for (const memory::ArchivedSession& session :
+        conversationArchive.RecentSessions(static_cast<std::size_t>(std::max(1, settings.conversation.maxSessions))))
         if (session.id == sessionId)
             described = session;
     outText = json ? memory::RenderTranscriptJson(described, turns, DisplayName())
@@ -174,7 +176,11 @@ bool ReviaSession::ContinueConversation(const std::string& sessionId, std::strin
     }
     std::vector<conversationMessage> restored;
     for (const auto& turn : tail)
-        restored.push_back({turn.role, turn.content, turn.scope.participantId, turn.scope});
+    {
+        conversationMessage message{turn.role, turn.content, turn.scope.participantId, turn.scope};
+        message.mediaReferences = turn.mediaReferences;
+        restored.push_back(std::move(message));
+    }
     conversationRuntime.ResetParticipantContinuity();
     const int wanted = settings.conversation.restoreTurns > 0 ? settings.conversation.restoreTurns : 12;
     context.RestoreMessages(restored, static_cast<std::size_t>(wanted));
@@ -248,28 +254,37 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
 
 void ReviaSession::RememberExchange(const agents::InputBatch& batch, const SessionResult& result, const bool privateContext)
 {
-    // Only a delivered conversational reply can be regenerated. Commands, drawings and
-    // refusals never reach here with an assistant reply, so they leave nothing to retract.
-    if (!result.succeeded || !result.fromAssistant || result.text.empty())
-        return;
     RetractableExchange exchange;
     exchange.privateContext = privateContext;
     exchange.audienceRevision = batch.context.audience.revision;
     exchange.participantId = batch.context.participantId;
     exchange.input = batch.text;
+    exchange.conversationEpoch = conversationEpoch.load();
     if (privateContext)
     {
         // Read back from the context itself, which may have bounded either message, so
         // the retraction later compares against exactly what is stored.
         const std::vector<conversationMessage> messages = context.GetRecentMessages();
-        if (messages.size() < 2 || messages[messages.size() - 2].role != "user" || messages.back().role != "assistant")
+        const bool answered = result.succeeded && result.fromAssistant && !result.text.empty() && messages.size() >= 2 &&
+                              messages[messages.size() - 2].role == "user" && messages.back().role == "assistant";
+        const bool failed = !result.succeeded && !messages.empty() && messages.back().role == "user";
+        if (!answered && !failed)
             return;
-        exchange.contextUser = messages[messages.size() - 2].content;
-        exchange.contextAssistant = messages.back().content;
-        exchange.archivedAssistant = result.text;
+        const auto& user = messages[messages.size() - (answered ? 2 : 1)];
+        exchange.contextUser = user.content;
+        exchange.mediaReferences = user.mediaReferences;
+        exchange.hasAssistant = answered;
+        if (answered)
+        {
+            exchange.contextAssistant = messages.back().content;
+            exchange.archivedAssistant = result.text;
+            exchange.generatedMediaReferences = messages.back().mediaReferences;
+        }
     }
     else
     {
+        if (!result.succeeded || !result.fromAssistant || result.text.empty())
+            return;
         exchange.contextUser = batch.text;
         exchange.contextAssistant = result.text;
     }
@@ -309,31 +324,42 @@ SessionResult ReviaSession::RetryLastExchange(const std::string& replacement, bo
     if (!started.load())
         return refuse("Revia is not ready yet.");
     std::string input;
+    std::vector<conversationMediaReference> replayMedia;
+    std::function<bool()> originAdmission;
     {
         std::lock_guard operationLock(operationMutex);
+        DrainForgottenMedia();
         if (!lastExchange)
             return refuse("There is no reply to replace. Only Revia's latest conversational reply can be regenerated or edited.");
         const RetractableExchange exchange = *lastExchange;
         // The same capture Submit makes, so the replacement runs for the same audience
         // or not at all.
         const agents::InputContext current = CaptureInputContext(agents::InputSource::Typed);
-        if (current.audience.revision != exchange.audienceRevision || current.participantId != exchange.participantId ||
+        if (conversationEpoch.load() != exchange.conversationEpoch || current.audience.revision != exchange.audienceRevision ||
+            current.participantId != exchange.participantId ||
             (current.audience.kind == identity::AudienceKind::Private) != exchange.privateContext)
             return refuse("The audience changed since that reply, so it was left as it was.");
         if (exchange.privateContext)
         {
             const std::vector<conversationMessage> messages = context.GetRecentMessages();
-            if (messages.size() < 2 || messages.back().role != "assistant" || messages.back().content != exchange.contextAssistant ||
-                messages[messages.size() - 2].role != "user" || messages[messages.size() - 2].content != exchange.contextUser)
+            const auto required = exchange.hasAssistant ? 2u : 1u;
+            if (messages.size() < required ||
+                (exchange.hasAssistant && (messages.back().role != "assistant" || messages.back().content != exchange.contextAssistant ||
+                                              messages.back().mediaReferences != exchange.generatedMediaReferences)) ||
+                messages[messages.size() - required].role != "user" ||
+                messages[messages.size() - required].content != exchange.contextUser ||
+                messages[messages.size() - required].mediaReferences != exchange.mediaReferences)
                 return refuse("The conversation has moved on since that reply, so it was left as it was.");
-            (void)context.RemoveLastMessageIf("assistant", exchange.contextAssistant);
+            if (exchange.hasAssistant)
+                (void)context.RemoveLastMessageIf("assistant", exchange.contextAssistant);
             (void)context.RemoveLastMessageIf("user", exchange.contextUser);
             const std::string archiveId = CurrentConversationId();
             if (!archiveId.empty())
             {
                 // Each store retracts only its own exact newest turn. One the archive
                 // withheld is simply not found, and nothing older is touched.
-                (void)conversationArchive.RemoveLastTurnIf(archiveId, "assistant", exchange.archivedAssistant);
+                if (exchange.hasAssistant)
+                    (void)conversationArchive.RemoveLastTurnIf(archiveId, "assistant", exchange.archivedAssistant);
                 (void)conversationArchive.RemoveLastTurnIf(archiveId, "user", exchange.input);
             }
         }
@@ -341,16 +367,23 @@ SessionResult ReviaSession::RetryLastExchange(const std::string& replacement, bo
         {
             std::lock_guard lock(audienceMutex);
             const std::size_t size = audienceHistory.size();
-            if (size < 2 || audienceHistory[size - 1].role != "assistant" || audienceHistory[size - 1].content != exchange.contextAssistant ||
-                audienceHistory[size - 2].role != "user" || audienceHistory[size - 2].content != exchange.contextUser)
+            if (size < 2 || audienceHistory[size - 1].role != "assistant" ||
+                audienceHistory[size - 1].content != exchange.contextAssistant || audienceHistory[size - 2].role != "user" ||
+                audienceHistory[size - 2].content != exchange.contextUser)
                 return refuse("The conversation has moved on since that reply, so it was left as it was.");
             audienceHistory.resize(size - 2);
         }
         lastExchange.reset();
         input = replacement.empty() ? exchange.input : replacement;
+        replayMedia = exchange.mediaReferences;
+        originAdmission = [this, current, epoch = exchange.conversationEpoch]()
+        {
+            return conversationEpoch.load() == epoch && InputContextCurrent(current) &&
+                   current.stamp.policyVersion == companionAuthority->Revision();
+        };
     }
     outRetracted = true;
-    return Submit(input, agents::InputSource::Typed);
+    return SubmitTurn(input, agents::InputSource::Typed, {}, std::move(replayMedia), std::move(originAdmission));
 }
 
 } // namespace revia::runtime

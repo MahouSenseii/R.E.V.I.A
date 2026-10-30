@@ -204,6 +204,39 @@ namespace
         return true;
     }
 
+    bool HasStructuredDataRows(const std::string& value)
+    {
+        std::istringstream lines(value);
+        std::size_t rows = 0;
+        for (std::string line; std::getline(lines, line);)
+        {
+            line = Trim(line);
+            if (line.empty())
+                continue;
+            const bool bullet = line.size() > 2 && (line.front() == '-' || line.front() == '*' || line.front() == '+') &&
+                                std::isspace(static_cast<unsigned char>(line[1])) != 0;
+            const bool table = line.front() == '|' && line.find('|', 1) != std::string::npos;
+            std::size_t numberEnd = 0;
+            while (numberEnd < line.size() && std::isdigit(static_cast<unsigned char>(line[numberEnd])) != 0)
+                ++numberEnd;
+            const bool numbered = numberEnd > 0 && numberEnd + 1 < line.size() && (line[numberEnd] == '.' || line[numberEnd] == ')') &&
+                                  std::isspace(static_cast<unsigned char>(line[numberEnd + 1])) != 0;
+            const std::size_t colon = line.find(':');
+            const bool field = colon > 0 && colon <= 64 &&
+                               std::any_of(line.begin(), line.begin() + static_cast<std::ptrdiff_t>(colon),
+                                   [](const unsigned char character) { return std::isalpha(character) != 0; }) &&
+                               std::all_of(line.begin(), line.begin() + static_cast<std::ptrdiff_t>(colon),
+                                   [](const unsigned char character)
+                                   {
+                                       return std::isalnum(character) != 0 || character == ' ' || character == '\t' || character == '_' ||
+                                              character == '-';
+                                   });
+            if ((bullet || table || numbered || field) && ++rows >= 2)
+                return true;
+        }
+        return false;
+    }
+
     std::vector<std::string> SplitSentences(const std::string& value)
     {
         std::vector<std::string> sentences;
@@ -211,14 +244,17 @@ namespace
         for (std::size_t index = 0; index < value.size(); ++index)
         {
             const char character = value[index];
-            if (character != '.' && character != '!' && character != '?' &&
-                character != '\n')
+            if (character != '.' && character != '!' && character != '?' && character != '\n')
             {
                 continue;
             }
-            while (index + 1 < value.size() &&
-                (value[index + 1] == '.' || value[index + 1] == '!' ||
-                 value[index + 1] == '?'))
+            if (character == '.' && index > 0 && index + 1 < value.size() &&
+                std::isdigit(static_cast<unsigned char>(value[index - 1])) != 0 &&
+                std::isdigit(static_cast<unsigned char>(value[index + 1])) != 0)
+            {
+                continue;
+            }
+            while (index + 1 < value.size() && (value[index + 1] == '.' || value[index + 1] == '!' || value[index + 1] == '?'))
             {
                 ++index;
             }
@@ -276,7 +312,8 @@ namespace
     std::string RemoveRedundantSentences(const std::string& value,
         const std::vector<conversationMessage>& context, const bool removeRecentAssistantReuse)
     {
-        if (value.find("```") != std::string::npos)
+        // Repeated fields can describe different samples; prose deduplication loses data.
+        if (value.find("```") != std::string::npos || HasStructuredDataRows(value))
         {
             return value;
         }
@@ -353,7 +390,7 @@ namespace
     {
         // Code and structured lists may intentionally repeat syntax. This repair is for
         // conversational prose, where a model can duplicate a whole decoded block.
-        if (value.find("```") != std::string::npos)
+        if (value.find("```") != std::string::npos || HasStructuredDataRows(value))
         {
             return value;
         }
@@ -562,16 +599,16 @@ bool ConversationStylePolicy::LooksLikeSocialGreeting(const std::string& input)
 bool ConversationStylePolicy::LooksLikeEmotionQuestion(const std::string& input)
 {
     const std::string normalized = NormalizeSentence(input);
-    constexpr std::string_view Signals[] = {
-        "would you feel", "how would you feel", "do you feel", "are you lonely",
-        "would you be sad", "feel sad", "feel lonely", "would you miss",
-        "how do you feel"
-    };
+    constexpr std::string_view QuestionOpenings[] = {"how does ", "how do ", "how did ", "how would "};
+    const auto feeling = normalized.find(" make you feel");
+    if (feeling != std::string::npos && (feeling + 14 == normalized.size() || normalized[feeling + 14] == ' ') &&
+        std::any_of(std::begin(QuestionOpenings), std::end(QuestionOpenings),
+            [&](const std::string_view opening) { return normalized.starts_with(opening); }))
+        return true;
+    constexpr std::string_view Signals[] = {"would you feel", "how would you feel", "do you feel", "are you lonely", "would you be sad",
+        "feel sad", "feel lonely", "would you miss", "how do you feel"};
     return std::any_of(std::begin(Signals), std::end(Signals),
-        [&normalized](const std::string_view signal)
-        {
-            return normalized.find(signal) != std::string::npos;
-        });
+        [&normalized](const std::string_view signal) { return normalized.find(signal) != std::string::npos; });
 }
 
 bool ConversationStylePolicy::ContainsUnsupportedOperationalClaim(const std::string& reply)

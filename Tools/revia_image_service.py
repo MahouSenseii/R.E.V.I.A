@@ -17,6 +17,9 @@ import json
 import math
 import os
 import re
+import secrets
+import stat
+import io
 import sys
 import threading
 import time
@@ -34,6 +37,7 @@ class ImageRuntime:
         self.args = args
         self.lock = threading.RLock()
         self.pipeline: Any | None = None
+        self.image_pipeline: Any | None = None
         self.device = "cpu"
         self.device_name = "CPU"
         self.dtype_name = "float32"
@@ -129,9 +133,12 @@ class ImageRuntime:
             return self.describe()
 
     def validate_destination(self, payload: dict[str, Any]) -> Path:
-        prompt = str(payload.get("prompt", "")).strip()
-        if not prompt:
-            raise ValueError("A prompt is required.")
+        prompt = payload.get("prompt", "")
+        negative = payload.get("negativePrompt", "")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 8192:
+            raise ValueError("A nonempty prompt of at most 8192 bytes is required.")
+        if not isinstance(negative, str) or len(negative.encode("utf-8")) > 8192:
+            raise ValueError("The negative prompt must be a bounded string.")
         # Checked before the GPU is spent: a missing destination used to surface as a
         # bare KeyError only after the whole image had been generated.
         raw_output = payload.get("outputPath")
@@ -168,18 +175,132 @@ class ImageRuntime:
                 "negative_prompt": None if turbo else payload.get("negativePrompt") or None,
                 "width": width, "height": height}
 
-    def generate(self, payload: dict[str, Any], cancellation: threading.Event | None = None) -> dict[str, Any]:
-        output_path = self.validate_destination(payload)
+    def request_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mode = payload.get("mode", "text_to_image")
+        if mode not in ("text_to_image", "reference_to_image"):
+            raise ValueError("The image request mode is unsupported.")
         options = self.generation_options(payload)
+        strength = 0.0
+        if mode == "text_to_image":
+            if payload.get("source") is not None:
+                raise ValueError("A text-to-image request cannot discard a supplied source.")
+        else:
+            if self.model_id.lower().rstrip("/") not in ("stabilityai/sd-turbo", "stabilityai/sdxl-turbo"):
+                raise ValueError("Reference editing is currently supported only by the installed Turbo route.")
+            try:
+                strength = float(payload.get("strength", 0.5))
+            except (ValueError, TypeError, OverflowError) as error:
+                raise ValueError("Reference strength must be finite and between zero and one.") from error
+            if not math.isfinite(strength) or not 0 < strength < 1:
+                raise ValueError("Reference strength must be finite and between zero and one.")
+            while options["num_inference_steps"] < 4 and int(options["num_inference_steps"] * strength) < 1:
+                options["num_inference_steps"] += 1
+            if int(options["num_inference_steps"] * strength) < 1:
+                raise ValueError("This strength cannot perform a denoising step within the Turbo four-step limit.")
+        seed = payload.get("seed")
+        if seed is None:
+            seed = secrets.randbits(32)
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 0xffffffff:
+            raise ValueError("The selected seed must be an unsigned 32-bit integer.")
+        return {"mode": mode, "options": options, "strength": strength, "seed": seed,
+                "requestedSteps": max(1, min(int(payload.get("steps", self.args.steps)), 50))}
+
+    def source_path(self, payload: dict[str, Any], check_size: bool = True) -> Path:
+        source = payload.get("source")
+        job_id = payload.get("jobId")
+        root = getattr(self.args, "output_root", "")
+        if not isinstance(source, dict) or not isinstance(job_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,96}", job_id) or not root:
+            raise ValueError("A reference requires a bounded job-owned source snapshot.")
+        relative = f".inputs/{job_id}/source.bin"
+        if source.get("path") != relative:
+            raise ValueError("The source path must identify this job's fixed input snapshot.")
+        owned_root = Path(root).resolve()
+        path = owned_root / ".inputs" / job_id / "source.bin"
+        for part in (owned_root / ".inputs", path.parent, path):
+            information = part.lstat()
+            if stat.S_ISLNK(information.st_mode) or getattr(information, "st_file_attributes", 0) & 0x400:
+                raise ValueError("Reference source links and reparse points are not allowed.")
+        if not path.is_file() or not path.resolve().is_relative_to(owned_root) or (check_size and path.stat().st_size > 8 * 1024 * 1024):
+            raise ValueError("The source snapshot is not a bounded regular owned file.")
+        return path
+
+    def prepare_source(self, payload: dict[str, Any], options: dict[str, Any]):
+        from PIL import Image, ImageOps
+
+        path = self.source_path(payload)
+        source = payload["source"]
+        if not isinstance(source.get("id"), str) or not 0 < len(source["id"]) <= 128 or "\0" in source["id"]:
+            raise ValueError("The source identity is invalid.")
+        if not isinstance(source.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"]):
+            raise ValueError("The source digest is invalid.")
+        with path.open("rb") as stream:
+            data = stream.read(8 * 1024 * 1024 + 1)
+        if not data or len(data) > 8 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != source["sha256"]:
+            raise ValueError("The source bytes do not match their digest or size limit.")
+        with Image.open(io.BytesIO(data)) as decoded:
+            mime = {"PNG": "image/png", "JPEG": "image/jpeg"}.get(decoded.format)
+            if mime is None or source.get("mimeType") != mime or getattr(decoded, "n_frames", 1) != 1:
+                raise ValueError("The source must be a static PNG or JPEG with matching media type.")
+            if any(isinstance(source.get(key), bool) or not isinstance(source.get(key), int) for key in ("width", "height")):
+                raise ValueError("The source dimensions must be integers.")
+            if decoded.size != (source["width"], source["height"]) or min(decoded.size) < 1 or max(decoded.size) > 2048:
+                raise ValueError("The source dimensions do not match the bounded decoded pixels.")
+            decoded.load()
+            oriented = ImageOps.exif_transpose(decoded)
+            rgba = oriented.convert("RGBA")
+            flattened = Image.new("RGBA", rgba.size, (127, 127, 127, 255))
+            flattened.alpha_composite(rgba)
+            contained = ImageOps.contain(flattened.convert("RGB"), (options["width"], options["height"]), Image.Resampling.LANCZOS)
+            prepared = Image.new("RGB", (options["width"], options["height"]), (127, 127, 127))
+            prepared.paste(contained, ((prepared.width - contained.width) // 2, (prepared.height - contained.height) // 2))
+        return prepared, hashlib.sha256(prepared.tobytes()).hexdigest()
+
+    def cleanup_source(self, payload: dict[str, Any]) -> None:
+        if payload.get("mode", "text_to_image") != "reference_to_image":
+            return
+        try:
+            path = self.source_path(payload, check_size=False)
+        except (OSError, ValueError):
+            return
+        path.unlink(missing_ok=True)
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
+    def generate(self, payload: dict[str, Any], cancellation: threading.Event | None = None) -> dict[str, Any]:
+        result = None
+        try:
+            result = self._generate(payload, cancellation)
+            return result
+        finally:
+            try:
+                self.cleanup_source(payload)
+            except OSError:
+                if result is not None:
+                    Path(result["path"]).unlink(missing_ok=True)
+                raise
+
+    def _generate(self, payload: dict[str, Any], cancellation: threading.Event | None = None) -> dict[str, Any]:
+        output_path = self.validate_destination(payload)
+        plan = self.request_plan(payload)
+        options = plan["options"]
+        prepared = None
+        prepared_digest = ""
+        if plan["mode"] == "reference_to_image":
+            prepared, prepared_digest = self.prepare_source(payload, options)
         cancellation = cancellation or threading.Event()
         job_id = str(payload.get("jobId", ""))
+        denoising_steps = 0
 
         def check_cancel() -> None:
             if cancellation.is_set():
                 raise GenerationCancelled("Image generation was cancelled.")
 
         def step_end(_pipeline, step, _timestep, callback_kwargs):
+            nonlocal denoising_steps
             check_cancel()
+            denoising_steps += 1
             with self.jobs_lock:
                 if job_id in self.jobs:
                     self.jobs[job_id].update(state="generating", step=step + 1)
@@ -193,22 +314,34 @@ class ImageRuntime:
             check_cancel()
             import torch
 
-            generator = None
-            seed = payload.get("seed")
-            if seed is not None:
-                generator = torch.Generator(device="cpu").manual_seed(int(seed))
+            seed = plan["seed"]
+            generator = torch.Generator(device="cpu").manual_seed(seed)
+            pipeline = self.pipeline
+            inference_options = dict(options)
+            if prepared is not None:
+                if self.image_pipeline is None:
+                    from diffusers import AutoPipelineForImage2Image
+
+                    self.image_pipeline = AutoPipelineForImage2Image.from_pipe(self.pipeline)
+                pipeline = self.image_pipeline
+                inference_options.pop("width")
+                inference_options.pop("height")
+                inference_options.update(image=prepared, strength=plan["strength"])
 
             with self.jobs_lock:
                 if job_id in self.jobs:
                     self.jobs[job_id].update(state="generating", **state)
             started = time.monotonic()
-            result = self.pipeline(
+            result = pipeline(
                 prompt=str(payload["prompt"]).strip(),
                 generator=generator,
                 callback_on_step_end=step_end,
-                **options,
+                **inference_options,
             )
             check_cancel()
+            expected_steps = int(options["num_inference_steps"] * plan["strength"]) if prepared is not None else options["num_inference_steps"]
+            if denoising_steps != expected_steps or denoising_steps < 1:
+                raise ValueError("The provider did not perform the planned denoising steps.")
             elapsed = (time.monotonic() - started) * 1000.0
             peak_allocated = torch.cuda.max_memory_allocated(self.device) / (1024 * 1024) if self.device.startswith("cuda:") else 0.0
             peak_reserved = torch.cuda.max_memory_reserved(self.device) / (1024 * 1024) if self.device.startswith("cuda:") else 0.0
@@ -243,12 +376,24 @@ class ImageRuntime:
             "steps": options["num_inference_steps"],
             "width": options["width"],
             "height": options["height"],
+            "mode": plan["mode"], "provider": "local_diffusers", "pipeline": type(pipeline).__name__,
+            "variant": getattr(self.args, "variant", ""),
+            "requestedSteps": plan["requestedSteps"], "totalInferenceSteps": options["num_inference_steps"],
+            "denoisingSteps": denoising_steps,
+            "requestedStrength": plan["strength"], "effectiveStrength": plan["strength"],
+            "sourceId": payload["source"]["id"] if prepared is not None else "",
+            "sourceDigest": payload["source"]["sha256"] if prepared is not None else "",
+            "preparedSourceDigest": prepared_digest,
+            "sourcePreparation": "contain-pad-rgb-v1" if prepared is not None else "",
             **state,
         }
 
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.validate_destination(payload)
-        options = self.generation_options(payload)
+        plan = self.request_plan(payload)
+        options = plan["options"]
+        if plan["mode"] == "reference_to_image":
+            self.prepare_source(payload, options)
         job_id = payload.get("jobId", "")
         if not isinstance(job_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,96}", job_id):
             raise ValueError("A bounded unique jobId is required.")
@@ -265,7 +410,8 @@ class ImageRuntime:
             self.cancellations[job_id] = threading.Event()
             self.jobs[job_id] = {"ok": True, "jobId": job_id, "state": "loading", "step": 0,
                                  "steps": options["num_inference_steps"], "model": self.model_id}
-            threading.Thread(target=self._run_job, args=(dict(payload),), daemon=True).start()
+            admitted = dict(payload, seed=plan["seed"])
+            threading.Thread(target=self._run_job, args=(admitted,), daemon=True).start()
             return dict(self.jobs[job_id])
 
     def _run_job(self, payload: dict[str, Any]) -> None:
@@ -307,6 +453,7 @@ class ImageRuntime:
 
     def unload(self) -> dict[str, Any]:
         with self.lock:
+            self.image_pipeline = None
             self.pipeline = None
             gc.collect()
             try:

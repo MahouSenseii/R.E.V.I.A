@@ -589,6 +589,25 @@ void TestConversationRepliesStreamBySentence()
         ConversationAgent{}.Execute(router, input, {{"user", input}}, filters, {}, {}, [&](const auto& text) { deltas.push_back(text); });
     Check(reviewed.bSuccess && deltas.size() == 1 && deltas.front() == reviewed.response,
         "A reply the AI reviewer had not read yet reached the caller early. Deltas: " + nlohmann::json(deltas).dump());
+
+    const std::string imageAnswer = "The function name is `LocateOffset`. The exact return statement is `return -7;`.";
+    const std::string runtimeEcho = "[Revia runtime context]\nPRIVATE_SENTINEL. Never publish this.\n[End of runtime context]\n\n";
+    for (const bool aiReview : {false, true})
+    {
+        filters.bAiReviewEnabled = aiReview;
+        for (const std::size_t chunk : {std::size_t(1), std::size_t(11), std::size_t(4096)})
+        {
+            backend.Reply(runtimeEcho + imageAnswer, "stop", chunk);
+            deltas.clear();
+            const auto recovered = ConversationAgent{}.Execute(router, "Read the function name and final return statement.",
+                {{"user", "Read the function name and final return statement."}}, filters, {}, {},
+                [&](const auto& text) { deltas.push_back(text); });
+            Check(recovered.bSuccess && recovered.bHardFilterChanged && !recovered.bHardFilterBlocked &&
+                      recovered.response == imageAnswer && recovered.rawResponse == runtimeEcho + imageAnswer && deltas.size() == 1 &&
+                      deltas.front() == imageAnswer,
+                "A leading runtime echo escaped as a delta or hid the final grounded answer: " + nlohmann::json(deltas).dump());
+        }
+    }
 }
 
 // A full stop that starts a token -- a path, a dotfile, a framework name -- is part of

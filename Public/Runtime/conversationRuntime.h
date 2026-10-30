@@ -18,6 +18,7 @@
 #include "Intelligence/reflexRouter.h"
 #include "Evaluation/conversationEvaluation.h"
 #include "Memory/conversationRecall.h"
+#include "Perception/savedFileObservation.h"
 #include "Emotion/emotionRuntime.h"
 #include "Identity/preferenceState.h"
 #include "Identity/relationshipState.h"
@@ -88,6 +89,7 @@ public:
     using ScreenContextProvider = std::function<std::string()>;
     // Bounded saved-source evidence, revalidated by its owner before each read.
     using EditorContextProvider = std::function<std::string()>;
+    using SavedFileContextProvider = std::function<perception::SavedFileReference()>;
     // Reads the relationship for the current speaker.
     using RelationshipProvider = std::function<identity::RelationshipState()>;
     // Keeps appraisal and prompts aligned with current development.
@@ -145,6 +147,7 @@ public:
         bool documentsAvailable = false;
         bool remindersAvailable = false;
         bool imageGenerationEnabled = false;
+        std::function<void(const std::vector<conversationMediaReference>&)> discardGeneratedMedia;
         // Allowlisted tools from the owner's MCP servers, gated by the MCP manager.
         std::vector<agents::ChatTool> mcpTools;
         // The guest code tools, projected by the session from the guest permission and VM state.
@@ -177,6 +180,8 @@ public:
     // Set once at startup. Without it, chat still offers the runtime-owned tools.
     void SetChatToolProvider(ChatToolProvider provider);
     void SetEditorContextProvider(EditorContextProvider provider);
+    // The source owner supplies availability after authorization and revision checks.
+    void SetSavedFileContextProvider(SavedFileContextProvider provider);
     void ResetParticipantContinuity();
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
@@ -198,7 +203,8 @@ public:
         const identity::AudienceContext& audience, const identity::RelationshipState& relationship, const aiProfile& profile,
         bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::function<bool()> admission = {},
         const std::string& turnReference = {}, std::chrono::steady_clock::time_point acceptedAt = {},
-        const memory::MemoryScope& memoryScope = {}, std::vector<conversationImage> turnImages = {});
+        const memory::MemoryScope& memoryScope = {}, std::vector<conversationImage> turnImages = {},
+        std::vector<conversationMediaReference> mediaReferences = {}, bool imageReferenceRequested = false);
 
     // Guest overload: the caller owns an isolated router with PublicGuestProfile(),
     // never the desktop router. No instance state, provider, logger or event bus is
@@ -227,6 +233,10 @@ public:
     SessionResult StartConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile, bool llmAvailable,
         bool shouldSpeak, std::stop_token stopToken, std::uint64_t audienceRevision, std::function<bool()> admission, bool allowSilence,
         std::function<bool(const SessionResult&)> delivery);
+
+    SessionResult StartSavedSourceConversation(const std::string& cue, const std::string& evidence, const aiProfile& profile,
+        bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0,
+        std::function<bool()> admission = {}, std::function<bool(const SessionResult&)> delivery = {});
 
     SessionResult StartCuriosityConversation(const std::string& topic, const std::string& rationale, const std::string& researchGrounding,
         const aiProfile& profile, bool llmAvailable, bool shouldSpeak, std::stop_token stopToken = {}, std::uint64_t audienceRevision = 0,
@@ -266,6 +276,8 @@ private:
         bool allowSelfInquiry = true;
         bool includePrivateHistory = true;
         bool allowSilence = false;
+        bool imageReferenceTurn = false;
+        std::string nativeSourceReply;
         EvaluationPromptBlocks evaluationBlocks;
         std::optional<identity::RelationshipState> relationship;
         std::string instruction;
@@ -280,6 +292,10 @@ private:
         // What opened a proactive turn, for its trace. Empty means an initiative event.
         std::string proactiveTrace;
     };
+
+    SessionResult StartConversationImpl(const std::string& cue, const std::string& evidence, const aiProfile& profile,
+        bool llmAvailable, bool shouldSpeak, std::stop_token stopToken, std::uint64_t audienceRevision,
+        std::function<bool()> admission, bool allowSilence, std::function<bool(const SessionResult&)> delivery, bool nativeSource);
 
     // Canonical state and posture for replies, proactive openings and evaluation.
     // Event/research instructions extend it; audience policy controls private history.
@@ -360,7 +376,7 @@ private:
     InternetLookupHandler internetLookup;
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
-    EditorContextProvider editorContextProvider;
+    SavedFileContextProvider savedFileContextProvider;
     RelationshipProvider relationshipProvider;
     DevelopmentProvider developmentProvider;
     PreferenceProvider preferenceProvider;

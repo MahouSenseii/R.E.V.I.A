@@ -225,15 +225,15 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
     return routed;
 }
 
-responseOutput messageRouter::ReviewCode(const std::string& instructions,
-    const std::string& material, const std::string& schema, const std::stop_token stopToken) const
+responseOutput messageRouter::ReviewCode(const std::string& instructions, const std::string& material, const std::string& schema,
+    const std::stop_token stopToken, const revia::llm::CodeReviewPurpose purpose) const
 {
     // Held for the whole review, so the idle sweep cannot unload Expert mid-answer.
     revia::intelligence::ModelLifetimeCoordinator::Lease expertLease;
     const llmService* selected = &llm;
     revia::intelligence::IntelligenceTier tier = revia::intelligence::IntelligenceTier::Main;
     bool loadedForThisReview = false;
-    if (expertConfigured)
+    if (expertConfigured && purpose == revia::llm::CodeReviewPurpose::Development)
     {
         const bool managed = lifetime != nullptr &&
             lifetime->IsManaged(revia::intelligence::IntelligenceTier::Expert);
@@ -250,7 +250,7 @@ responseOutput messageRouter::ReviewCode(const std::string& instructions,
         }
     }
     residency.BeginInference(tier, "background");
-    responseOutput output = selected->GenerateCodeReview(instructions, material, schema, stopToken);
+    responseOutput output = selected->GenerateCodeReview(instructions, material, schema, stopToken, purpose);
     residency.EndInference(tier);
     // Brought up only for this review, so put straight back. Left to the idle grace, it
     // kept the GPU 95% full for five more minutes, and everything else she does on her
@@ -323,6 +323,15 @@ void messageRouter::SetReplyNote(std::string note)
     llm.SetReplyNote(note);
     if (fastConfigured) fastLlm.SetReplyNote(note);
     if (expertConfigured) expertLlm.SetReplyNote(std::move(note));
+}
+
+void messageRouter::SetSourceExplanation(const bool enabled)
+{
+    llm.SetSourceExplanation(enabled);
+    if (fastConfigured)
+        fastLlm.SetSourceExplanation(enabled);
+    if (expertConfigured)
+        expertLlm.SetSourceExplanation(enabled);
 }
 
 responseOutput messageRouter::PlanAction(const std::string& request) const

@@ -53,6 +53,11 @@ void llmService::SetReplyNote(std::string note)
     llamaCpp.SetReplyNote(std::move(note));
 }
 
+void llmService::SetSourceExplanation(const bool enabled)
+{
+    llamaCpp.SetSourceExplanation(enabled);
+}
+
 std::string llmService::RelatedMemories(
     const std::string& query, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
 {
@@ -365,8 +370,8 @@ responseOutput llmService::GenerateGoalPlan(const std::string& userRequest) cons
     return llamaCpp.GenerateGoalPlan(userRequest);
 }
 
-responseOutput llmService::GenerateCodeReview(const std::string& instructions,
-    const std::string& material, const std::string& schema, const std::stop_token stopToken) const
+responseOutput llmService::GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
+    const std::stop_token stopToken, const revia::llm::CodeReviewPurpose purpose) const
 {
     if (!bIsReady || backendType != llmBackendType::LLamaCpp)
     {
@@ -376,7 +381,7 @@ responseOutput llmService::GenerateCodeReview(const std::string& instructions,
         output.bShouldSpeak = false;
         return output;
     }
-    return llamaCpp.GenerateCodeReview(instructions, material, schema, stopToken);
+    return llamaCpp.GenerateCodeReview(instructions, material, schema, stopToken, purpose);
 }
 
 responseOutput llmService::GenerateComputerSubgoal(const std::string& instruction,

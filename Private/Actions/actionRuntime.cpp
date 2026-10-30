@@ -10,6 +10,7 @@
 #include "Windows/desktopControlExecutor.h"
 #include "Windows/windowsAutomationExecutor.h"
 #include "Visual/imageExecutor.h"
+#include "Visual/videoExecutor.h"
 #include "Workspace/virtualMachineExecutor.h"
 #include "Policy/guestCapabilityJson.h"
 
@@ -120,6 +121,7 @@ bool ActionRuntime::InitializeUnlocked(
     settings.internet.profileDirectory = browserProfileDirectory;
     settings.internet.logDirectory = browserLogDirectory;
     settings.image = imageAccess;
+    settings.video = videoAccess;
     policy = std::make_unique<policy::CapabilityPolicy>(settings);
     dispatcher.Clear();
     dispatcher.Register(std::make_unique<process::ProcessExecutor>());
@@ -127,6 +129,8 @@ bool ActionRuntime::InitializeUnlocked(
     dispatcher.Register(std::make_unique<workspace::VirtualMachineExecutor>(guestRuntime));
     if (imageProvider)
         dispatcher.Register(std::make_unique<visual::ImageExecutor>(*imageProvider, imageAccess.outputRoot));
+    if (videoProvider)
+        dispatcher.Register(std::make_unique<visual::VideoExecutor>(*videoProvider, videoAccess.outputRoot));
     desktopRateLimiter.Configure(settings.maxDesktopActionsPerMinute, settings.minimumDesktopActionIntervalMs,
         policy::DesktopActionRateLimiter::Scope::UiAutomation);
     desktopControlRateLimiter.Configure(settings.desktopControl.maxInputActionsPerMinute, settings.desktopControl.minimumInputIntervalMs,
@@ -148,6 +152,8 @@ bool ActionRuntime::InitializeUnlocked(
     }
 
     outError.clear();
+    PublishVerificationContext();
+    initialized.store(true, std::memory_order_release);
     return true;
 }
 
@@ -190,6 +196,7 @@ void ActionRuntime::BindAuthority(std::shared_ptr<policy::CompanionAuthority> in
     std::lock_guard lock(mutex);
     authority = std::move(inputAuthority);
     sessionStamp = std::move(inputStamp);
+    PublishVerificationContext();
 }
 
 void ActionRuntime::ClearAuthorityBinding()
@@ -202,6 +209,7 @@ void ActionRuntime::ClearAuthorityBinding()
     taskContractFactory = {};
     taskContractGuard = {};
     ++taskContractBindingRevision;
+    PublishVerificationContext();
 }
 
 void ActionRuntime::BindTaskContracts(TaskContractFactory factory, TaskContractGuard guard)
@@ -210,39 +218,47 @@ void ActionRuntime::BindTaskContracts(TaskContractFactory factory, TaskContractG
     taskContractFactory = std::move(factory);
     taskContractGuard = std::move(guard);
     ++taskContractBindingRevision;
+    PublishVerificationContext();
+}
+
+void ActionRuntime::PublishVerificationContext()
+{
+    auto current = std::make_shared<VerificationContext>();
+    current->journal = auditLogger ? auditLogger->Journal() : nullptr;
+    current->authority = authority;
+    current->sessionStamp = sessionStamp;
+    current->guard = taskContractGuard;
+    verificationContext.store(std::move(current), std::memory_order_release);
 }
 
 std::shared_ptr<audit::EvidenceJournal> ActionRuntime::EvidenceJournalOwner() const
 {
-    std::lock_guard lock(mutex);
-    return auditLogger ? auditLogger->Journal() : nullptr;
+    const auto current = verificationContext.load(std::memory_order_acquire);
+    return current ? current->journal : nullptr;
 }
 
 std::optional<core::EvidenceRef> ActionRuntime::RecordLocalVerificationFor(const runtime::RuntimeStamp& stamp,
     const core::TaskContract& contract, const std::string& digest, const std::stop_token stopToken, const std::function<bool()>& admission)
 {
-    const std::lock_guard lock(mutex);
-    const auto bindingRevision = taskContractBindingRevision;
-    const auto guard = taskContractGuard;
-    const auto capturedAuthority = authority;
+    const auto captured = verificationContext.load(std::memory_order_acquire);
+    const auto unchanged = [&] { return verificationContext.load(std::memory_order_acquire) == captured; };
     const auto current = [&]
     {
-        if (stopToken.stop_requested() || !admission || !authority || !stamp.SameSession(sessionStamp) || !authority->IsActive(stamp) ||
-            !contract.stamp.SameSession(stamp) || !guard || bindingRevision != taskContractBindingRevision ||
-            !core::ValidateTaskContract(contract))
+        if (!captured || !captured->journal || stopToken.stop_requested() || !admission || !captured->authority ||
+            !stamp.SameSession(captured->sessionStamp) || !captured->authority->IsActive(stamp) || !contract.stamp.SameSession(stamp) ||
+            !captured->guard || !unchanged() || !core::ValidateTaskContract(contract))
             return false;
         try
         {
-            const bool admitted = admission() && guard(contract, stopToken).empty();
-            return admitted && !stopToken.stop_requested() && bindingRevision == taskContractBindingRevision &&
-                   authority == capturedAuthority && authority && stamp.SameSession(sessionStamp) && authority->IsActive(stamp);
+            const bool admitted = admission() && captured->guard(contract, stopToken).empty();
+            return admitted && !stopToken.stop_requested() && unchanged() && captured->authority->IsActive(stamp);
         }
         catch (...)
         {
             return false;
         }
     };
-    if (!auditLogger || !current())
+    if (!current())
         return std::nullopt;
     core::EvidenceRef reference;
     reference.id = audit::NewJournalEventId();
@@ -262,7 +278,7 @@ std::optional<core::EvidenceRef> ActionRuntime::RecordLocalVerificationFor(const
     event.transactionId = reference.id;
     event.redactedSummary =
         "Restricted native arithmetic verified only a declared operation; interpretation and premises remain unverified.";
-    if (!auditLogger->Journal()->Append(event).Durable() || !current())
+    if (!captured->journal->Append(event).Durable() || !current())
         return std::nullopt;
     return reference;
 }
@@ -313,6 +329,25 @@ void ActionRuntime::BindImageProvider(
     {
         std::lock_guard settingsLock(settingsMutex);
         settingsSnapshot.image = imageAccess;
+    }
+    if (policy)
+        policy = std::make_unique<policy::CapabilityPolicy>(Settings());
+}
+
+void ActionRuntime::BindVideoProvider(visual::VideoGenerator& provider, const std::filesystem::path& ownedOutputRoot)
+{
+    std::error_code error;
+    const auto root = std::filesystem::weakly_canonical(ownedOutputRoot, error);
+    const bool valid = !error && ownedOutputRoot.is_absolute() &&
+                       root == std::filesystem::weakly_canonical(provider.OutputDirectory(), error) && !error;
+    std::lock_guard lock(mutex);
+    videoProvider = &provider;
+    videoAccess = {valid && provider.IsEnabled(), false, valid ? root : std::filesystem::path{}};
+    dispatcher.Unregister(ActionType::GenerateVideo);
+    dispatcher.Register(std::make_unique<visual::VideoExecutor>(provider, videoAccess.outputRoot));
+    {
+        std::lock_guard settingsLock(settingsMutex);
+        settingsSnapshot.video = videoAccess;
     }
     if (policy)
         policy = std::make_unique<policy::CapabilityPolicy>(Settings());
@@ -713,8 +748,7 @@ std::string ActionRuntime::StatusJson() const
 
 bool ActionRuntime::IsInitialized() const
 {
-    std::lock_guard lock(mutex);
-    return policy != nullptr;
+    return initialized.load(std::memory_order_acquire);
 }
 
 void ActionRuntime::StopDesktopControl(const std::string& reason)

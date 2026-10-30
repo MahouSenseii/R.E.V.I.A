@@ -68,12 +68,15 @@ class ToolLoop
     // Called once when the backend cannot take tools at all, before the loop answers
     // without them. The runtime uses it to restore its deterministic routers.
     using UnavailableHandler = std::function<void()>;
+    using GeneratedMediaHandler = std::function<void(const std::vector<conversationMediaReference>&)>;
 
     explicit ToolLoop(ToolRegistry registry, ToolLoopLimits limits = {});
 
     void SetActivityHandler(ActivityHandler handler);
     void SetAuditHandler(AuditHandler handler);
     void SetUnavailableHandler(UnavailableHandler handler);
+    // Receipts also reach the owner after revocation so it can retire unpublished artifacts.
+    void SetGeneratedMediaHandler(GeneratedMediaHandler handler);
     // The turn's admission; checked before every request and every call.
     void SetAdmission(std::function<bool()> admission);
     void SetTurnId(std::uint64_t turnId);
@@ -98,6 +101,7 @@ class ToolLoop
     ActivityHandler activity;
     AuditHandler audit;
     UnavailableHandler unavailable;
+    GeneratedMediaHandler generatedMedia;
     std::function<bool()> admission;
     std::uint64_t turnId = 0;
 };

@@ -12,6 +12,7 @@ parser.add_argument("--host")
 parser.add_argument("--port", type=int)
 parser.add_argument("--model")
 parser.add_argument("--api-key")
+parser.add_argument("--variant", default="")
 args, _ = parser.parse_known_args()
 jobs = {}
 
@@ -48,8 +49,33 @@ class Handler(BaseHTTPRequestHandler):
             if request["prompt"] == "corrupt":
                 png = b"not an image"
             Path(request["outputPath"]).write_bytes(png)
+            mode = request.get("mode", "text_to_image")
+            source = request.get("source", {})
+            steps = min(max(1, request["steps"]), 4)
+            strength = request.get("strength", 0) if mode == "reference_to_image" else 0
+            while mode == "reference_to_image" and steps < 4 and int(steps * strength) < 1:
+                steps += 1
             job.update(state="succeeded", path=request["outputPath"], sha256=hashlib.sha256(png).hexdigest(),
-                       width=width, height=height, steps=1, step=1, device="cpu", deviceName="fixture CPU")
+                       width=width, height=height, steps=steps, step=steps, device="cpu", deviceName="fixture CPU",
+                       mode=mode, provider="local_diffusers", pipeline=("StableDiffusionImg2ImgPipeline" if mode == "reference_to_image" else "StableDiffusionPipeline"),
+                       variant=args.variant, seed=request["seed"], requestedSteps=max(1, min(50, request["steps"])),
+                       requestedStrength=strength, effectiveStrength=strength, totalInferenceSteps=steps,
+                       denoisingSteps=int(steps * strength) if mode == "reference_to_image" else steps,
+                       sourceId=source.get("id", ""), sourceDigest=source.get("sha256", ""),
+                       preparedSourceDigest=hashlib.sha256(b"fixture-prepared-pixels").hexdigest() if source else "",
+                       sourcePreparation="contain-pad-rgb-v1" if source else "")
+            if source:
+                source_path = Path(request["outputPath"]).parent / source["path"]
+                if hashlib.sha256(source_path.read_bytes()).hexdigest() != source["sha256"]:
+                    job.update(state="failed", error="Source bytes did not match the native snapshot")
+            if request["prompt"] == "wrong source":
+                job["sourceDigest"] = "0" * 64
+            if request["prompt"] == "wrong mode":
+                job["mode"] = "text_to_image"
+            if request["prompt"] == "wrong seed":
+                job["seed"] ^= 1
+            if request["prompt"] == "zero denoise":
+                job["denoisingSteps"] = 0
             if request["prompt"] == "wrong metadata":
                 job["deviceName"] = 42
         jobs[job["jobId"]] = job

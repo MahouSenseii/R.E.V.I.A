@@ -62,6 +62,8 @@ struct llmSettings
     bool bAllowPromptCache = true;
     // Optional cloud model, off by default. Only Main's copy is read.
     revia::llm::cloud::CloudModelSettings cloud;
+    // Zero leaves image sizing to the backend; positive values bound its per-image minimum.
+    int imageMinTokens = 0;
 };
 
 struct embeddingSettings

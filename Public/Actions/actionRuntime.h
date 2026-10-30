@@ -14,6 +14,7 @@
 #include "Core/evidenceRef.h"
 
 #include <filesystem>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -25,7 +26,7 @@
 
 namespace revia::browser { class BrowserSession; }
 
-namespace revia::visual { class ImageGenerator; }
+namespace revia::visual { class ImageGenerator; class VideoGenerator; }
 namespace revia::workspace { class VirtualMachineRuntime; }
 
 namespace revia::actions
@@ -67,6 +68,7 @@ class ActionRuntime
     void SetBrowserSession(std::shared_ptr<browser::BrowserSession> session);
     // The provider outlives this binding; its configured destination must match this private root.
     void BindImageProvider(visual::ImageGenerator& provider, const std::filesystem::path& ownedOutputRoot, bool allowAutonomous);
+    void BindVideoProvider(visual::VideoGenerator& provider, const std::filesystem::path& ownedOutputRoot);
     void BindGuestRuntime(std::shared_ptr<workspace::VirtualMachineRuntime> runtime);
 
     // Scoped evaluation for the goal runner. A goal carries its own, narrower
@@ -134,6 +136,7 @@ class ActionRuntime
     [[nodiscard]] bool InitializeUnlocked(
         const std::filesystem::path& capabilityConfig, const std::filesystem::path& auditPath, std::string& outError);
     [[nodiscard]] bool ReloadUnlocked(std::string& outError);
+    void PublishVerificationContext();
     [[nodiscard]] bool EditCapabilities(const std::function<bool(std::string&)>& edit, std::function<void(CapabilitySettings&)> reduction,
         const std::string& reductionKey, std::string& outError);
 
@@ -169,10 +172,22 @@ class ActionRuntime
     runtime::RuntimeStamp sessionStamp;
     TaskContractFactory taskContractFactory;
     TaskContractGuard taskContractGuard;
+    struct VerificationContext
+    {
+        std::shared_ptr<audit::EvidenceJournal> journal;
+        std::shared_ptr<policy::CompanionAuthority> authority;
+        runtime::RuntimeStamp sessionStamp;
+        TaskContractGuard guard;
+    };
+    // Read-only journal access and native verification must not wait for a running executor.
+    std::atomic<std::shared_ptr<const VerificationContext>> verificationContext;
     std::filesystem::path browserProfileDirectory;
     std::filesystem::path browserLogDirectory;
     visual::ImageGenerator* imageProvider = nullptr;
     CapabilitySettings::ImageGeneration imageAccess;
+    visual::VideoGenerator* videoProvider = nullptr;
+    CapabilitySettings::ImageGeneration videoAccess;
+    std::atomic<bool> initialized = false;
     std::shared_ptr<workspace::VirtualMachineRuntime> guestRuntime;
     std::uint64_t taskContractBindingRevision = 0;
 };

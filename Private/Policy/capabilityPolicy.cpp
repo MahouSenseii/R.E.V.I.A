@@ -243,32 +243,41 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
             : "The owned browser operation is limited to the admitted exact origins; interaction may have external effects.";
         return decision;
     }
-    if (request.type == actions::ActionType::GenerateImage)
+    if (request.type == actions::ActionType::GenerateImage || request.type == actions::ActionType::GenerateVideo)
     {
-        if (!settings.image.enabled || !settings.image.outputRoot.is_absolute())
+        const bool video = request.type == actions::ActionType::GenerateVideo;
+        const auto& generation = video ? settings.video : settings.image;
+        if (!generation.enabled || !generation.outputRoot.is_absolute())
         {
-            decision.reason = "Image generation has no enabled host-owned provider destination.";
+            decision.reason = video ? "Video generation has no enabled host-owned provider destination."
+                                    : "Image generation has no enabled host-owned provider destination.";
             return decision;
         }
-        if (actions::IsAutonomousRequest(request.requestedBy) && !settings.image.autonomous)
+        if (actions::IsAutonomousRequest(request.requestedBy) && !generation.autonomous)
         {
-            decision.reason = "Autonomous image generation is not admitted.";
+            decision.reason = video ? "Autonomous video generation is not admitted." : "Autonomous image generation is not admitted.";
             return decision;
         }
-        if (request.value.find_first_not_of(" \t\r\n") == std::string::npos || request.value.size() > 8192 ||
-            !request.source.empty() || !request.destination.empty() || !request.application.empty())
+        if (request.value.find_first_not_of(" \t\r\n") == std::string::npos || request.value.size() > 8192 || !request.source.empty() ||
+            !request.destination.empty() || !request.application.empty() ||
+            (request.imageRequest && request.imageRequest->prompt != request.value) ||
+            (video && (!request.videoRequest || request.videoRequest->prompt != request.value || request.imageRequest)) ||
+            (!video && request.videoRequest))
         {
-            decision.reason = "Image actions accept a bounded prompt and no caller-selected path or application.";
+            decision.reason = video ? "Video actions require a typed bounded request and no caller-selected path or application."
+                                    : "Image actions accept a bounded prompt and no caller-selected path or application.";
             return decision;
         }
-        decision.canonicalDestination = ResolveForPolicy(settings.image.outputRoot);
+        decision.canonicalDestination = ResolveForPolicy(generation.outputRoot);
         if (decision.canonicalDestination.empty())
         {
-            decision.reason = "The owned image output directory could not be resolved.";
+            decision.reason = video ? "The owned video output directory could not be resolved."
+                                    : "The owned image output directory could not be resolved.";
             return decision;
         }
         decision.verdict = actions::PolicyVerdict::Allowed;
-        decision.reason = "Image generation is admitted only inside this companion's host-owned artifact directory.";
+        decision.reason = video ? "Video generation is admitted only inside this companion's host-owned video directory."
+                                : "Image generation is admitted only inside this companion's host-owned artifact directory.";
         return decision;
     }
     if (request.type == actions::ActionType::ExecuteProcess)

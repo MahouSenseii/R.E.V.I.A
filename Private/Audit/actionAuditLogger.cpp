@@ -125,10 +125,50 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             if (result.image)
             {
                 const auto& image = *result.image;
+                const auto& expected = image.expectedArtifact;
                 entry["image"]["cancelled"] = image.cancelled;
+                entry["image"]["expected"] = {{"job_id", expected.jobId}, {"model", expected.model},
+                    {"mode", expected.mode == visual::ImageRequestMode::ReferenceToImage ? "reference_to_image" : "text_to_image"},
+                    {"provider", expected.provider}, {"pipeline", expected.pipeline}, {"variant", expected.variant},
+                    {"seed", expected.seed}, {"requested_strength", expected.requestedStrength},
+                    {"effective_strength", expected.effectiveStrength}, {"requested_steps", expected.requestedSteps},
+                    {"total_inference_steps", expected.totalInferenceSteps}, {"denoising_steps", expected.denoisingSteps},
+                    {"source_id", expected.sourceId}, {"source_digest", expected.sourceDigest},
+                    {"source_preparation", expected.sourcePreparation}};
                 entry["image"]["receipt"] = {{"path", actions::PathToUtf8(image.receipt.path)}, {"sha256", image.receipt.sha256},
                     {"job_id", image.receipt.jobId}, {"model", image.receipt.model}, {"width", image.receipt.width},
-                    {"height", image.receipt.height}, {"verified", image.succeeded}};
+                    {"height", image.receipt.height}, {"verified", image.succeeded},
+                    {"mode", image.receipt.mode == visual::ImageRequestMode::ReferenceToImage ? "reference_to_image" : "text_to_image"},
+                    {"provider", image.receipt.provider}, {"pipeline", image.receipt.pipeline}, {"variant", image.receipt.variant},
+                    {"seed", image.receipt.seed}, {"requested_strength", image.receipt.requestedStrength},
+                    {"effective_strength", image.receipt.effectiveStrength}, {"requested_steps", image.receipt.requestedSteps},
+                    {"total_inference_steps", image.receipt.totalInferenceSteps}, {"denoising_steps", image.receipt.denoisingSteps},
+                    {"source_id", image.receipt.sourceId}, {"source_digest", image.receipt.sourceDigest},
+                    {"prepared_source_digest", image.receipt.preparedSourceDigest},
+                    {"source_preparation", image.receipt.sourcePreparation}};
+            }
+        }
+        if (request.type == actions::ActionType::GenerateVideo)
+        {
+            entry["video"] = {{"prompt_digest", ContentDigest(request.value)}, {"prompt_bytes", request.value.size()}};
+            if (result.video)
+            {
+                const auto& video = *result.video;
+                const auto& receipt = video.receipt;
+                entry["video"]["cancelled"] = video.cancelled;
+                entry["video"]["receipt"] = {{"path", actions::PathToUtf8(receipt.path)}, {"sha256", receipt.sha256},
+                    {"job_id", receipt.jobId}, {"model", receipt.model}, {"revision", receipt.revision},
+                    {"mode", receipt.mode == visual::VideoRequestMode::ImageToVideo ? "image_to_video" : "text_to_video"},
+                    {"seed", receipt.seed}, {"source_id", receipt.sourceId}, {"source_digest", receipt.sourceDigest},
+                    {"source_preparation", receipt.sourcePreparation}, {"prepared_source_digest", receipt.preparedSourceDigest},
+                    {"width", receipt.width}, {"height", receipt.height}, {"frame_count", receipt.frameCount}, {"fps", receipt.fps},
+                    {"duration_ms", receipt.durationMs}, {"steps", receipt.steps}, {"denoising_steps", receipt.denoisingSteps},
+                    {"provider", receipt.provider}, {"pipeline", receipt.pipeline}, {"device", receipt.device}, {"dtype", receipt.dtype},
+                    {"offload", receipt.offload}, {"cpu_threads", receipt.cpuThreads}, {"verified", video.succeeded},
+                    {"model_load_ms", receipt.modelLoadMilliseconds}, {"inference_ms", receipt.inferenceMilliseconds},
+                    {"encoding_ms", receipt.encodingMilliseconds}, {"worker_pid", receipt.workerPid},
+                    {"peak_worker_rss_mib", receipt.peakWorkerRssMiB}, {"minimum_free_system_ram_bytes", receipt.minimumFreeSystemRamBytes},
+                    {"process_tree_memory_measured", receipt.processTreeMemoryMeasured}};
             }
         }
         if (request.type == actions::ActionType::ExecuteProcess)

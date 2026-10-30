@@ -6,6 +6,7 @@
 #include "LLM/embeddingTypes.h"
 #include "LLM/endpointSettings.h"
 #include "LLM/responseTypes.h"
+#include "LLM/codeReviewPurpose.h"
 #include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
 #include <mutex>
@@ -53,6 +54,8 @@ public:
     // Set after SetPosture, which clears it: the lines this turn's answer must follow,
     // placed at the end of the prompt rather than in the system message.
     void SetReplyNote(std::string note);
+    // Applies to local source explanations until SetPosture resets the turn state.
+    void SetSourceExplanation(bool enabled);
     // Set after SetPosture, which clears it: asks the next RouteMessage to try the
     // optional cloud model. An explicit request is answered by the cloud or refused; an
     // automatic one (a hard turn) falls back to the local route when the cloud says no.
@@ -70,8 +73,8 @@ public:
     // A review of her own code. Expert when it can be had -- loaded on demand if it is
     // managed that way -- because this is the hardest reading she does and nobody is
     // waiting on it; Main otherwise.
-    responseOutput ReviewCode(const std::string& instructions,
-        const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;
+    responseOutput ReviewCode(const std::string& instructions, const std::string& material, const std::string& schema,
+        std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
         const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},
         const std::string& conversationEvidence = {}) const;

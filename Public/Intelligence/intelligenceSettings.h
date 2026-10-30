@@ -23,24 +23,14 @@ struct modelTierSettings
     // Idle time before eviction and minimum residency after loading, to avoid reload churn.
     int idleGraceSeconds = 300;
     int minimumResidencySeconds = 60;
+    int imageMinTokens = 0;
 };
 
 struct intelligenceSettings
 {
     bool bEnabled = true;
     modelTierSettings fast = {
-        true,
-        "127.0.0.1",
-        8082,
-        "Qwen3.5-0.8B-Q4_K_M.gguf",
-        "Models/Qwen3.5-0.8B-Q4_K_M.gguf",
-        false,
-        "",
-        8192,
-        256,
-        0.78F,
-        90,
-        true};
+        true, "127.0.0.1", 8082, "Qwen3.5-0.8B-Q4_K_M.gguf", "Models/Qwen3.5-0.8B-Q4_K_M.gguf", false, "", 8192, 256, 0.78F, 90, true};
     modelTierSettings expert = {
         true,
         "127.0.0.1",

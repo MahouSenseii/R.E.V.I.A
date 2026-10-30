@@ -106,12 +106,30 @@ std::string BuildAttachmentBlock(const std::vector<AttachedFileView>& files, con
     {
         const std::string name = NeutralizeReferenceText(file.name);
         std::string entry;
-        if (file.kind == AttachmentKind::Image)
+        if (file.kind == AttachmentKind::Video)
+        {
+            entry = "\n- Video \"" + name + "\": ";
+            std::string note = file.imageVisible ? NeutralizeReferenceText(file.note)
+                                                : "no video frames were supplied, because " +
+                                                      NeutralizeReferenceText(file.imageUnavailableReason) +
+                                                      " Tell the user plainly and do not guess its contents.";
+            if (file.imageVisible && block.size() + entry.size() + note.size() > maxBytes)
+            {
+                const std::string omitted = " [Video evidence excerpt: transcript text was omitted to fit this turn. Request a narrower "
+                                            "interval for the rest; do not infer the missing words.]";
+                const auto reserved = block.size() + entry.size() + omitted.size();
+                note = revia::utf8::Prefix(note, maxBytes > reserved ? maxBytes - reserved : 0) + omitted;
+            }
+            entry += note;
+        }
+        else if (file.kind == AttachmentKind::Image)
         {
             entry = file.imageVisible ? "\n- Image \"" + name + "\" (" + std::to_string(file.width) + "x" + std::to_string(file.height) +
                                             " pixels) is attached to this message; you can see it."
                                       : "\n- Image \"" + name + "\": you cannot see it, because " + file.imageUnavailableReason +
                                             " Tell the user that plainly and do not guess what it shows.";
+            if (!file.note.empty())
+                entry += " " + NeutralizeReferenceText(file.note);
         }
         else if (!file.wholeText.empty())
         {

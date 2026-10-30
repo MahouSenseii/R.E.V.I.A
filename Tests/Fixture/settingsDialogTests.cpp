@@ -180,9 +180,9 @@ const std::vector<std::pair<std::string, std::string>> kInventory = {
 
 // Rows the redesign adds beyond the inventory: new shell preferences, and booleans the inventory
 // had excluded that the design spec turned back into switches.
-const std::set<std::string> kAdditions = {"window/closeToTray", "sidebar/expanded", "panels/restoreOpen",
-    "chat/showWorkSummaries", "intelligence.fast.warmAtStartup", "intelligence.expert.warmAtStartup", "llm.autoStartServer",
-    "embedding.autoStartServer", "speechRecognition.useGpu"};
+const std::set<std::string> kAdditions = {"window/closeToTray", "sidebar/expanded", "panels/restoreOpen", "chat/showWorkSummaries",
+    "intelligence.fast.warmAtStartup", "intelligence.expert.warmAtStartup", "llm.autoStartServer", "embedding.autoStartServer",
+    "speechRecognition.useGpu", "video.enabled"};
 
 const QRegularExpression kGenderedWords(QStringLiteral("\\b(she|her|herself|hers)\\b"), QRegularExpression::CaseInsensitiveOption);
 
@@ -466,7 +466,11 @@ void CheckCatalog(Expect& expect)
         "the inventory table must name 84 distinct booleans and 84 distinct rows");
     for (const SettingDescriptor& row : catalog)
         expect(mapped.contains(row.key) || kAdditions.contains(row.key), Q(row.key) + " is neither an inventory boolean nor a known addition");
-    expect(catalog.size() == 84 + kAdditions.size(), "the catalog must hold the 84 inventory rows plus the 9 additions");
+    expect(catalog.size() == mapped.size() + kAdditions.size(), "the catalog must hold the inventory rows plus the known additions");
+    const auto* video = FindSetting("video.enabled");
+    expect(video && video->store == SettingStore::SettingsFile && video->apply == SettingApply::Restart && video->group == "Videos" &&
+               !video->defaultValue,
+        "local short-video generation must be a separate, default-off restart setting");
 
     for (const auto& key : revia::core::PreferenceStore::Writable())
     {

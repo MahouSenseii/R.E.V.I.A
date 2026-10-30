@@ -44,9 +44,35 @@ void RunSavedFileObservationTests()
     changed = source; changed.contents = "const char* f() { return \"} not code {\"; } // {\n";
     changed.revision = revia::audit::ContentDigest(changed.contents);
     Require(ValidateSavedFileObservation(changed, now, reason), "Braces in strings/comments were treated as active code.");
-    changed = source; changed.contents = std::string(16385, 'x'); changed.revision = revia::audit::ContentDigest(changed.contents);
+    for (const std::string contents :
+        {"int f() { return 1'000; }\n", "int f() { return 0xAB'CD + 0b10'01; }\n", "double f() { return 1'234.5e-2 + .1'2; }\n",
+            "char f() { return L'{' == '{' ? '\\'' : '}'; }\n", "const char* text = R\"(one double quote: \" [ { // /*)\";\n",
+            "const auto* text = u8R\"tag(quoted \" )\" [ {)tag\";\n", "const char* text = R\"abcdefghijklmnop(\" [)abcdefghijklmnop\";\n",
+            "#define PREFIX_R\nconst char* text = PREFIX_R\"ordinary\";\n"})
+    {
+        changed = source;
+        changed.contents = contents;
+        changed.revision = revia::audit::ContentDigest(changed.contents);
+        Require(ValidateSavedFileObservation(changed, now, reason),
+            ("A complete numeric or string literal suppressed saved-file awareness: " + contents).c_str());
+    }
+    for (const std::string contents : {"int f() { return 1'; }\n", "char f() { return L'{; }\n", "const char* text = R\"(unfinished\";\n",
+             "const char* text = R\"tag(unfinished)other\";\n", "const char* text = R\"abcdefghijklmnopq(text)abcdefghijklmnopq\";\n",
+             "const char* text = R\"bad tag(text)bad tag\";\n", "const char* text = R\"(complete)\"; int f() {\n",
+             "#define PREFIX_R\nconst char* text = PREFIX_R\"(\"; int f() { // )\"\n"})
+    {
+        changed = source;
+        changed.contents = contents;
+        changed.revision = revia::audit::ContentDigest(changed.contents);
+        Require(
+            !ValidateSavedFileObservation(changed, now, reason), "An unfinished literal or source fragment caused a review nomination.");
+    }
+    changed = source;
+    changed.contents = std::string(16385, 'x');
+    changed.revision = revia::audit::ContentDigest(changed.contents);
     Require(!ValidateSavedFileObservation(changed, now, reason), "An oversized source snapshot was admitted.");
-    changed = source; changed.contents = "const char* key = \"-----BEGIN PRIVATE KEY-----\";\n";
+    changed = source;
+    changed.contents = "const char* key = \"-----BEGIN PRIVATE KEY-----\";\n";
     changed.revision = revia::audit::ContentDigest(changed.contents);
     Require(!ValidateSavedFileObservation(changed, now, reason), "An obvious private key entered optional generation context.");
 }

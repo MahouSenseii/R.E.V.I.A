@@ -63,6 +63,7 @@ constexpr std::array BooleanReaders = {
     BooleanReader{"intelligence.expert.onDemand", [](const appSettings& s) { return s.intelligence.expert.bOnDemand; }},
     BooleanReader{"intelligence.expert.warmAtStartup", [](const appSettings& s) { return s.intelligence.expert.bWarmAtStartup; }},
     BooleanReader{"image.enabled", [](const appSettings& s) { return s.image.bEnabled; }},
+    BooleanReader{"video.enabled", [](const appSettings& s) { return s.video.bEnabled; }},
     BooleanReader{"image.keepLoaded", [](const appSettings& s) { return s.image.bKeepLoaded; }},
     BooleanReader{"image.offline", [](const appSettings& s) { return s.image.bOffline; }},
     BooleanReader{"localApi.enabled", [](const appSettings& s) { return s.localApi.bEnabled; }},
@@ -135,7 +136,7 @@ bool SetPath(json& data, const std::string& key, const std::string& serverId, co
         }
         node = &(*node)[section];
     }
-    (*node)[key.substr(start)] = value;
+    (*node)[key.substr(start)] = key == "llm.imageMinTokens" ? json(std::stoi(value.get<std::string>())) : value;
     return true;
 }
 
@@ -302,6 +303,8 @@ std::optional<json> OwnerSettingValue(const appSettings& settings, const std::st
     }
     if (key == "llm.cloud.useFor")
         return json(settings.llm.cloud.useFor);
+    if (key == "llm.imageMinTokens")
+        return json(std::to_string(settings.llm.imageMinTokens));
     for (const BooleanReader& reader : BooleanReaders)
     {
         if (reader.key == key)

@@ -5,6 +5,9 @@
 #include "Process/processTypes.h"
 #include "Policy/guestCapabilityPolicy.h"
 #include "Visual/imageTypes.h"
+#include "Visual/imageRequest.h"
+#include "Visual/videoRequest.h"
+#include "Visual/videoTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -66,7 +69,8 @@ enum class ActionType
     // so a goal or /operate step can never propose one.
     VmRunPython,
     VmSearchFiles,
-    VmShareProject
+    VmShareProject,
+    GenerateVideo
 };
 
 // UiaElement is re-found by runtime identity and current bounds. VisualRegion requires
@@ -288,6 +292,9 @@ struct ActionRequest
     process::ProcessRequest process;
     workspace::GuestRequest guest;
     browser::BrowserRequest browser;
+    // Resolved by the admitted runtime; model and goal parsers cannot supply source bytes.
+    std::optional<visual::ImageRequest> imageRequest;
+    std::optional<visual::VideoRequest> videoRequest;
     // Present only after the vision-to-UIA resolver has produced a typed element
     // reference. Execution re-finds this exact runtime id and fails closed if it changed.
     ElementResolutionEvidence resolution;
@@ -348,6 +355,7 @@ struct ActionResult
     std::string backend;
     std::optional<process::ProcessResult> process;
     std::optional<visual::ImageResult> image;
+    std::optional<visual::VideoResult> video;
     std::optional<browser::BrowserReceipt> browser;
     std::optional<workspace::GuestResult> guest;
 };
@@ -495,6 +503,7 @@ struct CapabilitySettings
     policy::GuestCapabilitySettings guest;
     browser::BrowserSettings browser;
     ImageGeneration image;
+    ImageGeneration video;
 };
 
 [[nodiscard]] std::string ToString(ActionType value);

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sqlite3.h>
 #include <sstream>
 #include <system_error>
@@ -133,7 +134,8 @@ bool MigrateScope(sqlite3* database)
     const std::pair<const char*, const char*> fields[] = {{"participant_id", "TEXT NOT NULL DEFAULT ''"},
         {"audience_kind", "INTEGER NOT NULL DEFAULT 0"}, {"audience_id", "TEXT NOT NULL DEFAULT ''"},
         {"audience_revision", "INTEGER NOT NULL DEFAULT 0"}, {"speaker_source", "INTEGER NOT NULL DEFAULT 0"},
-        {"consent_revision", "INTEGER NOT NULL DEFAULT 0"}, {"companion_id", "TEXT NOT NULL DEFAULT ''"}};
+        {"consent_revision", "INTEGER NOT NULL DEFAULT 0"}, {"companion_id", "TEXT NOT NULL DEFAULT ''"},
+        {"media_references", "TEXT NOT NULL DEFAULT '[]'"}};
     for (const auto& [name, type] : fields)
     {
         sqlite3_stmt* raw = nullptr;
@@ -270,6 +272,11 @@ Database OpenDatabase(const std::string& archivePath)
         "  INSERT INTO conversation_search(conversation_search, rowid, content) "
         "  VALUES ('delete', old.rowid, old.content);"
         "END;"
+        "CREATE TRIGGER IF NOT EXISTS conversation_turns_after_content_update "
+        "  AFTER UPDATE OF content ON conversation_turns BEGIN "
+        "  INSERT INTO conversation_search(conversation_search, rowid, content) VALUES ('delete', old.rowid, old.content);"
+        "  INSERT INTO conversation_search(rowid, content) VALUES (new.rowid, new.content);"
+        "END;"
         "CREATE TABLE IF NOT EXISTS conversation_embeddings ("
         "  turn_id TEXT PRIMARY KEY,"
         "  model TEXT NOT NULL,"
@@ -311,6 +318,106 @@ std::string QuoteForFts(const std::string& query)
     return quoted;
 }
 
+std::optional<std::string> EncodeMedia(const std::vector<conversationMediaReference>& references)
+{
+    if (references.size() > 4)
+        return std::nullopt;
+    nlohmann::json encoded = nlohmann::json::array();
+    std::vector<std::string> ids;
+    for (const auto& reference : references)
+    {
+        const bool video = reference.mimeType == "video/mp4" || reference.mimeType == "video/webm";
+        if (reference.id.empty() || reference.id.size() > 128 || reference.digest.size() != 64 || reference.name.empty() ||
+            (reference.origin != MediaOrigin::UserAttachment && reference.origin != MediaOrigin::GeneratedArtifact) ||
+            reference.name.size() > 512 || !revia::utf8::IsValid(reference.name) ||
+            !std::all_of(reference.id.begin(), reference.id.end(), [](const unsigned char ch) { return std::isalnum(ch) || ch == '-'; }) ||
+            !std::all_of(reference.digest.begin(), reference.digest.end(), [](const unsigned char ch) { return std::isxdigit(ch); }) ||
+            (!video && reference.mimeType != "image/png" && reference.mimeType != "image/jpeg" && reference.mimeType != "image/gif") ||
+            reference.width == 0 || reference.height == 0 || reference.width > 2048 || reference.height > 2048 ||
+            std::find(ids.begin(), ids.end(), reference.id) != ids.end())
+            return std::nullopt;
+        if (video ? (references.size() != 1 || reference.width > 1920 || reference.height > 1920 ||
+                        static_cast<std::uint64_t>(reference.width) * reference.height > 2073600 || reference.durationMs <= 0 ||
+                        reference.durationMs > 60000 || reference.sampleStartMs < 0 || reference.sampleEndMs < reference.sampleStartMs ||
+                        reference.sampleEndMs >= reference.durationMs)
+                  : (reference.durationMs != 0 || reference.sampleStartMs != 0 || reference.sampleEndMs != 0))
+            return std::nullopt;
+        ids.push_back(reference.id);
+        encoded.push_back({{"id", reference.id}, {"digest", reference.digest}, {"name", reference.name}, {"mimeType", reference.mimeType},
+            {"width", reference.width}, {"height", reference.height}});
+        encoded.back()["origin"] = reference.origin == MediaOrigin::GeneratedArtifact ? "generated_artifact" : "user_attachment";
+        if (video)
+        {
+            encoded.back()["durationMs"] = reference.durationMs;
+            encoded.back()["sampleStartMs"] = reference.sampleStartMs;
+            encoded.back()["sampleEndMs"] = reference.sampleEndMs;
+        }
+    }
+    return encoded.dump();
+}
+
+std::vector<conversationMediaReference> DecodeMedia(const std::string& encoded)
+{
+    if (encoded.size() > 8192)
+        return {};
+    try
+    {
+        std::vector<std::string> keys;
+        bool duplicate = false;
+        const auto value = nlohmann::json::parse(encoded,
+            [&](int, const nlohmann::json::parse_event_t event, nlohmann::json& parsed)
+            {
+                if (event == nlohmann::json::parse_event_t::object_start)
+                    keys.clear();
+                else if (event == nlohmann::json::parse_event_t::key)
+                {
+                    const auto key = parsed.get<std::string>();
+                    duplicate = duplicate || std::find(keys.begin(), keys.end(), key) != keys.end();
+                    keys.push_back(key);
+                }
+                return true;
+            });
+        if (duplicate || !value.is_array() || value.size() > 4)
+            return {};
+        std::vector<conversationMediaReference> references;
+        for (const auto& item : value)
+        {
+            if (!item.is_object() || (item.size() != 6 && item.size() != 7 && item.size() != 9 && item.size() != 10) ||
+                !item.at("width").is_number_unsigned() || !item.at("height").is_number_unsigned() ||
+                item.at("width").get<std::uint64_t>() > 2048 || item.at("height").get<std::uint64_t>() > 2048)
+                return {};
+            references.push_back(
+                {item.at("id").get<std::string>(), item.at("digest").get<std::string>(), item.at("name").get<std::string>(),
+                    item.at("mimeType").get<std::string>(), item.at("width").get<std::uint32_t>(), item.at("height").get<std::uint32_t>()});
+            const bool video = references.back().mimeType == "video/mp4" || references.back().mimeType == "video/webm";
+            const bool hasOrigin = item.contains("origin");
+            if (item.size() != (video ? 9U : 6U) + (hasOrigin ? 1U : 0U))
+                return {};
+            if (hasOrigin)
+            {
+                if (item.at("origin") == "generated_artifact")
+                    references.back().origin = MediaOrigin::GeneratedArtifact;
+                else if (item.at("origin") != "user_attachment")
+                    return {};
+            }
+            if (video)
+            {
+                for (const auto* field : {"durationMs", "sampleStartMs", "sampleEndMs"})
+                    if (!item.at(field).is_number_integer() || item.at(field).get<double>() < 0 || item.at(field).get<double>() > 60000)
+                        return {};
+                references.back().durationMs = item.at("durationMs").get<std::int64_t>();
+                references.back().sampleStartMs = item.at("sampleStartMs").get<std::int64_t>();
+                references.back().sampleEndMs = item.at("sampleEndMs").get<std::int64_t>();
+            }
+        }
+        return EncodeMedia(references) ? references : std::vector<conversationMediaReference>{};
+    }
+    catch (const nlohmann::json::exception&)
+    {
+        return {};
+    }
+}
+
 ArchivedTurn ReadTurn(sqlite3_stmt* statement)
 {
     ArchivedTurn turn;
@@ -327,14 +434,22 @@ ArchivedTurn ReadTurn(sqlite3_stmt* statement)
     turn.scope.participantSource = static_cast<identity::SpeakerSource>(sqlite3_column_int(statement, 10));
     turn.scope.consentRevision = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 11));
     turn.scope.companionId = ColumnText(statement, 12);
+    if (turn.scope.audience.kind == identity::AudienceKind::Private)
+    {
+        auto references = DecodeMedia(ColumnText(statement, 13));
+        if (turn.role == "user" || (turn.role == "assistant" && IsAttributedPrivateScope(turn.scope) &&
+                                       std::all_of(references.begin(), references.end(),
+                                           [](const auto& reference) { return reference.origin == MediaOrigin::GeneratedArtifact; })))
+            turn.mediaReferences = std::move(references);
+    }
     return turn;
 }
 
 constexpr const char* TurnColumns = "id, session_id, turn_index, role, content, created_at, participant_id, audience_kind, audience_id, "
-                                    "audience_revision, speaker_source, consent_revision, companion_id";
+                                    "audience_revision, speaker_source, consent_revision, companion_id, media_references";
 constexpr const char* QualifiedTurnColumns =
     "t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, t.participant_id, t.audience_kind, t.audience_id, "
-    "t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id";
+    "t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id, t.media_references";
 
 // Terms matched individually and OR'd, each as a prefix, so "emotion system" finds a turn
 // that said either word. Distinct from QuoteForFts, which builds one exact phrase: a
@@ -490,8 +605,37 @@ bool ConversationArchive::BeginSession(const std::string& sessionId, std::string
 }
 
 bool ConversationArchive::Record(const std::string& sessionId, const std::string& role, const std::string& content, std::string& outReason,
-    const MemoryScope& scope, std::function<bool()> admission)
+    const MemoryScope& scope, std::function<bool()> admission, const std::vector<conversationMediaReference>& mediaReferences)
 {
+    return RecordTurn(sessionId, role, content, outReason, scope, std::move(admission), mediaReferences, false);
+}
+
+bool ConversationArchive::RecordGeneratedAssistant(const std::string& sessionId, const std::string& content,
+    const std::vector<conversationMediaReference>& references, std::string& outReason, const MemoryScope& scope,
+    std::function<bool()> admission)
+{
+    if (!IsAttributedPrivateScope(scope) || !admission || references.empty() ||
+        !std::all_of(
+            references.begin(), references.end(), [](const auto& reference) { return reference.origin == MediaOrigin::GeneratedArtifact; }))
+    {
+        outReason = "Generated assistant media requires an admitted, attributed private host turn.";
+        return false;
+    }
+    outReason.clear();
+    return RecordTurn(sessionId, "assistant", content, outReason, scope, std::move(admission), references, true);
+}
+
+bool ConversationArchive::RecordTurn(const std::string& sessionId, const std::string& role, const std::string& content,
+    std::string& outReason, const MemoryScope& scope, std::function<bool()> admission,
+    const std::vector<conversationMediaReference>& mediaReferences, const bool generatedAssistant)
+{
+    const auto encodedMedia = EncodeMedia(mediaReferences);
+    if (!encodedMedia || (!mediaReferences.empty() && ((role != "user" && !(generatedAssistant && role == "assistant")) ||
+                                                          scope.audience.kind != identity::AudienceKind::Private)))
+    {
+        outReason = "Invalid or non-private image associations were not archived.";
+        return false;
+    }
     if (content.empty() || role.empty() || sessionId.empty())
     {
         outReason = "Nothing to record.";
@@ -509,8 +653,7 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
         // The rule's category is named (never the matched text) so a false positive can
         // be told apart from a real secret without reopening the turn.
         ++counters.withheldSensitive;
-        outReason = "The turn matched a sensitive-content marker (" +
-            ToString(finding.kind) + ") and was not archived.";
+        outReason = "The turn matched a sensitive-content marker (" + ToString(finding.kind) + ") and was not archived.";
         return false;
     }
 
@@ -573,8 +716,8 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
     if (sqlite3_prepare_v2(database,
             "INSERT INTO conversation_turns"
             "(id, session_id, turn_index, role, content, created_at, participant_id, audience_kind, audience_id, audience_revision, "
-            "speaker_source, consent_revision, companion_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            "speaker_source, consent_revision, companion_id, media_references) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             -1, &raw, nullptr) != SQLITE_OK)
     {
         outReason = "The conversation archive rejected the turn.";
@@ -596,6 +739,7 @@ bool ConversationArchive::Record(const std::string& sessionId, const std::string
     sqlite3_bind_int(statement.get(), 11, static_cast<int>(scope.participantSource));
     sqlite3_bind_int64(statement.get(), 12, static_cast<sqlite3_int64>(scope.consentRevision));
     sqlite3_bind_text(statement.get(), 13, scope.companionId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(statement.get(), 14, encodedMedia->c_str(), -1, SQLITE_TRANSIENT);
     if (sqlite3_step(statement.get()) != SQLITE_DONE)
     {
         outReason = "The conversation archive could not store the turn.";
@@ -788,13 +932,13 @@ std::vector<ArchivedTurn> ConversationArchive::Search(const std::string& query, 
     }
     Statement statement;
     sqlite3_stmt* raw = nullptr;
-    const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
-        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
-        "FROM conversation_search s "
-        "JOIN conversation_turns t ON t.rowid = s.rowid "
-        "WHERE conversation_search MATCH ? "
-        "ORDER BY bm25(conversation_search) ASC LIMIT ?;";
+    const std::string sql = "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+                            "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, "
+                            "t.companion_id, t.media_references "
+                            "FROM conversation_search s "
+                            "JOIN conversation_turns t ON t.rowid = s.rowid "
+                            "WHERE conversation_search MATCH ? "
+                            "ORDER BY bm25(conversation_search) ASC LIMIT ?;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -868,14 +1012,14 @@ std::vector<ArchivedTurn> ConversationArchive::SearchRange(const std::vector<std
     }
     Statement statement;
     sqlite3_stmt* raw = nullptr;
-    const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
-        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
-        "FROM conversation_search s "
-        "JOIN conversation_turns t ON t.rowid = s.rowid "
-        "WHERE conversation_search MATCH ?1 "
-        "  AND CAST(t.created_at AS INTEGER) >= ?2 AND CAST(t.created_at AS INTEGER) < ?3 " +
-        ScopePredicate(scope, "t.") + "ORDER BY bm25(conversation_search) ASC LIMIT ?4;";
+    const std::string sql = "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+                            "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, "
+                            "t.companion_id, t.media_references "
+                            "FROM conversation_search s "
+                            "JOIN conversation_turns t ON t.rowid = s.rowid "
+                            "WHERE conversation_search MATCH ?1 "
+                            "  AND CAST(t.created_at AS INTEGER) >= ?2 AND CAST(t.created_at AS INTEGER) < ?3 " +
+                            ScopePredicate(scope, "t.") + "ORDER BY bm25(conversation_search) ASC LIMIT ?4;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -911,13 +1055,13 @@ std::vector<ArchivedTurn> ConversationArchive::SearchEarliest(
     }
     Statement statement;
     sqlite3_stmt* raw = nullptr;
-    const std::string sql =
-        "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
-        "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, t.companion_id "
-        "FROM conversation_search s "
-        "JOIN conversation_turns t ON t.rowid = s.rowid "
-        "WHERE conversation_search MATCH ?1 " +
-        ScopePredicate(scope, "t.") + "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC LIMIT ?2;";
+    const std::string sql = "SELECT t.id, t.session_id, t.turn_index, t.role, t.content, t.created_at, "
+                            "t.participant_id, t.audience_kind, t.audience_id, t.audience_revision, t.speaker_source, t.consent_revision, "
+                            "t.companion_id, t.media_references "
+                            "FROM conversation_search s "
+                            "JOIN conversation_turns t ON t.rowid = s.rowid "
+                            "WHERE conversation_search MATCH ?1 " +
+                            ScopePredicate(scope, "t.") + "ORDER BY CAST(t.created_at AS INTEGER) ASC, t.turn_index ASC LIMIT ?2;";
     if (sqlite3_prepare_v2(database, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK)
     {
         return turns;
@@ -1002,16 +1146,18 @@ std::vector<ArchivedTurn> ConversationArchive::SearchHybrid(const RecallRequest&
             const double norm = VectorNorm(queryEmbedding);
             const auto better = [](const SemanticTurn& left, const SemanticTurn& right)
             {
-                if (left.similarity != right.similarity) return left.similarity > right.similarity;
+                if (left.similarity != right.similarity)
+                    return left.similarity > right.similarity;
                 const auto leftTime = ParseEpochSecondsText(left.turn.createdAt);
                 const auto rightTime = ParseEpochSecondsText(right.turn.createdAt);
-                if (leftTime != rightTime) return leftTime > rightTime;
+                if (leftTime != rightTime)
+                    return leftTime > rightTime;
                 return left.turn.id < right.turn.id;
             };
             while (sqlite3_step(statement.get()) == SQLITE_ROW)
             {
-                const auto similarity = CosineSimilarity(queryEmbedding, norm, sqlite3_column_blob(statement.get(), 13),
-                    sqlite3_column_bytes(statement.get(), 13), sqlite3_column_int64(statement.get(), 14));
+                const auto similarity = CosineSimilarity(queryEmbedding, norm, sqlite3_column_blob(statement.get(), 14),
+                    sqlite3_column_bytes(statement.get(), 14), sqlite3_column_int64(statement.get(), 15));
                 if (!similarity || *similarity < MinimumSemanticSimilarity)
                     continue;
                 semantic.push_back({ReadTurn(statement.get()), *similarity});
@@ -1096,7 +1242,7 @@ ArchiveEmbeddingBackfillPage ConversationArchive::ScanMissingEmbeddings(const st
             break;
         }
         page.entries.push_back(ReadTurn(statement.get()));
-        page.nextRowId = sqlite3_column_int64(statement.get(), 13);
+        page.nextRowId = sqlite3_column_int64(statement.get(), 14);
     }
     if (status != SQLITE_DONE && status != SQLITE_ROW)
     {
@@ -1322,6 +1468,57 @@ bool ConversationArchive::RemoveLastTurnIf(const std::string& sessionId, const s
     return sqlite3_step(statement.get()) == SQLITE_DONE && sqlite3_changes64(database) == 1 && transaction.Commit();
 }
 
+bool ConversationArchive::InvalidateMediaAnalysis(const std::string& id)
+{
+    std::error_code error;
+    if (!std::filesystem::exists(archivePath, error))
+        return !error;
+    sqlite3* const database = Acquire();
+    if (!database || id.empty())
+        return false;
+    std::lock_guard writeLock(connectionMutex);
+    ArchiveTransaction transaction(database);
+    if (!transaction.IsActive())
+        return false;
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database,
+            "SELECT session_id, turn_index, media_references, role FROM conversation_turns WHERE role IN ('user','assistant');", -1, &raw,
+            nullptr) != SQLITE_OK)
+        return false;
+    Statement query(raw);
+    std::vector<std::pair<std::string, int>> affected;
+    int status = SQLITE_DONE;
+    while ((status = sqlite3_step(query.get())) == SQLITE_ROW)
+    {
+        const auto references = DecodeMedia(ColumnText(query.get(), 2));
+        const bool user = ColumnText(query.get(), 3) == "user";
+        if ((user || std::all_of(references.begin(), references.end(),
+                         [](const auto& reference) { return reference.origin == MediaOrigin::GeneratedArtifact; })) &&
+            std::any_of(references.begin(), references.end(), [&](const auto& reference) { return reference.id == id; }))
+            affected.emplace_back(ColumnText(query.get(), 0), sqlite3_column_int(query.get(), 1) + (user ? 1 : 0));
+    }
+    if (status != SQLITE_DONE)
+        return false;
+    query.reset();
+    for (const auto& [session, index] : affected)
+    {
+        raw = nullptr;
+        if (sqlite3_prepare_v2(database,
+                "UPDATE conversation_turns SET content=?1 WHERE session_id=?2 AND turn_index=?3 AND role='assistant';", -1, &raw,
+                nullptr) != SQLITE_OK)
+            return false;
+        Statement update(raw);
+        sqlite3_bind_text(
+            update.get(), 1, "[Earlier image analysis was cleared because its source image was forgotten.]", -1, SQLITE_STATIC);
+        sqlite3_bind_text(update.get(), 2, session.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(update.get(), 3, index);
+        if (sqlite3_step(update.get()) != SQLITE_DONE)
+            return false;
+    }
+    return transaction.Commit() && Execute(database, "INSERT INTO conversation_search(conversation_search) VALUES('optimize');") &&
+           Execute(database, "VACUUM;") && Execute(database, "PRAGMA wal_checkpoint(TRUNCATE);");
+}
+
 std::vector<ArchivedTurn> ConversationArchive::LoadSessionTail(
     const std::string& sessionId, const std::size_t maxTurns, const MemoryScope& scope) const
 {
@@ -1355,8 +1552,7 @@ std::size_t ConversationArchive::TotalTurns() const
     }
     Statement statement;
     sqlite3_stmt* raw = nullptr;
-    if (sqlite3_prepare_v2(database,
-            "SELECT COUNT(*) FROM conversation_turns;", -1, &raw, nullptr) != SQLITE_OK)
+    if (sqlite3_prepare_v2(database, "SELECT COUNT(*) FROM conversation_turns;", -1, &raw, nullptr) != SQLITE_OK)
     {
         return 0;
     }

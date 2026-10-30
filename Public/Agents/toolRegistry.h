@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Agents/delegation.h"
+#include "Core/conversationMediaReference.h"
 #include "LLM/toolCall.h"
 
 #include <nlohmann/json.hpp>
@@ -41,6 +42,8 @@ struct ToolExecution
     bool succeeded = false;
     std::string content;
     std::string error;
+    // Host executor values; never serialized into the model's tool result.
+    std::vector<conversationMediaReference> generatedMediaReferences;
 
     [[nodiscard]] static ToolExecution Ok(std::string content);
     [[nodiscard]] static ToolExecution Fail(std::string error);

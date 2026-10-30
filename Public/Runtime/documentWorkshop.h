@@ -41,6 +41,8 @@ public:
     [[nodiscard]] TurnOutcome ReviseDocumentBlock(const std::string& reference, const std::string& instruction);
     [[nodiscard]] TurnOutcome GenerateImage(const std::string& prompt, std::stop_token stopToken = {}, std::function<bool()> admission = {},
         const RuntimeStamp& stamp = {}, bool publishToCanvas = true, std::string requestedBy = "user");
+    [[nodiscard]] TurnOutcome GenerateImage(const visual::ImageRequest& request, std::stop_token stopToken = {},
+        std::function<bool()> admission = {}, const RuntimeStamp& stamp = {}, bool publishToCanvas = true, std::string requestedBy = "user");
     [[nodiscard]] TurnOutcome ShowPicture(const std::string& path, const PictureScope& scope);
     [[nodiscard]] TurnOutcome DrawDiagram(const std::string& request);
 

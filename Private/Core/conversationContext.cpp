@@ -101,7 +101,8 @@ int ContinuityPriority(const std::string& text)
     for (const auto phrase : {"decided", "we chose", "decision", "we will", "we'll"})
         if (lower.find(phrase) != std::string::npos)
             return 2;
-    for (const auto phrase : {"need to", "still need", "unfinished", "pending", "?"})
+    // An answered question is not an outstanding task; ordinary questions remain available after history eviction.
+    for (const auto phrase : {"need to", "still need", "unfinished", "pending"})
         if (lower.find(phrase) != std::string::npos)
             return 1;
     return 0;
@@ -126,19 +127,20 @@ void conversationContext::AddMessage(conversationMessage message)
 
     messages.push_back(std::move(message));
     messageSources.push_back(nextSource++);
+    CaptureMediaHistory(messages.back(), messageSources.back());
     CaptureContinuity(messages.back(), messageSources.back());
     TrimToBudget();
 }
 
 bool conversationContext::RemoveLastMessageIf(const std::string& role, const std::string& content)
 {
-    if (messages.empty() || messages.back().role != role ||
-        messages.back().content != content)
+    if (messages.empty() || messages.back().role != role || messages.back().content != content)
     {
         return false;
     }
     const auto source = messageSources.back();
     std::erase_if(continuity, [source](const auto& excerpt) { return excerpt.source == source; });
+    std::erase_if(mediaHistory, [source](const auto& record) { return record.source == source; });
     messages.pop_back();
     messageSources.pop_back();
     return true;
@@ -149,7 +151,30 @@ void conversationContext::Clear()
     messages.clear();
     messageSources.clear();
     continuity.clear();
+    mediaHistory.clear();
     nextSource = 1;
+}
+
+void conversationContext::InvalidateMediaAnalysis(const std::string& id)
+{
+    bool affected = false;
+    for (auto& message : messages)
+    {
+        const bool generatedSource = message.role == "assistant" &&
+                                     std::any_of(message.mediaReferences.begin(), message.mediaReferences.end(), [&](const auto& reference)
+                                         { return reference.id == id && reference.origin == MediaOrigin::GeneratedArtifact; });
+        if (message.role == "user")
+            affected = std::any_of(
+                message.mediaReferences.begin(), message.mediaReferences.end(), [&](const auto& reference) { return reference.id == id; });
+        else if (message.role == "assistant" && (affected || generatedSource))
+        {
+            message.content = "[Earlier image analysis was cleared because its source image was forgotten.]";
+            affected = generatedSource;
+        }
+        message.images.clear();
+    }
+    std::erase_if(continuity,
+        [&](const auto& excerpt) { return std::find(excerpt.mediaIds.begin(), excerpt.mediaIds.end(), id) != excerpt.mediaIds.end(); });
 }
 
 void conversationContext::RestoreMessages(const std::vector<conversationMessage>& source, const std::size_t recentMessages)
@@ -170,6 +195,34 @@ void conversationContext::RestoreMessages(const std::vector<conversationMessage>
 std::vector<conversationMessage> conversationContext::GetRecentMessages() const
 {
     return messages;
+}
+
+std::vector<conversationMessage> conversationContext::GetMediaHistory() const
+{
+    std::vector<conversationMessage> history;
+    history.reserve(mediaHistory.size());
+    for (const auto& record : mediaHistory)
+        history.push_back(record.message);
+    return history;
+}
+
+void conversationContext::CaptureMediaHistory(const conversationMessage& message, const std::uint64_t source)
+{
+    const bool generated = message.role == "assistant" && message.memoryScope &&
+                           revia::memory::IsAttributedPrivateScope(*message.memoryScope) &&
+                           std::all_of(message.mediaReferences.begin(), message.mediaReferences.end(),
+                               [](const auto& reference) { return reference.origin == MediaOrigin::GeneratedArtifact; });
+    if ((message.role != "user" && !generated) || message.mediaReferences.empty())
+        return;
+    conversationMessage metadata;
+    metadata.role = message.role;
+    metadata.participantId = message.participantId;
+    metadata.memoryScope = message.memoryScope;
+    metadata.mediaReferences.assign(
+        message.mediaReferences.begin(), message.mediaReferences.begin() + std::min<std::size_t>(4, message.mediaReferences.size()));
+    mediaHistory.push_back({source, std::move(metadata)});
+    if (mediaHistory.size() > 256)
+        mediaHistory.erase(mediaHistory.begin());
 }
 
 std::string conversationContext::GetCompressedHistorySummary() const
@@ -244,7 +297,14 @@ void conversationContext::CaptureContinuity(const conversationMessage& message, 
     }
     std::stable_sort(selected.begin(), selected.end(), [](const auto& left, const auto& right)
         { return left.priority == right.priority ? left.offset > right.offset : left.priority > right.priority; });
-    ContinuityExcerpt excerpt{source, message.role, {}, selected.empty() ? 0 : selected.front().priority};
+    ContinuityExcerpt excerpt{source, message.role, {}, selected.empty() ? 0 : selected.front().priority, {}};
+    if (message.role == "assistant")
+        for (const auto& reference : message.mediaReferences)
+            if (reference.origin == MediaOrigin::GeneratedArtifact)
+                excerpt.mediaIds.push_back(reference.id);
+    if (message.role == "assistant" && messages.size() >= 2 && messages[messages.size() - 2].role == "user")
+        for (const auto& reference : messages[messages.size() - 2].mediaReferences)
+            excerpt.mediaIds.push_back(reference.id);
     std::vector<Sentence> fitting;
     std::size_t used = 0;
     for (auto& sentence : selected)
@@ -277,8 +337,7 @@ std::size_t conversationContext::CharacterCount() const
         // earlier exchange is evicted -- that emptied the whole conversation in a real
         // session, and the paste itself was bounded at the prompt layer anyway.
         const std::size_t size = messages[index].content.size();
-        total += index + 1 == messages.size()
-            ? std::min(size, MaximumRetainedMessageCharacters()) : size;
+        total += index + 1 == messages.size() ? std::min(size, MaximumRetainedMessageCharacters()) : size;
     }
     return total;
 }
@@ -316,15 +375,16 @@ void conversationContext::BoundRetainedMessage(conversationMessage& message) con
 {
     const std::size_t limit = MaximumRetainedMessageCharacters();
     std::string& content = message.content;
-    if (content.size() <= limit) return;
+    if (content.size() <= limit)
+        return;
     static constexpr std::string_view marker = "\n[... middle of a long message omitted ...]\n";
     // Keep both ends: a pasted log's question is usually at the start and its error at
     // the end, and either alone reads as a different message.
     const std::size_t headBudget = (limit - marker.size()) * 2 / 3;
     const std::size_t tailBudget = limit - marker.size() - headBudget;
     std::size_t tailStart = content.size() - tailBudget;
-    while (tailStart < content.size() &&
-        (static_cast<unsigned char>(content[tailStart]) & 0xC0U) == 0x80U) ++tailStart;
+    while (tailStart < content.size() && (static_cast<unsigned char>(content[tailStart]) & 0xC0U) == 0x80U)
+        ++tailStart;
     std::string bounded = revia::utf8::Prefix(content, headBudget);
     bounded += marker;
     bounded.append(content, tailStart, std::string::npos);
@@ -350,13 +410,11 @@ void conversationContext::TrimToBudget()
     const std::size_t characterTarget = maxCharacters * 3 / 5;
     // Keep the newest message even when it alone exceeds the soft character budget. The
     // current request must never be removed in order to preserve older context.
-    while (messages.size() > 1 &&
-        (messages.size() > messageTarget || CharacterCount() > characterTarget))
+    while (messages.size() > 1 && (messages.size() > messageTarget || CharacterCount() > characterTarget))
     {
         // Conversation normally alternates user/assistant. Evict a complete old exchange
         // when possible so the retained context never begins with an orphaned answer.
-        const bool completePair = messages.size() >= 2 &&
-            messages[0].role == "user" && messages[1].role == "assistant";
+        const bool completePair = messages.size() >= 2 && messages[0].role == "user" && messages[1].role == "assistant";
         messages.erase(messages.begin(), messages.begin() + (completePair ? 2 : 1));
         messageSources.erase(messageSources.begin(), messageSources.begin() + (completePair ? 2 : 1));
     }

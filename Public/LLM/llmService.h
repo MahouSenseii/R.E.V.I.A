@@ -1,4 +1,5 @@
 #pragma once
+#include "LLM/codeReviewPurpose.h"
 
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
@@ -30,6 +31,8 @@ public:
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
     void SetPosture(std::string posture);
     void SetReplyNote(std::string note);
+    // Applies to local source explanations until SetPosture resets the turn state.
+    void SetSourceExplanation(bool enabled);
     std::string RelatedMemories(
         const std::string& query, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
     healthOutput CheckBackendHealth(std::stop_token stopToken = {}) const;
@@ -49,8 +52,8 @@ public:
     responseOutput Deliberate(const std::string& boundedInquiryPrompt, std::stop_token stopToken = {}) const;
     responseOutput GenerateCalculationProposal(const std::string& envelope, std::stop_token stopToken = {}) const;
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
-    responseOutput GenerateCodeReview(const std::string& instructions,
-        const std::string& material, const std::string& schema, std::stop_token stopToken = {}) const;
+    responseOutput GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
+        std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
     responseOutput GenerateComputerSubgoal(const std::string& instruction,
         const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
 

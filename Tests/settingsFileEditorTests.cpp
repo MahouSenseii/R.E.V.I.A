@@ -35,7 +35,8 @@ std::string Read(const std::filesystem::path& path)
 
 bool Mentions(const std::vector<std::string>& warnings, const std::string& text)
 {
-    return std::any_of(warnings.begin(), warnings.end(), [&text](const std::string& warning) { return warning.find(text) != std::string::npos; });
+    return std::any_of(
+        warnings.begin(), warnings.end(), [&text](const std::string& warning) { return warning.find(text) != std::string::npos; });
 }
 
 // A settings file that loads, with two MCP servers and no vision projector, so turning on
@@ -81,7 +82,10 @@ struct Fixture
         original = Read(settings);
     }
 
-    [[nodiscard]] SettingsFileEditor Editor() const { return SettingsFileEditor(overlay, settings.string(), profiles.string()); }
+    [[nodiscard]] SettingsFileEditor Editor() const
+    {
+        return SettingsFileEditor(overlay, settings.string(), profiles.string());
+    }
 
     [[nodiscard]] appSettings Load(std::vector<std::string>* warnings = nullptr) const
     {
@@ -208,7 +212,8 @@ bool HeldOnTheSafeSide(const appSettings& loaded)
 {
     return !loaded.vision.bEnabled && !loaded.vision.bContinuousAwareness && !loaded.perception.bEnabled && !loaded.llm.cloud.bEnabled &&
            loaded.llm.cloud.useFor == "ask" && !loaded.localApi.bTrustedPrivate && !loaded.improvement.bVerify && loaded.image.bOffline &&
-           std::all_of(loaded.mcp.servers.begin(), loaded.mcp.servers.end(), [](const auto& server) { return server.bRequireConfirmation; });
+           std::all_of(
+               loaded.mcp.servers.begin(), loaded.mcp.servers.end(), [](const auto& server) { return server.bRequireConfirmation; });
 }
 
 void TestAnUnusableOverlayFailsClosed()
@@ -353,8 +358,8 @@ void TestAnUnreadableOverlayIsMovedAside()
     // Every load holds the safe side over these files. The next change keeps them under a new name
     // instead of overwriting them, starts from that safe side, and never brings back a value the
     // load had refused.
-    for (const std::string& unreadable : {std::string("{not json"),
-             std::string(R"({"schemaVersion":2,"values":{"vision.enabled":false,"image.keepLoaded":true}})")})
+    for (const std::string& unreadable :
+        {std::string("{not json"), std::string(R"({"schemaVersion":2,"values":{"vision.enabled":false,"image.keepLoaded":true}})")})
     {
         Fixture fixture;
         Write(fixture.overlay, unreadable);
@@ -447,7 +452,15 @@ void TestEveryOwnerKeyReachesItsField()
             if (entry.type == revia::core::OwnerKeyType::Bool)
                 values = {json(!configured->get<bool>()), *configured};
             else
-                values = {json("never"), json("ask"), json("hardTurns")};
+            {
+                std::string_view choices = entry.choices;
+                while (!choices.empty())
+                {
+                    const auto separator = choices.find('|');
+                    values.emplace_back(std::string(choices.substr(0, separator)));
+                    choices = separator == std::string_view::npos ? std::string_view{} : choices.substr(separator + 1);
+                }
+            }
             for (const json& value : values)
             {
                 std::string error;
@@ -467,6 +480,23 @@ void TestEveryOwnerKeyReachesItsField()
 
 void RunSettingsFileEditorTests()
 {
+    {
+        Fixture fixture;
+        auto editor = fixture.Editor();
+        std::string error;
+        Check(editor.SetChoice("llm.imageMinTokens", "1024", error) && fixture.Load().llm.imageMinTokens == 1024,
+            "The image-token owner preset did not reach its integer field: " + error);
+        const auto* key = revia::core::FindOwnerKey("llm.imageMinTokens");
+        Check(key && !key->live && editor.Value("llm.imageMinTokens") == json("1024"),
+            "The image-token sizing choice was represented as a live change or lost its owner overlay.");
+        const auto saved = Read(fixture.overlay);
+        for (const auto* invalid : {"-1", "4097", "768", "1024 --other-argument"})
+            Check(!editor.SetChoice("llm.imageMinTokens", invalid, error) && Read(fixture.overlay) == saved,
+                "An unsupported image-token owner choice altered the overlay.");
+        Check(editor.SetChoice("llm.imageMinTokens", "0", error) && fixture.Load().llm.imageMinTokens == 0,
+            "The backend-default image-token owner choice was not preserved.");
+        fixture.CheckBaseUntouched();
+    }
     TestAllowlistIsEnforced();
     TestValidationRefusalKeepsThePreviousOverlay();
     TestAWrongPathIsRefused();
