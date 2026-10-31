@@ -321,13 +321,15 @@ def command_check(arguments):
     for name, lora in runs:
         server = Server(arguments.server, model, lora, arguments.server_arg or [], arguments.timeout)
         try:
-            record[name] = dict(zip(("checks", "replies"), compare(server, tokenizer, template_text)))
+            # Under "runs": "base" already names the base identity and "adapter" whether one was served.
+            record.setdefault("runs", {})[name] = dict(zip(("checks", "replies"), compare(server, tokenizer, template_text)))
         finally:
             server.close()
     if adapter:
-        produced = all("content" in reply for name in ("base", "adapter") for reply in record[name]["replies"])
-        record["adapterChangedReplies"] = record["adapter"]["replies"] != record["base"]["replies"] if produced else None
-    gates = [record["embeddedTemplate"], record["layersMatch"]] + [all(record[name]["checks"].values()) for name, _ in runs]
+        runs_by_name = record["runs"]
+        produced = all("content" in reply for name in ("base", "adapter") for reply in runs_by_name[name]["replies"])
+        record["adapterChangedReplies"] = runs_by_name["adapter"]["replies"] != runs_by_name["base"]["replies"] if produced else None
+    gates = [record["embeddedTemplate"], record["layersMatch"]] + [all(record["runs"][name]["checks"].values()) for name, _ in runs]
     record["passed"] = all(gates)
     output = plain(Path(arguments.output).absolute())
     require(not output.exists(), f"{output} already exists; a check is never replaced.")

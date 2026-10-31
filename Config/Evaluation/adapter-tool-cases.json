@@ -1,0 +1,43 @@
+{
+  "description": "Tool-calling retention for adapter experiments: the same model with and without an adapter must still call the right tool with the right arguments, and must not call one when none is needed. Generic tools, so the cases test calling competence rather than Revia's own tool set.",
+  "cases": [
+    {
+      "id": "tool-read-named-file",
+      "messages": [{"role": "user", "content": "Open notes.txt and tell me what it says."}],
+      "tools": ["read_file"],
+      "expect": {"function": "read_file", "arguments": {"path": "notes.txt"}}
+    },
+    {
+      "id": "tool-reminder-text",
+      "messages": [{"role": "user", "content": "Set a reminder to stretch at 3pm today."}],
+      "tools": ["set_reminder"],
+      "expect": {"function": "set_reminder", "argumentsContain": {"text": "stretch"}}
+    },
+    {
+      "id": "tool-calculation",
+      "messages": [{"role": "user", "content": "Use the calculator to work out 37 times 43."}],
+      "tools": ["calculate"],
+      "expect": {"function": "calculate", "argumentsContain": {"expression": "37"}}
+    },
+    {
+      "id": "tool-choose-among-several",
+      "messages": [{"role": "user", "content": "Please read the file todo.md for me."}],
+      "tools": ["calculate", "read_file", "set_reminder"],
+      "expect": {"function": "read_file", "arguments": {"path": "todo.md"}}
+    },
+    {
+      "id": "tool-none-needed",
+      "messages": [{"role": "user", "content": "Say hello in one short sentence."}],
+      "tools": ["read_file", "calculate"],
+      "expect": {"function": null}
+    }
+  ],
+  "tools": {
+    "read_file": {"type": "function", "function": {"name": "read_file", "description": "Read one text file and return its contents.",
+      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file's path."}}, "required": ["path"]}}},
+    "set_reminder": {"type": "function", "function": {"name": "set_reminder", "description": "Create a reminder.",
+      "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "time": {"type": "string"}}, "required": ["text", "time"]}}},
+    "calculate": {"type": "function", "function": {"name": "calculate", "description": "Evaluate an arithmetic expression exactly.",
+      "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}}}
+  }
+}

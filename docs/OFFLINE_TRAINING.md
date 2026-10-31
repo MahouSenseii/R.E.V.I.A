@@ -7,8 +7,8 @@ itself.
 
 Status on 2026-10-31:
 
-- The dataset exporter, the training worker, the pinned asset installer and the llama.cpp
-  conversion and check tool exist.
+- The dataset exporter, the training worker, the pinned asset installer, the llama.cpp
+  conversion and check tool, and the evaluation runner exist.
 - Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
   build.
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
@@ -232,17 +232,17 @@ model-selection decision. Steps on the host:
    lowered if needed.
 5. Export the matched baseline and the adapter, then run `check` with
    `--server-arg=-ngl --server-arg=99`.
-6. Evaluate base and base+LoRA from the same server binary and quantization against criteria
-   fixed before the run:
-   - an improvement on the export's held-out test partition with no new failures;
-   - no more than one regression across the golden set, the answer-quality holdout, and
-     bounded code, tool and memory-grounding cases;
-   - first token and decode rate within 5% of base;
-   - every `check` gate passing;
-   - the base run without `--lora` reproducing the base.
+6. Evaluate with the runner described below. Plan the campaign first, then run the base arm and
+   the candidate arm, write the review sheet, judge it, and score it. The criteria are fixed
+   when the plan is written:
+   - the held-out test partition improves, with no new failures;
+   - no more than one regression across the golden set, the answer-quality holdout and the
+     tool cases;
+   - prefill and decode rates within 5% of base;
+   - the `check` passed.
 
-   A rejected candidate is a valid result. A runner that serves these cases from an owned
-   llama-server is not built yet.
+   The base arm is the same file served without `--lora`, so it is also the rollback.
+   A rejected candidate is a valid result.
 
 ```json
 {
@@ -272,13 +272,84 @@ stay frozen until measured. After the short run, set `maxSteps` to about three e
 `ceil(3 × train examples / 8)`, use a new `jobId`, and keep the configuration otherwise
 fixed.
 
+## Evaluation runner
+
+`Tools/revia_adapter_evaluation.py` compares a candidate with its matched base. It judges
+nothing itself: mechanical checks stay with the existing evaluation owners, and the
+held-out replies go to the owner.
+
+- `plan` writes `plan.json` into a new campaign directory before anything is generated. It
+  records digests of:
+  - the base and adapter exports and their passed `check`;
+  - the dataset's held-out partition;
+  - the golden set, the answer-quality holdout and `Config/Evaluation/adapter-tool-cases.json`;
+  - the llama-server, `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` binaries and the
+    profile;
+  - the sampling settings: temperature 0, a seed, thinking off.
+
+  It also records the criteria. The plan is refused if:
+  - the candidate was trained on a different dataset export;
+  - the check did not pass for exactly this base and adapter;
+  - the held-out partition is smaller than the declared minimum (5 by default).
+
+  Every later command rechecks all of those digests, so nothing can change between fixing the
+  criteria and applying them.
+- `run --arm base|candidate` serves one arm from an owned llama-server with the arm's alias: the
+  quantized base, then the same file with `--lora`. It then:
+  - replays each held-out prompt exactly as captured, without its reviewed reply;
+  - calls the tool cases and judges each call mechanically (right function and arguments, and
+    no call when none is needed);
+  - runs `ReviaAnswerGateLive` on the golden set with `--expected-model` set to the arm's alias
+    and `--ignore-baseline`, without a judge unless the plan names a judge port;
+  - runs `ReviaAnswerQualityLive` on the holdout.
+
+  Each arm runs once into its own directory and is never rerun in place.
+- `review` writes `review.json`. Each held-out case shows its criterion, conversation and
+  reviewed reference, with the two replies as A and B in a seeded random order. The mapping
+  goes to `review-key.json`, which the reviewer should not open. A blank
+  `verdicts.template.json` is written alongside.
+- `score --verdicts <file>` writes `decision.json`: accept, reject, or incomplete while evidence
+  is missing. Any failed criterion rejects. Retention regressions are cases the base passed and
+  the candidate fails. Latency compares the medians of llama-server's own `prompt_ms` and
+  `predicted_per_second`, over only the requests both arms completed. Golden-set judge scores,
+  when present, are reported as advisory. Nothing is activated.
+
+Evidence, all on Linux:
+
+- `Tests/reviaAdapterEvaluation.test.py` passed its 7 fixture tests. They use a loopback model,
+  and stand-ins that reproduce the quality tools' arguments, result files and exit codes.
+- Each of these removals made a test fail: the no-new-failures rule, matched latency, and the
+  plan's digest recheck.
+- A smoke run planned both arms against a real llama-server `b10453` on the tiny Qwen3.5, then
+  ran, reviewed and scored them. Without verdicts it could not accept. It rejected on latency,
+  which is correct, because LoRA overhead on a tiny CPU model is large.
+- The smoke run also found a bug in `check`: run results overwrote the base identity and the
+  adapter flag. Run results now sit under `runs`, and the roundtrip test asserts the identity.
+
+On the host, with Revia stopped so both arms get the 5070:
+
+```powershell
+python -I -B Tools\revia_adapter_evaluation.py plan --output D:\ReviaTraining\evaluations\qwen35-4b-companion-1 `
+  --base-export D:\ReviaTraining\exports\qwen35-4b-base --adapter-export D:\ReviaTraining\exports\qwen35-4b-companion-1 `
+  --check D:\ReviaTraining\exports\qwen35-4b-companion-1-check.json --dataset <reviewed export> `
+  --server ThirdParty\llama.cpp\llama-server.exe --gate <build>\ReviaAnswerGateLive.exe `
+  --quality <build>\ReviaAnswerQualityLive.exe --profile Config\Profiles\revia.json --server-arg=-ngl --server-arg=99
+python -I -B Tools\revia_adapter_evaluation.py run --plan D:\ReviaTraining\evaluations\qwen35-4b-companion-1 --arm base
+python -I -B Tools\revia_adapter_evaluation.py run --plan D:\ReviaTraining\evaluations\qwen35-4b-companion-1 --arm candidate
+python -I -B Tools\revia_adapter_evaluation.py review --plan D:\ReviaTraining\evaluations\qwen35-4b-companion-1
+python -I -B Tools\revia_adapter_evaluation.py score --plan D:\ReviaTraining\evaluations\qwen35-4b-companion-1 --verdicts verdicts.json
+```
+
+The `score` exit code is 0 for accept, 1 for reject and 2 for incomplete.
+
 ## Remaining blockers
 
 - **Reviewed data.** No reviewed export exists yet. The capture steps under Dataset export
   come first. The Stage E failures in `build/stage-e-20261030` retain their exact serialized
   requests and raw responses, which makes them the natural first examples once the owner
   writes corrections.
-- **Evaluation runner.** The existing quality campaigns target Revia's own endpoints. Serving
-  the base and candidate from an owned llama-server needs a small runner.
+- **Evaluation runner on the host.** The runner exists, but on this branch it has only driven
+  stand-ins for the C++ quality tools. Its first host run is also the first check that
+  `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` work against an owned llama-server.
 - **A 9B adapter.** Training it locally is still infeasible as configured: about 22 GB for
   BF16 LoRA against the 12 GB 5070.

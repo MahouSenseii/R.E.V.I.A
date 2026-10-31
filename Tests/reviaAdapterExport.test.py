@@ -159,7 +159,10 @@ class AdapterExportTests(unittest.TestCase):
         record = json.loads((smoke / "check.json").read_text())
         self.assertEqual((code, record["passed"]), (0, True), json.dumps(record, indent=1))
         for run in ("base", "adapter"):
-            self.assertEqual(record[run]["checks"], {"template": True, "endOfTurn": True, "rendering": True, "tokenizer": True})
+            self.assertEqual(record["runs"][run]["checks"], {"template": True, "endOfTurn": True, "rendering": True, "tokenizer": True})
+        # The identity and the adapter flag are what later steps bind to; a run's results must not overwrite them.
+        base_export = json.loads((smoke / "base-export" / "export.json").read_text())
+        self.assertEqual((record["base"], record["adapter"]), (base_export["base"], True))
 
 
 if __name__ == "__main__":

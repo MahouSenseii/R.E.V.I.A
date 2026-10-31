@@ -95,6 +95,18 @@ Inventory at `8aa4ca5`, from tracked code only:
    records `peakVramMiB`, so a 5-step run answers whether peft fits the 12 GB card. Blocked
    on a reviewed dataset export and an evaluation runner for an owned llama-server.
 
+8. **Evaluation runner (2026-10-31).** `Tools/revia_adapter_evaluation.py` compares a
+   candidate with its matched base: the same quantized file served with and without `--lora`
+   from owned llama-servers. `plan` freezes the inputs and criteria before anything is
+   generated. `run` replays the held-out prompts exactly, judges the tool cases
+   (`Config/Evaluation/adapter-tool-cases.json`) mechanically, and drives the existing
+   `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` against each arm. `review` writes a
+   blinded A/B sheet for the owner, and `score` decides accept, reject or incomplete.
+   Linux: 7 fixture tests passed, and three deliberate rule removals each failed one. A smoke
+   run against a real llama-server `b10453` on the tiny model ran both arms end to end. It
+   found that `check` run results overwrote the base identity and adapter flag; that is fixed
+   and asserted. The C++ quality tools have only been driven through stand-ins here.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
