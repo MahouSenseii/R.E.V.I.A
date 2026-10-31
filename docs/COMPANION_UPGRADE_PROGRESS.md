@@ -46,6 +46,15 @@ Inventory at `8aa4ca5`, from tracked code only:
    Studio Q4_K_M/BF16 pair. Next-Concept Modeling has only task-specific checkpoints and
    no chat or Qwen-compatible model. Details: `docs/SPECULATIVE_DECODING.md`,
    `docs/NEXT_CONCEPT_MODELING.md`.
+3. **Dataset export (roadmap 7).** The new `Learning/datasetExport` owner builds
+   deterministic train/validation/test JSONL and a manifest from reviewed candidates.
+   The target is either a correction bound to the exact judged failure or a
+   criterion-verified output, and a failed answer is only ever the rejected side. Related
+   examples are grouped before splitting, earlier exports' partitions are kept, and
+   withdrawn sources are excluded at export and again before use. Linux fixture:
+   `Tests/datasetExportTests.cpp` passed, and four deliberate code removals each failed
+   it. Not yet wired to runtime capture, and no real failure has been exported; the
+   remaining steps are in `docs/OFFLINE_TRAINING.md`.
 
 ## Wrap checkpoint, 2026-10-30, D5
 

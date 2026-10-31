@@ -276,6 +276,15 @@ warning or model self-rating cannot create or resolve a judged-quality task.
 Retests retain prior attempts, require a relevant dependency change or explicit
 owner request, and cannot resolve a failed result by relabeling its digest.
 
+`Learning/datasetExport` turns reviewed, provenance-bound training candidates into
+deterministic JSONL partitions and a manifest. A target is either an owner-accepted
+correction bound to the exact judged failure or an output a recorded criterion
+accepted; the failed answer stays only on the rejected side. Related sessions, tasks,
+sources and identical prompts share one partition, and earlier exports' partitions are
+kept. Withdrawn sources make examples ineligible at export, and again just before a
+worker reads them. It changes no memory, skill or model and has no runtime capture
+yet; see [OFFLINE_TRAINING.md](OFFLINE_TRAINING.md).
+
 `Memory/memoryRevision` transports explicit owner corrections. The existing SQLite
 store atomically retains the original row, corrected row and exact revision
 receipt. Expected summary digests, latest predecessor receipts and captured
