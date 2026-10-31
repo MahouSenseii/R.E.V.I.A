@@ -283,6 +283,13 @@ Inventory at `8aa4ca5`, from tracked code only:
     cross-built with MinGW-w64 GCC 13.2 against a stub XML library, because this container's
     network policy refused the expat download. Neither tool parses XML, and Windows CI builds
     them with the real library.
+15. **Adapter promotion deferred (owner's decision, 2026-10-31).** Adapters stay
+    evaluation-only, and nothing was built to serve one. No C++ or PowerShell source passes
+    `--lora`; only the evaluation runner's own llama-server does. How an accepted adapter
+    would be used is designed only after a candidate's `decision.json` accepts. For a 4B
+    adapter that is also the separate decision to run a 4B model in Revia at all. Rejected
+    alternatives: a gated 4B Main profile with receipts and rollback, and a separate 4B tier
+    beside the 9B Main.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so

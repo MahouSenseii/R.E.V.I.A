@@ -561,7 +561,14 @@ Evidence, all on Linux:
 
 The 4B adapter is a separately evaluated experiment on the official `Qwen/Qwen3.5-4B`. It is
 never attached to the 9B Main. Using any 4B model in Revia would be a separate
-model-selection decision. Steps on the host:
+model-selection decision.
+
+Adapters stay evaluation-only (owner's decision, 2026-10-31). Nothing in Revia serves one:
+Main's launch has no `--lora`, and the evaluation runner serves its own llama-server. How an
+accepted adapter would be put into use is designed only after a candidate's `decision.json`
+accepts. That design is also the model-selection decision above.
+
+Steps on the host:
 
 1. Install the base outside OneDrive:
    `python -I -B Tools\install_training_assets.py --asset qwen3.5-4b-base --destination D:\ReviaModels`.
