@@ -317,6 +317,11 @@ Inventory at `8aa4ca5`, from tracked code only:
 
     Evidence, as a Windows build under Wine 9: the unfixed suite passed 60 of 60 runs, three at
     a time, so the race needs CI's timing. The fixed suite also passed 60 of 60.
+
+    Windows CI: run 41224177288 (commit `0c12b49`) passed `ReviaProactiveStateTests` and
+    `Revia.Foundation`, each running the whole proactive suite including the new test, as well
+    as every branch check. Only the three tests that also fail on `main` failed.
+    `ReviaDelegationTests` and `Revia.ObservedLocalModel` passed in that run.
 17. **Two failures that also fail on `main` (2026-10-31).**
     - `Revia.NliDedupBenchmarkContract`: the benchmark loads the canonical model directory,
       `resolve(strict=True)`, which is right for its provenance. The test expected the
