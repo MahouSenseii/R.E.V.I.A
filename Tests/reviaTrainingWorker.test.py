@@ -18,6 +18,7 @@ SPEC = importlib.util.spec_from_file_location("revia_training_worker", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 SMOKE_MODEL = os.environ.get("REVIA_TRAINING_SMOKE_MODEL", "")
+RUNTIME = all(importlib.util.find_spec(name) is not None for name in ("torch", "transformers", "peft"))
 
 
 def sha(data):
@@ -272,7 +273,8 @@ class TrainingWorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "optional training runtime is not installed: peft"):
                 MODULE.TransformersPeftBackend({}, "cpu")
 
-    @unittest.skipUnless(SMOKE_MODEL and Path(SMOKE_MODEL).is_dir(), "Set REVIA_TRAINING_SMOKE_MODEL to a local tiny model")
+    @unittest.skipUnless(SMOKE_MODEL and Path(SMOKE_MODEL).is_dir() and RUNTIME,
+                         "Needs the training runtime and REVIA_TRAINING_SMOKE_MODEL set to a local tiny model")
     def test_real_backend_trains_a_tiny_local_model(self):
         import torch
         from peft import PeftModel

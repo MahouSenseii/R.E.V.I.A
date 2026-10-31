@@ -32,7 +32,8 @@ Inventory at `8aa4ca5`, from tracked code only:
    (`reviaSession`), and are reported as actually built from the launch's own llama.cpp
    log (`llamaCppServerProcess`). Configured values appear in `/status`. Linux fixture:
    `Tests/promptBatchSettingsTests.cpp` passed, and three deliberate code removals each
-   failed it; the existing image-token check still passes. Windows CI: pending. Host: not
+   failed it; the existing image-token check still passes. Windows CI: it built and passed
+   (run 41156920820, commit `58335fd`). Host: not
    benchmarked, and the default launch is unchanged. Next: the `llama-bench` sweep in
    `docs/CONTEXT_BENCHMARK.md`.
 2. **Speculation and Next-Concept Modeling research (roadmap 6.5, 9).** Nothing was
@@ -41,7 +42,7 @@ Inventory at `8aa4ca5`, from tracked code only:
    MTP is unavailable with the installed GGUF: GGUF headers read from Hugging Face show
    neither the unsloth nor the LM Studio 9B Q4_K_M kept the base model's one MTP head.
    A first-party `z-lab/Qwen3.5-9B-DFlash` draft exists. Both routes need the 19.3 GB
-   official checkpoint, which is a prepared but unapproved download. n-gram modes can be
+   official checkpoint, which the owner approved on 2026-10-31 (see item 5). n-gram modes can be
    qualified on the host now. The tracked manifest does not describe the installed LM
    Studio Q4_K_M/BF16 pair. Next-Concept Modeling has only task-specific checkpoints and
    no chat or Qwen-compatible model. Details: `docs/SPECULATIVE_DECODING.md`,
@@ -64,9 +65,51 @@ Inventory at `8aa4ca5`, from tracked code only:
    one. The real backend trained a tiny hybrid Qwen3.5 on CPU, was cancelled at a
    checkpoint, resumed, and its adapter changed the base model's output. That run also
    showed Qwen3.5's thinking template breaks naive response masking. A real 9B adapter is
-   blocked: about 22 GB is needed for BF16 LoRA against a 12 GB GPU, plus the unapproved
+   blocked: about 22 GB is needed for BF16 LoRA against a 12 GB GPU, plus the then-unapproved
    base download, no reviewed data yet, and no GGUF roundtrip. The 4B, offload or
    rented-GPU alternatives are owner decisions.
+
+5. **Approved downloads and installer (2026-10-31).** The owner approved the official
+   `Qwen/Qwen3.5-9B` checkpoint and `z-lab/Qwen3.5-9B-DFlash`, and chose the separately
+   evaluated 4B experiment, whose base `Qwen/Qwen3.5-4B` (`851bf6e8`) is pinned with them.
+   `Config/training_assets.json` pins all 31 files, about 31.3 GB, by size and SHA-256.
+   `Tools/install_training_assets.py` installs one snapshot outside OneDrive, resumes byte
+   ranges, never replaces a file, and writes the deterministic install manifest the worker
+   verifies. Linux fixture: 7 tests, and two deliberate code removals each failed one. A real
+   install of two pinned 4B files from huggingface.co matched their pinned digests. Nothing
+   has been downloaded to the host.
+6. **Adapter conversion and llama.cpp check.** `Tools/revia_adapter_export.py` converts a
+   verified base (the matched baseline, keeping a real MTP head) and a candidate (as a GGUF
+   LoRA, refused for any other base). It then checks the template, end-of-turn token,
+   rendering with tools, tokenization and block count in llama-server. Linux, with
+   llama.cpp `b10453` built here: 6 fixture tests passed, and a full tiny Qwen3.5 roundtrip
+   (train, convert, LoRA, check) passed every gate. The LoRA changed the server's replies.
+   Findings along the way:
+   - the converter's pinned transformers 4.57.6 cannot read tokenizers saved by
+     transformers 5;
+   - converting a declared MTP head that has no weights breaks loading;
+   - llama-server `b10453` parses every generation against the template's output format.
+7. **4B experiment plan.** `docs/OFFLINE_TRAINING.md` gives the exact install, environments,
+   job (pinned base and install digest, BF16 LoRA on attention plus MLP, a 10,500 MiB VRAM
+   floor that requires Revia to be stopped) and criteria fixed before the run. The worker now
+   records `peakVramMiB`, so a 5-step run answers whether peft fits the 12 GB card. Blocked
+   on a reviewed dataset export and an evaluation runner for an owned llama-server.
+
+**CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
+`Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
+`Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
+`Python3_EXECUTABLE` to the job's own interpreter. With that fix, 143 of 144 tests ran (the
+approved optional video skip is the other), including this branch's new checks, which passed.
+Four tests failed. They were already failing on `main` but hidden behind the gate:
+
+- `ReviaAudiencePrivacyTests`: the known obsolete `Reference-image` expectation, which the
+  host candidate patch addresses.
+- `Revia.NliDedupBenchmarkContract`: compares the runner's 8.3 short temp path with its long
+  name.
+- `Revia.VideoPreview`: reports SKIP without FFmpeg but exits as a failure.
+- `Revia.ObservedLocalModel`: a credential-refusal check failing on the runner.
+
+The last three are queued as a separate task.
 
 ## Wrap checkpoint, 2026-10-30, D5
 

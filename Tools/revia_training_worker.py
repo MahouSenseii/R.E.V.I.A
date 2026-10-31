@@ -331,7 +331,9 @@ def run(job, backend_factory=None):
               "configuration": configuration,
               "configurationSha256": digest_bytes(json.dumps(configuration, sort_keys=True).encode()),
               "template": {"sha256": base["templateSha256"], "enableThinking": False, "masking": "assistant reply only"},
-              "metrics": {"steps": step, "finalTrainLoss": loss, "validationLoss": validation_loss, "resumedFromStep": resumed},
+              "metrics": {"steps": step, "finalTrainLoss": loss, "validationLoss": validation_loss, "resumedFromStep": resumed,
+                          # Measured, so a short qualification run shows whether the configuration fits the card.
+                          "peakVramMiB": getattr(backend, "peak_vram_mib", lambda: None)()},
               "environment": {"python": platform.python_version(), "platform": platform.platform(), **backend.versions()}}
     candidate_sha = publish(job, backend, record)
     return {"state": "complete", "jobId": job["jobId"], "candidatePath": job["outputPath"], "candidateManifestSha256": candidate_sha,
@@ -360,6 +362,11 @@ class TransformersPeftBackend:
             return None
         free, _ = self.torch.cuda.mem_get_info(int(self.device.split(":")[1]))
         return free / MIB
+
+    def peak_vram_mib(self):
+        if not self.device.startswith("cuda"):
+            return None
+        return self.torch.cuda.max_memory_allocated(int(self.device.split(":")[1])) / MIB
 
     def load(self, directory):
         torch, configuration = self.torch, self.configuration

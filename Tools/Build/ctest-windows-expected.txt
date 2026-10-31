@@ -140,5 +140,7 @@ ReviaGeneratedMediaRuntimeTests
 Revia.VideoRequestPolicy
 Revia.VideoServicePolicy
 Revia.TrainingWorkerPolicy
+Revia.TrainingAssetInstaller
+Revia.AdapterExportPolicy
 ReviaReminderIntentTests
 Revia.VideoPublicationLane

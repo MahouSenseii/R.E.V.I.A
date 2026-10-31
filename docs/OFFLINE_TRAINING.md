@@ -3,10 +3,17 @@
 Optional, and not part of normal startup. Memory changes what Revia retrieves, skills
 change reusable procedures, and the self-development stages change verified code. This
 path is the only one meant to change model parameters, and nothing in it runs by
-itself. Status on 2026-10-31: the dataset exporter exists and passes fixture checks on
-Linux. The training worker
-exists and has trained a tiny model on CPU. No runtime capture, owner review screen, real
-export or real training job exists yet.
+itself.
+
+Status on 2026-10-31:
+
+- The dataset exporter, the training worker, the pinned asset installer and the llama.cpp
+  conversion and check tool exist.
+- Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
+  build.
+- A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
+- The owner approved the base downloads and chose the separately evaluated 4B experiment.
+- No runtime capture, owner review screen, real export or real training job exists yet.
 
 ## Dataset export
 
@@ -145,21 +152,132 @@ python Tests\reviaTrainingWorker.test.py
 <training-python> -I -B Tools\revia_training_worker.py --job <scratch>\ReviaTrainingJobs\<jobId>\job.json
 ```
 
-## Blockers for a real Main adapter
+## Conversion and llama.cpp check
 
-- **Hardware.** The guidance's BF16 LoRA figure for 9B is about 22 GB. Main's GPU has
-  12 GB, the RTX 2070 SUPER has 8 GB and no native BF16, and the two are not a pooled
-  allocation. A 9B adapter cannot be trained locally as configured. Each alternative is
-  a decision for the owner:
-  - a separately evaluated 4B candidate, at about 10 GB, which fits the 5070 only with
-    Main and the voice worker unloaded. It is never attachable to the 9B Main.
-  - a measured CPU-offload configuration, untested and likely very slow.
-  - a rented GPU, which is not authorized.
-- **Base checkpoint.** The official `Qwen/Qwen3.5-9B` checkpoint is a prepared, not yet
-  approved, 19.3 GB download, shared with the speculation work in
-  [SPECULATIVE_DECODING.md](SPECULATIVE_DECODING.md).
-- **Reviewed data.** No reviewed dataset exists yet. The runtime capture steps listed
-  under Dataset export come first.
-- **Conversion roundtrip.** Not implemented: adapter, then evaluation, merge or export,
-  GGUF, and llama.cpp evaluation. Template and end-of-turn behavior must be checked before
-  and after quantization.
+`Tools/revia_adapter_export.py` takes a candidate from a verified base to llama.cpp files.
+It reuses the worker's base verification, and each command writes a new directory with an
+`export.json` receipt.
+
+- `base` converts the verified Hugging Face base to BF16 GGUF with the pinned llama.cpp
+  converter and quantizes it (Q4_K_M by default). This is the matched baseline. The official
+  Qwen3.5 checkpoints carry their MTP head, which the conversion keeps (`mtpHead`), so the
+  baseline can also be used for MTP speculation. A config that declares a head its weights
+  lack gets `--no-mtp`, because converting it would write a block the loader cannot find.
+- `adapter` converts a candidate to a GGUF LoRA with `convert_lora_to_gguf.py`. It first
+  refuses a candidate whose recorded base is not exactly this base, so a 4B adapter can never
+  be converted for the 9B. The quantized base never changes, and serving without `--lora`
+  rolls the adapter back.
+- `check` runs llama-server on the baseline, and again with the adapter. Each run is
+  compared with the Hugging Face base on:
+  - the embedded chat template;
+  - the end-of-turn token;
+  - chat rendering with thinking off, with and without tool definitions;
+  - tokenization of the rendered prompt;
+  - the GGUF block count, including any MTP block.
+
+  Greedy replies from the two runs are recorded for comparison but are not a gate.
+
+The converter runs under its own interpreter (`--converter-python`), an environment built
+from the tag's `requirements/requirements-convert_hf_to_gguf.txt`. That file pins
+transformers 4.57.6, while training needs transformers 5. The pinned converter cannot load a
+tokenizer saved by transformers 5 (`TokenizersBackend`). The official Qwen3.5 checkpoints name
+`Qwen2Tokenizer`, which it loads.
+
+Evidence, all on Linux:
+
+- `Tests/reviaAdapterExport.test.py` covers the refusals in 6 fixture tests.
+- A full roundtrip on the tiny Qwen3.5 passed every gate on both runs. It trained an adapter
+  on attention plus MLP, converted the base with llama.cpp `b10453` (commit `3cb7ffb1a1f6`)
+  using the converter environment (torch 2.11.0, transformers 4.57.6, numpy 1.26.4), and
+  converted the adapter. Where both runs produced text, the adapter's replies differed from
+  the base's.
+- The tiny model's 16-wide tensors cannot be block-quantized, so its smoke run requantizes to
+  F16. The real bases are 2,560 and 4,096 wide and use Q4_K_M.
+- llama-server `b10453` parses every generation against the template's output format, and
+  rejected some of the random model's text. That is why replies are informational.
+
+## 4B experiment (chosen 2026-10-31)
+
+The 4B adapter is a separately evaluated experiment on the official `Qwen/Qwen3.5-4B`. It is
+never attached to the 9B Main. Using any 4B model in Revia would be a separate
+model-selection decision. Steps on the host:
+
+1. Install the base outside OneDrive:
+   `python -I -B Tools\install_training_assets.py --asset qwen3.5-4b-base --destination D:\ReviaModels`.
+   It lands in `D:\ReviaModels\Qwen3.5-4B-851bf6e`, with install manifest SHA-256
+   `f5a92a1bf46485d70bd38e9643ee6dd29bb674029733fe0fddf097db45396a5e`.
+2. Build two Python 3.12 environments.
+   - Training: a CUDA build of torch for the RTX 5070, transformers 5, peft, safetensors,
+     flash-linear-attention and causal-conv1d.
+   - Converter: from the llama.cpp `b10453` checkout's converter requirements.
+
+   Then run the three test files with the smoke variables set:
+
+   ```powershell
+   $env:REVIA_TRAINING_SMOKE_MODEL = "<tiny model dir>"
+   $env:REVIA_LLAMA_CPP_DIR = "<b10453 checkout>"
+   $env:REVIA_LLAMA_BIN_DIR = "ThirdParty\llama.cpp"
+   $env:REVIA_CONVERTER_PYTHON = "<converter venv>\Scripts\python.exe"
+   ```
+
+   The tiny model is `trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think` at
+   `6860d7ec`. This proves the host environments before the 9 GB job.
+3. Produce a reviewed dataset export, and write the current withdrawal list as
+   `withdrawn.json` beside the job just before starting it. **This is the remaining blocker.**
+4. With Revia stopped, run the job below. The 10,500 MiB free-VRAM floor enforces that, since
+   Main and the voice worker would not leave that much free. Run it first with `maxSteps` 5:
+   `candidate.json` then records `peakVramMiB`. The guidance's 10 GB figure assumes Unsloth's
+   optimizations, so plain peft on a 12 GB card has to be measured, and `maxSequenceTokens`
+   lowered if needed.
+5. Export the matched baseline and the adapter, then run `check` with
+   `--server-arg=-ngl --server-arg=99`.
+6. Evaluate base and base+LoRA from the same server binary and quantization against criteria
+   fixed before the run:
+   - an improvement on the export's held-out test partition with no new failures;
+   - no more than one regression across the golden set, the answer-quality holdout, and
+     bounded code, tool and memory-grounding cases;
+   - first token and decode rate within 5% of base;
+   - every `check` gate passing;
+   - the base run without `--lora` reproducing the base.
+
+   A rejected candidate is a valid result. A runner that serves these cases from an owned
+   llama-server is not built yet.
+
+```json
+{
+  "schema": "revia-training-job-v1",
+  "jobId": "qwen35-4b-companion-1",
+  "scratchRoot": "D:/ReviaTraining/ReviaTrainingJobs",
+  "outputRoot": "D:/ReviaTraining/candidates",
+  "withdrawnSourcesPath": "D:/ReviaTraining/ReviaTrainingJobs/qwen35-4b-companion-1/withdrawn.json",
+  "base": {"directory": "D:/ReviaModels/Qwen3.5-4B-851bf6e", "repository": "Qwen/Qwen3.5-4B",
+           "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+           "installManifestSha256": "f5a92a1bf46485d70bd38e9643ee6dd29bb674029733fe0fddf097db45396a5e"},
+  "dataset": {"directory": "<reviewed export directory>", "manifestSha256": "<SHA-256 of its manifest.json>"},
+  "resources": {"device": "cuda:0", "minimumFreeVramMiB": 10500, "minimumFreeRamMiB": 16384, "minimumFreeDiskMiB": 20480},
+  "configuration": {"method": "sft-lora", "backend": "transformers-peft", "precision": "bf16", "enableThinking": false,
+                    "seed": 20261031, "maxSteps": 5, "learningRate": 0.0001, "gradientAccumulation": 8,
+                    "maxSequenceTokens": 4096, "loraRank": 16, "loraAlpha": 32, "loraDropout": 0.05,
+                    "targetModules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                    "checkpointEverySteps": 5}
+}
+```
+
+Qwen3.5 projections differ by layer type. Gated DeltaNet layers use
+`linear_attn.in_proj_qkv/z/b/a` and `out_proj`, the full-attention layers (every fourth) use
+`self_attn.q/k/v/o_proj`, and every layer has `mlp.gate/up/down_proj`. The listed targets
+therefore cover attention where it exists and MLP everywhere. The Gated DeltaNet projections
+stay frozen until measured. After the short run, set `maxSteps` to about three epochs,
+`ceil(3 × train examples / 8)`, use a new `jobId`, and keep the configuration otherwise
+fixed.
+
+## Remaining blockers
+
+- **Reviewed data.** No reviewed export exists yet. The capture steps under Dataset export
+  come first. The Stage E failures in `build/stage-e-20261030` retain their exact serialized
+  requests and raw responses, which makes them the natural first examples once the owner
+  writes corrections.
+- **Evaluation runner.** The existing quality campaigns target Revia's own endpoints. Serving
+  the base and candidate from an owned llama-server needs a small runner.
+- **A 9B adapter.** Training it locally is still infeasible as configured: about 22 GB for
+  BF16 LoRA against the 12 GB 5070.

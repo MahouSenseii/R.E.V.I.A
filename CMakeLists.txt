@@ -986,6 +986,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaVideoWorker.test.py")
         add_test(NAME Revia.TrainingWorkerPolicy COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaTrainingWorker.test.py")
+        add_test(NAME Revia.TrainingAssetInstaller COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/trainingAssetInstaller.test.py")
+        add_test(NAME Revia.AdapterExportPolicy COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaAdapterExport.test.py")
     endif()
     if(TARGET ReviaDesktop)
         add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp
