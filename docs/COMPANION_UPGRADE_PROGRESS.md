@@ -35,6 +35,17 @@ Inventory at `8aa4ca5`, from tracked code only:
    failed it; the existing image-token check still passes. Windows CI: pending. Host: not
    benchmarked, and the default launch is unchanged. Next: the `llama-bench` sweep in
    `docs/CONTEXT_BENCHMARK.md`.
+2. **Speculation and Next-Concept Modeling research (roadmap 6.5, 9).** Nothing was
+   enabled. The pinned llama.cpp `b10453` supports MTP, DFlash, EAGLE-3 and n-gram
+   speculation, including checkpointed speculation for Qwen3.5's hybrid recurrent layers.
+   MTP is unavailable with the installed GGUF: GGUF headers read from Hugging Face show
+   neither the unsloth nor the LM Studio 9B Q4_K_M kept the base model's one MTP head.
+   A first-party `z-lab/Qwen3.5-9B-DFlash` draft exists. Both routes need the 19.3 GB
+   official checkpoint, which is a prepared but unapproved download. n-gram modes can be
+   qualified on the host now. The tracked manifest does not describe the installed LM
+   Studio Q4_K_M/BF16 pair. Next-Concept Modeling has only task-specific checkpoints and
+   no chat or Qwen-compatible model. Details: `docs/SPECULATIVE_DECODING.md`,
+   `docs/NEXT_CONCEPT_MODELING.md`.
 
 ## Wrap checkpoint, 2026-10-30, D5
 
