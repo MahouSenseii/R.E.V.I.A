@@ -98,18 +98,28 @@ Inventory at `8aa4ca5`, from tracked code only:
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
-`Python3_EXECUTABLE` to the job's own interpreter. With that fix, 143 of 144 tests ran (the
-approved optional video skip is the other), including this branch's new checks, which passed.
-Four tests failed. They were already failing on `main` but hidden behind the gate:
+`Python3_EXECUTABLE` to the job's own interpreter. In run 41159287582 (commit `1e00faa`),
+145 of 146 tests ran; the other is the approved optional video skip. All five of this
+branch's checks passed: `ReviaPromptBatchSettingsTests`, `ReviaDatasetExportTests`,
+`Revia.TrainingWorkerPolicy`, `Revia.TrainingAssetInstaller` and
+`Revia.AdapterExportPolicy`. The other failures had been hidden on `main` behind the gate.
+
+Failing in both runs:
 
 - `ReviaAudiencePrivacyTests`: the known obsolete `Reference-image` expectation, which the
   host candidate patch addresses.
 - `Revia.NliDedupBenchmarkContract`: compares the runner's 8.3 short temp path with its long
   name.
 - `Revia.VideoPreview`: reports SKIP without FFmpeg but exits as a failure.
-- `Revia.ObservedLocalModel`: a credential-refusal check failing on the runner.
 
-The last three are queued as a separate task.
+Intermittent on identical C++ sources (commits `58335fd` and `1e00faa`):
+
+- `Revia.ObservedLocalModel`: its credential-refusal check failed in run 41156920820 and
+  passed in run 41159287582.
+- `ReviaProactiveStateTests`: passed, then failed. A request after a prior native source
+  finding lacked the profile's 0.75 temperature.
+
+All but the first are queued as a separate task.
 
 ## Wrap checkpoint, 2026-10-30, D5
 
