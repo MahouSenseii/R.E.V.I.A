@@ -115,7 +115,9 @@ class NliBenchmarkTests(unittest.TestCase):
             with patch.object(benchmark.worker, "verify_model_files", return_value=manifest), \
                     patch.object(benchmark.worker, "load_model", return_value=fixture_model()) as load:
                 report = benchmark.run_benchmark(args)
-            load.assert_called_once_with(model, 2)
+            # The benchmark loads the canonical directory. Windows runners hand out an 8.3 short
+            # temporary path (RUNNER~1), which resolves to the long name.
+            load.assert_called_once_with(model.resolve(strict=True), 2)
             records = [json.loads(line) for line in (base / "run/pairs.jsonl").read_text().splitlines()]
             self.assertEqual(len(records), 72)
             self.assertEqual(report["status"], "completed")

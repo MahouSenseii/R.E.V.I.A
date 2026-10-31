@@ -3752,5 +3752,7 @@ int main(int argc, char** argv)
     } restore{previousDirectory};
     if (revia::core::RuntimeRoot() != std::filesystem::path(settings.path().toStdWString()))
         return 2;
-    return suite->second(argc, argv) == 0 ? 0 : 1;
+    // A failure count of any size stays a failure; only an explicit skip becomes 77.
+    const int outcome = suite->second(argc, argv);
+    return outcome == revia::tests::SuiteSkipped ? 77 : outcome == 0 ? 0 : 1;
 }

@@ -317,6 +317,22 @@ Inventory at `8aa4ca5`, from tracked code only:
 
     Evidence, as a Windows build under Wine 9: the unfixed suite passed 60 of 60 runs, three at
     a time, so the race needs CI's timing. The fixed suite also passed 60 of 60.
+17. **Two failures that also fail on `main` (2026-10-31).**
+    - `Revia.NliDedupBenchmarkContract`: the benchmark loads the canonical model directory,
+      `resolve(strict=True)`, which is right for its provenance. The test expected the
+      unresolved temporary path. Windows runners hand out an 8.3 short temp path
+      (`RUNNER~1`) that resolves to the long name. The test now expects the resolved
+      directory, so the assertion stays exact. Linux reproduction: with `TMPDIR` set to a
+      symlink, which resolving also changes, the old test failed the same way, and the fixed
+      one passes either way.
+    - `Revia.VideoPreview`: the preview suite returned CTest's skip code 77 after its
+      lifetime and admission checks passed without FFmpeg. However, the desktop test binary's
+      `main()` turned every non-zero suite result into 1, so CTest recorded a failure.
+      Suites now return an explicit `SuiteSkipped` (-77). Only that becomes 77, and a failure
+      count of any size, including 77, stays a failure. The printed reason is exactly one that
+      `Tools/Build/InvokeCheckedCTest.ps1` approves, so CI should report it as an optional
+      video prerequisite skip rather than a pass. Both sources compile against Qt 6.4 here.
+      The desktop binary itself only builds on Windows, so CI is the run check.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
@@ -332,8 +348,8 @@ Failing in both runs:
 - `ReviaAudiencePrivacyTests`: the known obsolete `Reference-image` expectation, which the
   host candidate patch addresses.
 - `Revia.NliDedupBenchmarkContract`: compares the runner's 8.3 short temp path with its long
-  name.
-- `Revia.VideoPreview`: reports SKIP without FFmpeg but exits as a failure.
+  name. Fixed in item 17.
+- `Revia.VideoPreview`: reports SKIP without FFmpeg but exits as a failure. Fixed in item 17.
 
 Intermittent:
 

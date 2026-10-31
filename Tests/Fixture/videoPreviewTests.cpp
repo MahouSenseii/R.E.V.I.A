@@ -308,7 +308,7 @@ int RunVideoPreviewTests(int, char**)
     {
         std::cout << "SKIP: Preview lifetime/admission checks passed; actual playback requires local FFmpeg/ffprobe. " << availability
                   << '\n';
-        return 77;
+        return revia::tests::SuiteSkipped;
     }
     const auto h264 = CpuH264Encoder(result);
     if (result.failures != 0)
@@ -316,7 +316,7 @@ int RunVideoPreviewTests(int, char**)
     if (h264.isEmpty())
     {
         std::cout << "SKIP: Preview lifetime/admission checks passed; the actual fixture requires CPU libopenh264 or libx264.\n";
-        return 77;
+        return revia::tests::SuiteSkipped;
     }
     std::cout << "CPU H.264 preview fixture encoder: " << h264.toStdString() << '\n';
     TestRealPreviewPlaybackSeekAndRetirement(result, h264);
