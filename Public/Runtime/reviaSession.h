@@ -296,6 +296,12 @@ class ReviaSession
     // deleting the chat or forgetting the speaker withdraws it.
     bool CaptureJudgedTurn(const learning::QualityFeedback& feedback, std::string& outCaptureId, std::string& outError,
         std::stop_token stopToken = {});
+    // The owner's training corrections for those captures, saved beside them as revisions. Like
+    // past chats, both refuse outside a private audience.
+    bool CorrectLiveCapture(const std::string& captureId, learning::LearningDecision decision, const std::string& correction,
+        std::uint64_t& outRevision, std::string& outError, std::stop_token stopToken = {});
+    // Deletes one capture with its correction and lists it as withdrawn.
+    bool DiscardLiveCapture(const std::string& captureId, std::string& outError);
     bool ReviseMemoryOwnerRequested(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::vector<memory::MemoryCorrectionProposal> PendingMemoryCorrections();
@@ -1135,6 +1141,15 @@ class ReviaSession
     // Drops held replies and kept captures that name `source`, or every one when it is empty.
     // Returns why kept captures could not be withdrawn, or nothing.
     std::string WithdrawLiveCaptures(const std::string& source);
+    [[nodiscard]] learning::LiveCaptureStore CaptureStore() const;
+    // The kept captures as last listed, read again only when the store's revision changes or
+    // this session changes the store. The Learning panel asks for them every second.
+    std::mutex liveCaptureIndexMutex;
+    std::string liveCaptureIndexRevision;
+    std::vector<learning::LiveCaptureSummary> liveCaptureIndex;
+    std::string liveCaptureIndexError;
+    void ListLiveCaptures(LearningStudioSnapshot& snapshot, bool privateAudience);
+    void InvalidateLiveCaptureIndex();
     mutable std::mutex developmentStudioMutex;
     std::shared_ptr<improvement::SelfDevelopment> selfDevelopment;
     std::string presentationCandidateId;

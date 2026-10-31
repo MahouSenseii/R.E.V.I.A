@@ -80,8 +80,11 @@ bool ReviaSession::CollectLearningCandidates(std::string& outError)
 
 LearningStudioSnapshot ReviaSession::LearningStudio()
 {
+    // Read before the learning lock, so this adds no lock order between the two.
+    const bool privateAudience = Audience().kind == identity::AudienceKind::Private;
     std::lock_guard lock(learningStudioMutex);
     LearningStudioSnapshot snapshot;
+    ListLiveCaptures(snapshot, privateAudience);
     if (!CollectLearningCandidates(snapshot.status))
         return snapshot;
     const auto pin = skillPackages->Pin(InventorySkill);

@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <system_error>
@@ -79,6 +80,91 @@ bool Refuse(std::string& error, std::string reason)
 {
     error = std::move(reason);
     return false;
+}
+
+constexpr const char* CorrectionSchema = "revia-live-correction-v1";
+// Earlier revisions kept in a correction file; older ones are let go.
+constexpr std::size_t MaximumCorrectionHistory = 32;
+
+// The candidate interchange's names, which revia_dataset_capture.py reads back.
+std::string DecisionName(const LearningDecision value)
+{
+    switch (value)
+    {
+    case LearningDecision::Pending:
+        return "pending";
+    case LearningDecision::Accept:
+        return "accept";
+    case LearningDecision::Rework:
+        return "rework";
+    case LearningDecision::Reject:
+        return "reject";
+    case LearningDecision::NeedEvidence:
+        return "need-evidence";
+    }
+    return "pending";
+}
+
+std::optional<LearningDecision> ParseDecision(const std::string& value)
+{
+    for (const auto decision : {LearningDecision::Pending, LearningDecision::Accept, LearningDecision::Rework, LearningDecision::Reject,
+             LearningDecision::NeedEvidence})
+        if (DecisionName(decision) == value)
+            return decision;
+    return std::nullopt;
+}
+
+bool CaptureId(const std::string& value)
+{
+    return value.size() == 16 &&
+        std::all_of(value.begin(), value.end(), [](const char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
+std::string ReadText(const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+// The person's own words: the newest message can open with the runtime's per-turn context.
+std::string PersonsWords(const std::string& content)
+{
+    if (!content.starts_with(markers::RuntimeTurnContext))
+        return content;
+    const auto end = content.find(markers::RuntimeTurnContextEnd);
+    if (end == std::string::npos)
+        return content;
+    const auto begin = content.find_first_not_of("\r\n", end + markers::RuntimeTurnContextEnd.size());
+    return begin == std::string::npos ? std::string{} : content.substr(begin);
+}
+
+// Writes bytes through a sibling .partial file, so a reader sees the old file or the new one.
+bool WriteReplacing(const std::filesystem::path& target, const std::string& bytes, std::string& error)
+{
+    auto partial = target;
+    partial += ".partial";
+    {
+        std::ofstream stream(partial, std::ios::binary | std::ios::trunc);
+        stream << bytes;
+        if (!stream.flush())
+        {
+            error = "The file could not be written.";
+            return false;
+        }
+    }
+    return core::ReplaceFileAtomically(target, partial, error);
+}
+
+bool RemoveCorrection(const std::filesystem::path& directory, const std::string& captureId)
+{
+    bool removed = true;
+    for (const char* suffix : {".json", ".json.bak", ".json.partial"})
+    {
+        std::error_code error;
+        std::filesystem::remove(directory / (captureId + suffix), error);
+        removed = removed && !error;
+    }
+    return removed;
 }
 
 bool Build(const DeliveredReply& reply, const QualityFeedback& judgment, LiveCapture& outCapture, std::string& outError)
@@ -213,9 +299,166 @@ std::filesystem::path LiveCaptureStore::LiveDirectory() const
     return root / "live";
 }
 
+std::filesystem::path LiveCaptureStore::CorrectionsDirectory() const
+{
+    return root / "corrections";
+}
+
 std::filesystem::path LiveCaptureStore::WithdrawnList() const
 {
     return root / "withdrawn.json";
+}
+
+std::string LiveCaptureStore::Revision() const
+{
+    std::string revision;
+    for (const auto& directory : {LiveDirectory(), CorrectionsDirectory()})
+    {
+        std::error_code error;
+        const auto written = std::filesystem::last_write_time(directory, error);
+        revision += error ? std::string("none") : std::to_string(written.time_since_epoch().count());
+        revision += '/';
+    }
+    return revision;
+}
+
+std::vector<LiveCaptureSummary> LiveCaptureStore::List(std::string& outError) const
+{
+    outError.clear();
+    std::vector<std::pair<std::filesystem::file_time_type, LiveCaptureSummary>> found;
+    std::size_t unreadable = 0;
+    std::error_code error;
+    if (!std::filesystem::is_directory(LiveDirectory(), error))
+        return {};
+    for (const auto& entry : std::filesystem::directory_iterator(LiveDirectory(), error))
+    {
+        if (entry.path().extension() != ".json")
+            continue;
+        try
+        {
+            const auto record = json::parse(ReadText(entry.path()));
+            LiveCaptureSummary summary;
+            summary.captureId = record.at("captureId").get<std::string>();
+            if (!CaptureId(summary.captureId) || entry.path().stem().string() != summary.captureId)
+                throw std::runtime_error("name");
+            const auto& prompt = record.at("prompt");
+            if (!prompt.is_array() || prompt.empty())
+                throw std::runtime_error("prompt");
+            summary.input = PersonsWords(prompt.back().at("content").get<std::string>());
+            summary.failedOutput = record.at("failedOutput").get<std::string>();
+            summary.failedOutputSha256 = record.at("failedOutputSha256").get<std::string>();
+            summary.modelOutput = record.at("modelOutput").get<std::string>();
+            summary.repaired = record.at("repaired").get<bool>();
+            const auto& judgment = record.at("judgment");
+            summary.issue = judgment.at("issue").get<std::string>();
+            summary.criterion = judgment.at("criterion").get<std::string>();
+            summary.evidence = judgment.at("evidence").get<std::string>();
+            summary.conversationId = record.at("source").value("conversationId", "");
+            const auto correction = CorrectionsDirectory() / (summary.captureId + ".json");
+            if (std::filesystem::exists(correction, error))
+            {
+                const auto saved = json::parse(ReadText(correction));
+                const auto decision = ParseDecision(saved.at("decision").get<std::string>());
+                if (!decision || saved.at("captureId") != summary.captureId || saved.at("failedOutputSha256") != summary.failedOutputSha256)
+                    throw std::runtime_error("correction");
+                summary.decision = *decision;
+                summary.correction = saved.at("correction").get<std::string>();
+                summary.revision = saved.at("revision").get<std::uint64_t>();
+            }
+            found.emplace_back(entry.last_write_time(error), std::move(summary));
+        }
+        catch (const std::exception&)
+        {
+            ++unreadable;
+        }
+    }
+    std::sort(found.begin(), found.end(),
+        [](const auto& left, const auto& right)
+        { return left.first != right.first ? left.first > right.first : left.second.captureId < right.second.captureId; });
+    std::vector<LiveCaptureSummary> summaries;
+    for (auto& item : found)
+        summaries.push_back(std::move(item.second));
+    if (unreadable > 0)
+        outError = std::to_string(unreadable) + (unreadable == 1 ? " kept capture or its correction could not be read and is not shown."
+                                                                  : " kept captures or their corrections could not be read and are not shown.");
+    return summaries;
+}
+
+bool LiveCaptureStore::Correct(const std::string& captureId, const LearningDecision decision, const std::string& correction,
+    std::uint64_t& outRevision, std::string& outError) const
+{
+    outRevision = 0;
+    outError.clear();
+    std::error_code error;
+    const auto capturePath = LiveDirectory() / (captureId + ".json");
+    if (!CaptureId(captureId) || !std::filesystem::exists(capturePath, error))
+        return Refuse(outError, "That capture is no longer kept.");
+    if (decision == LearningDecision::Pending)
+        return Refuse(outError, "Choose a decision before saving.");
+    if (correction.size() > MaximumText || correction.find('\0') != std::string::npos)
+        return Refuse(outError, "The correction exceeds the dataset's bound.");
+    try
+    {
+        const auto record = json::parse(ReadText(capturePath));
+        const auto failed = record.at("failedOutput").get<std::string>();
+        const auto failedDigest = record.at("failedOutputSha256").get<std::string>();
+        if (decision == LearningDecision::Accept &&
+            (correction.find_first_not_of(" \t\r\n") == std::string::npos || correction == failed))
+            return Refuse(outError, "An accepted capture needs a correct reply that differs from the judged one.");
+        if (const auto finding = memory::DetectSensitiveContent(correction))
+            return Refuse(outError, "The correction contains " + finding.description + ", so it was not saved.");
+        const auto target = CorrectionsDirectory() / (captureId + ".json");
+        json history = json::array();
+        std::uint64_t revision = 1;
+        if (std::filesystem::exists(target, error))
+        {
+            const auto previous = json::parse(ReadText(target));
+            if (previous.at("captureId") != captureId || previous.at("failedOutputSha256") != failedDigest)
+                return Refuse(outError, "The saved correction belongs to another capture, so it was not replaced.");
+            history = previous.at("history");
+            history.push_back({{"revision", previous.at("revision")}, {"decision", previous.at("decision")},
+                {"correction", previous.at("correction")}});
+            if (history.size() > MaximumCorrectionHistory)
+                history.erase(history.begin(), history.end() - static_cast<std::ptrdiff_t>(MaximumCorrectionHistory));
+            revision = previous.at("revision").get<std::uint64_t>() + 1;
+        }
+        const json saved = {{"schema", CorrectionSchema}, {"captureId", captureId}, {"failedOutputSha256", failedDigest},
+            {"revision", revision}, {"decision", DecisionName(decision)}, {"correction", correction}, {"history", history}};
+        std::filesystem::create_directories(CorrectionsDirectory(), error);
+        if (error)
+            return Refuse(outError, "The corrections directory could not be created: " + error.message());
+        if (!WriteReplacing(target, saved.dump(2) + '\n', outError))
+            return false;
+        outRevision = revision;
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return Refuse(outError, "The capture or its saved correction could not be read, so nothing was saved.");
+    }
+}
+
+bool LiveCaptureStore::Discard(const std::string& captureId, std::string& outError) const
+{
+    outError.clear();
+    std::error_code error;
+    const auto capturePath = LiveDirectory() / (captureId + ".json");
+    if (!CaptureId(captureId) || !std::filesystem::exists(capturePath, error))
+        return Refuse(outError, "That capture is no longer kept.");
+    std::string target;
+    try
+    {
+        target = json::parse(ReadText(capturePath)).at("judgment").at("targetId").get<std::string>();
+    }
+    catch (const std::exception&)
+    {
+    }
+    if (target.empty())
+        return Refuse(outError, "The capture could not be read, so it was not deleted.");
+    std::size_t removed = 0;
+    if (!WithdrawMatching(&target, &captureId, removed, outError))
+        return false;
+    return removed == 1 || Refuse(outError, "The capture was listed as withdrawn but not found to delete.");
 }
 
 bool LiveCaptureStore::Keep(const LiveCapture& capture, std::string& outError) const
@@ -263,15 +506,16 @@ bool LiveCaptureStore::Keep(const LiveCapture& capture, std::string& outError) c
 
 bool LiveCaptureStore::Withdraw(const std::string& source, std::size_t& outRemoved, std::string& outError) const
 {
-    return WithdrawMatching(&source, outRemoved, outError);
+    return WithdrawMatching(&source, nullptr, outRemoved, outError);
 }
 
 bool LiveCaptureStore::WithdrawAll(std::size_t& outRemoved, std::string& outError) const
 {
-    return WithdrawMatching(nullptr, outRemoved, outError);
+    return WithdrawMatching(nullptr, nullptr, outRemoved, outError);
 }
 
-bool LiveCaptureStore::WithdrawMatching(const std::string* source, std::size_t& outRemoved, std::string& outError) const
+bool LiveCaptureStore::WithdrawMatching(
+    const std::string* source, const std::string* onlyCapture, std::size_t& outRemoved, std::string& outError) const
 {
     outRemoved = 0;
     outError.clear();
@@ -297,16 +541,20 @@ bool LiveCaptureStore::WithdrawMatching(const std::string* source, std::size_t& 
             {
                 if (entry.path().extension() != ".json")
                     continue;
-                std::ifstream stream(entry.path(), std::ios::binary);
-                const auto record = json::parse(std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()});
-                const auto sources = record.at("sources").get<std::vector<std::string>>();
-                if (source && std::find(sources.begin(), sources.end(), *source) == sources.end())
+                if (onlyCapture && entry.path().stem().string() != *onlyCapture)
                     continue;
-                // Each capture's own request, and for a withdrawal of everything its conversation too.
-                // A speaker is not added: other conversations with them stay kept.
-                for (const auto& name : sources)
-                    if (name.starts_with("request:") || (!source && name.starts_with("conversation:")))
-                        withdrawn.insert(name);
+                const auto record = json::parse(ReadText(entry.path()));
+                const auto sources = record.at("sources").get<std::vector<std::string>>();
+                if (!onlyCapture && source && std::find(sources.begin(), sources.end(), *source) == sources.end())
+                    continue;
+                // Each capture's own judged reply, which no other capture shares, and for a withdrawal
+                // of everything its conversation too. Neither its request, which a regenerated reply
+                // can share, nor its speaker, whose other conversations stay kept, is added.
+                withdrawn.insert(record.at("judgment").at("targetId").get<std::string>());
+                if (!source)
+                    for (const auto& name : sources)
+                        if (name.starts_with("conversation:"))
+                            withdrawn.insert(name);
                 matched.push_back(entry.path());
             }
         // The list is written first, so a crash between the two leaves a capture that is already refused.
@@ -328,6 +576,12 @@ bool LiveCaptureStore::WithdrawMatching(const std::string* source, std::size_t& 
                 return false;
             }
             ++outRemoved;
+            // The owner's correction goes with it: it was written about that private exchange.
+            if (!RemoveCorrection(CorrectionsDirectory(), path.stem().string()))
+            {
+                outError = "A withdrawn capture's correction could not be deleted; the capture is listed as withdrawn.";
+                return false;
+            }
         }
         return true;
     }

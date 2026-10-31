@@ -165,6 +165,28 @@ Inventory at `8aa4ca5`, from tracked code only:
 
     None of this has run against the companion on the host.
 
+11. **Training corrections screen (2026-10-31).** Skills & Learning has a new **Training
+    corrections** section. It lists kept captures only while the audience is private. Each
+    capture shows what was said, the judged reply and the recorded judgment.
+    - The owner saves a decision and the correct reply. Each save is a new revision under
+      `RuntimeData/Learning/Captures/corrections/`, bound to the judged reply's digest.
+    - `revia_dataset_capture.py candidates` reads saved corrections when `--corrections` is
+      omitted, so no JSON is edited. Exporting stays a separate step.
+    - **Delete capture…** deletes a capture and its correction, and lists it as withdrawn.
+    - The session keeps the list in memory and rereads it only when the store changes, so
+      the panel's one-second refresh does no file reading. A refresh never replaces a draft.
+    - Building it exposed a withdrawal flaw. Withdrawing by the shared request would also
+      have withdrawn a separately judged reply regenerated from the same request. Captures
+      are now withdrawn by their own `displayed-reply:` id.
+
+    Linux evidence:
+    - The store passed 5 tests, and 6 more removals each made one fail.
+    - The capture tool passed 9 tests, and 2 more removals each made one fail.
+    - The real panel compiled against Qt 6.4.2 and passed a headless harness.
+    - The window sources and the desktop test compiled.
+
+    The session and desktop tests run in Windows CI.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins

@@ -47,6 +47,28 @@ struct LiveCapture
 
 inline constexpr const char* LiveCaptureVersion = "live-capture-v1";
 
+// One kept capture as the owner reviews it, with the decision and correction saved so far.
+struct LiveCaptureSummary
+{
+    std::string captureId;
+    // What the person said, without the runtime context the prompt placed ahead of it.
+    std::string input;
+    // The judged reply, and the model's own text when style repair changed it.
+    std::string failedOutput;
+    std::string failedOutputSha256;
+    std::string modelOutput;
+    bool repaired = false;
+    // The judgment the owner recorded when the capture was kept.
+    std::string issue;
+    std::string criterion;
+    std::string evidence;
+    std::string conversationId;
+    // Pending until the owner saves a decision; revision 0 means none was saved.
+    LearningDecision decision = LearningDecision::Pending;
+    std::string correction;
+    std::uint64_t revision = 0;
+};
+
 // The capture of one judged reply in the interchange revia_dataset_capture.py reads, or why
 // it cannot be kept exactly. Refuses anything a text dataset cannot reproduce or the runtime
 // cannot later withdraw: pictures, tool steps, thinking, private reference material without
@@ -63,16 +85,35 @@ public:
 
     // Writes a new capture and never replaces one.
     bool Keep(const LiveCapture& capture, std::string& outError) const;
-    // Deletes every kept capture that names `source`, then records `source` and each deleted
-    // capture's request as withdrawn. Nothing happens before the first capture is kept.
+    // Deletes every kept capture that names `source`, with its correction, then records `source`
+    // and each deleted capture's judged reply (displayed-reply:...) as withdrawn. Nothing
+    // happens before the first capture is kept.
     bool Withdraw(const std::string& source, std::size_t& outRemoved, std::string& outError) const;
-    // The same for every kept capture, recording each one's conversation and request.
+    // The same for every kept capture, recording each one's conversation and judged reply.
     bool WithdrawAll(std::size_t& outRemoved, std::string& outError) const;
+
+    // Every kept capture with the owner's latest decision, newest first. A file that cannot be
+    // read is left out, and outError says how many were.
+    [[nodiscard]] std::vector<LiveCaptureSummary> List(std::string& outError) const;
+    // Saves the owner's decision and correct reply for one capture as its next revision,
+    // keeping the earlier ones. An accepted capture needs a correction that differs from the
+    // judged reply. Pending is not a decision to save.
+    bool Correct(const std::string& captureId, LearningDecision decision, const std::string& correction, std::uint64_t& outRevision,
+        std::string& outError) const;
+    // Deletes one capture with its correction, and lists its judged reply as withdrawn. Its
+    // request is not listed: a regenerated reply judged separately can share it.
+    bool Discard(const std::string& captureId, std::string& outError) const;
+    // Changes when a capture or correction is added, replaced or removed, so a caller can
+    // keep List's result until then.
+    [[nodiscard]] std::string Revision() const;
+
     [[nodiscard]] std::filesystem::path LiveDirectory() const;
+    [[nodiscard]] std::filesystem::path CorrectionsDirectory() const;
     [[nodiscard]] std::filesystem::path WithdrawnList() const;
 
 private:
-    bool WithdrawMatching(const std::string* source, std::size_t& outRemoved, std::string& outError) const;
+    // Deletes the captures `source` names, only `onlyCapture` when it is set, or all of them.
+    bool WithdrawMatching(const std::string* source, const std::string* onlyCapture, std::size_t& outRemoved, std::string& outError) const;
     std::filesystem::path root;
 };
 

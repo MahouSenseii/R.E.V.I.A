@@ -244,6 +244,32 @@ void ReviaWindow::BuildAdditionalStudioPanels()
             { return session.ReviewLearning(id, decision, feedback, message); },
             [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
     };
+    learning.correct = [this](const std::string& id, const auto decision, const std::string& text)
+    {
+        RunStudioOperation(
+            [id, decision, text](auto& session, const auto stop, std::string& message)
+            {
+                std::uint64_t revision = 0;
+                if (!session.CorrectLiveCapture(id, decision, text, revision, message, stop))
+                    return false;
+                message = "Saved revision " + std::to_string(revision) +
+                          " of your correction. An export reads the latest one; exporting is a separate step.";
+                return true;
+            },
+            [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
+    };
+    learning.discard = [this](const std::string& id)
+    {
+        RunStudioOperation(
+            [id](auto& session, auto, std::string& message)
+            {
+                if (!session.DiscardLiveCapture(id, message))
+                    return false;
+                message = "Deleted the kept exchange and its correction, and listed it as withdrawn.";
+                return true;
+            },
+            [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
+    };
     learningStudioPanel = new LearningStudioPanel(std::move(learning));
     add(learningStudioPanel, "learningStudioScroll");
     DevelopmentStudioPanel::Controls development;

@@ -1,0 +1,15 @@
+{
+  "captureId": "3a0d7cab7d2fd788",
+  "correction": "Honestly, the last line about the lake made me smile.",
+  "decision": "accept",
+  "failedOutputSha256": "e21adbc28ca3906e55f247dfd1e81c6d2fc6592ce559647e52188ecd31b7f29a",
+  "history": [
+    {
+      "correction": "Draft: the last line made me smile.",
+      "decision": "rework",
+      "revision": 1
+    }
+  ],
+  "revision": 2,
+  "schema": "revia-live-correction-v1"
+}

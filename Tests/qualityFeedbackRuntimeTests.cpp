@@ -218,10 +218,54 @@ void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
     session.ForgetConversations();
     const auto withdrawn = nlohmann::json::parse(ReadFile(paths.Resolve("RuntimeData/Learning/Captures/withdrawn.json")))
                                .get<std::vector<std::string>>();
-    Check(!std::filesystem::exists(kept) && std::find(withdrawn.begin(), withdrawn.end(), sources.front()) != withdrawn.end(),
-        "Forgetting every chat left its kept capture, or did not list it as withdrawn.");
+    Check(!std::filesystem::exists(kept) && std::find(withdrawn.begin(), withdrawn.end(), feedback.targetId) != withdrawn.end(),
+        "Forgetting every chat left its kept capture, or did not list its judged reply as withdrawn.");
     Check(!session.CaptureJudgedTurn(Feedback(session), again, error) && error.find("no longer held") != std::string::npos,
         "A forgotten chat's reply was still held in memory.");
+}
+
+void TestOwnerCorrectsKeptExchangesOnlyInPrivate()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const CompanionPaths paths(fixture.root, {"correction-bridge", "Synthetic correction bridge", "assistant", false});
+    ReviaSession session(paths);
+    Prepare(session, fixture.root);
+    const auto feedback = Feedback(session);
+    std::string captureId, taskId, recordId, error;
+    Check(session.LearningStudio().captures.empty(), "Captures were listed before any was kept.");
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
+    Check(session.RecordQualityFeedback(feedback, taskId, recordId, error) && session.CaptureJudgedTurn(feedback, captureId, error), error);
+    auto studio = session.LearningStudio();
+    Check(studio.captures.size() == 1 && studio.captures[0].captureId == captureId &&
+              studio.captures[0].decision == revia::learning::LearningDecision::Pending &&
+              studio.captures[0].input == "Which object file does the linker need?" && studio.captures[0].criterion == feedback.criterion,
+        "The kept exchange was not listed for correction with its judgment.");
+
+    std::uint64_t revision = 0;
+    const std::string correct = "The linker needs the object file the build produced for that unit.";
+    Check(session.CorrectLiveCapture(captureId, revia::learning::LearningDecision::Accept, correct, revision, error) && revision == 1,
+        "The owner's correction was not saved: " + error);
+    studio = session.LearningStudio();
+    Check(studio.captures.size() == 1 && studio.captures[0].decision == revia::learning::LearningDecision::Accept &&
+              studio.captures[0].correction == correct && studio.captures[0].revision == 1,
+        "A saved correction was not shown on the next refresh.");
+
+    Check(session.SetAudience({revia::identity::AudienceKind::Public, "fixture-public", 0, {}}, error), error);
+    studio = session.LearningStudio();
+    Check(studio.captures.empty() && studio.captureStatus.find("not private") != std::string::npos,
+        "Kept exchanges were listed for a public audience.");
+    Check(!session.CorrectLiveCapture(captureId, revia::learning::LearningDecision::Reject, "", revision, error) &&
+              !session.DiscardLiveCapture(captureId, error),
+        "A public audience changed a kept exchange.");
+    Check(session.SetAudience({revia::identity::AudienceKind::Private, "fixture-private", 0, {}}, error), error);
+
+    const auto captures = paths.Resolve("RuntimeData/Learning/Captures");
+    Check(session.DiscardLiveCapture(captureId, error), "The owner could not delete a kept exchange: " + error);
+    Check(session.LearningStudio().captures.empty() && !std::filesystem::exists(captures / "live" / (captureId + ".json")) &&
+              !std::filesystem::exists(captures / "corrections" / (captureId + ".json")),
+        "Deleting a kept exchange left it, its correction or its listing behind.");
+    const auto withdrawn = nlohmann::json::parse(ReadFile(captures / "withdrawn.json")).get<std::vector<std::string>>();
+    Check(withdrawn == std::vector<std::string>{feedback.targetId}, "The deleted exchange was not listed as withdrawn by its judged reply.");
 }
 
 void TestRuntimeMemorySelectionAndAudienceEpoch()
@@ -376,9 +420,10 @@ void RunQualityFeedbackRuntimeTests()
     TestRuntimeJudgmentAuthorityAndAudienceEpoch();
     TestPrivateCandidateCapturedConfigurationAndOrdinaryReview();
     TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn();
+    TestOwnerCorrectsKeptExchangesOnlyInPrivate();
     TestRuntimeMemorySelectionAndAudienceEpoch();
     TestCanceledQualityMutationsDoNotWriteAfterForegroundWait();
     TestCanceledQualityRetestPreservesAttemptHistory();
     std::cout << "Runtime quality feedback checks passed: owner authority, audience epochs, captured dependencies, ordinary reviewed "
-                 "receipts, and judged exchanges kept only on request and withdrawn with their chats.\n";
+                 "receipts, judged exchanges kept only on request and withdrawn with their chats, and private owner corrections.\n";
 }

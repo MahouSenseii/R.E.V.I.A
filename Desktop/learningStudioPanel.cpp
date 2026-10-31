@@ -5,7 +5,9 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QHBoxLayout>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -48,6 +50,22 @@ QString Disposition(const revia::learning::LearningDisposition value)
     default:
         return "Private candidate; outside trusted memory";
     }
+}
+const revia::learning::LiveCaptureSummary* FindCapture(
+    const revia::runtime::LearningStudioSnapshot& snapshot, const std::string& captureId)
+{
+    for (const auto& capture : snapshot.captures)
+        if (capture.captureId == captureId)
+            return &capture;
+    return nullptr;
+}
+QString CaptureLabel(const revia::learning::LiveCaptureSummary& capture)
+{
+    QString said = Text(capture.input).simplified();
+    if (said.size() > 48)
+        said = said.left(47) + "…";
+    return (capture.decision == revia::learning::LearningDecision::Pending ? QString("Needs a correction") : Decision(capture.decision)) +
+           " · " + said;
 }
 QLabel* Label(const QString& text, QWidget* parent, const char* name = nullptr)
 {
@@ -123,6 +141,43 @@ LearningStudioPanel::LearningStudioPanel(Controls value, QWidget* parent) : QWid
     recordDecision->setObjectName("learningRecordDecision");
     reviewLayout->addWidget(recordDecision);
     layout->addWidget(review);
+    auto* training = new QGroupBox("Training corrections", this);
+    auto* trainingLayout = new QVBoxLayout(training);
+    captureStatus = Label({}, training, "learningCaptureStatus");
+    trainingLayout->addWidget(captureStatus);
+    captures = new QComboBox(training);
+    captures->setObjectName("learningCaptures");
+    captures->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    captures->setMinimumContentsLength(12);
+    trainingLayout->addWidget(captures);
+    captureDetails = new QPlainTextEdit(training);
+    captureDetails->setObjectName("learningCaptureDetails");
+    captureDetails->setReadOnly(true);
+    captureDetails->setMinimumHeight(160);
+    captureDetails->setMaximumHeight(280);
+    trainingLayout->addWidget(captureDetails);
+    captureDecision = new QComboBox(training);
+    captureDecision->setObjectName("learningCaptureDecision");
+    captureDecision->addItem("Accept: train on my correct reply", static_cast<int>(revia::learning::LearningDecision::Accept));
+    captureDecision->addItem("Rework: keep it as a draft", static_cast<int>(revia::learning::LearningDecision::Rework));
+    captureDecision->addItem("Need evidence: decide later", static_cast<int>(revia::learning::LearningDecision::NeedEvidence));
+    captureDecision->addItem("Reject: never train on this", static_cast<int>(revia::learning::LearningDecision::Reject));
+    trainingLayout->addWidget(captureDecision);
+    correction = new QPlainTextEdit(training);
+    correction->setObjectName("learningCaptureCorrection");
+    correction->setPlaceholderText("The reply your companion should have given");
+    correction->setMinimumHeight(90);
+    correction->setMaximumHeight(180);
+    trainingLayout->addWidget(correction);
+    auto* captureButtons = new QHBoxLayout;
+    saveCorrection = new QPushButton("Save correction", training);
+    saveCorrection->setObjectName("learningSaveCorrection");
+    deleteCapture = new QPushButton("Delete capture…", training);
+    deleteCapture->setObjectName("learningDeleteCapture");
+    captureButtons->addWidget(saveCorrection);
+    captureButtons->addWidget(deleteCapture);
+    trainingLayout->addLayout(captureButtons);
+    layout->addWidget(training);
     outcome = Label({}, this, "learningOutcome");
     layout->addWidget(outcome);
     layout->addStretch();
@@ -170,6 +225,25 @@ LearningStudioPanel::LearningStudioPanel(Controls value, QWidget* parent) : QWid
                 controls.decide(candidates->currentData().toString().toStdString(),
                     static_cast<revia::learning::LearningDecision>(decision->currentData().toInt()), feedback->toPlainText().toStdString());
         });
+    connect(captures, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this] { ShowCapture(true); });
+    connect(saveCorrection, &QPushButton::clicked, this,
+        [this]
+        {
+            if (controls.correct && !shownCapture.empty())
+                controls.correct(shownCapture, static_cast<revia::learning::LearningDecision>(captureDecision->currentData().toInt()),
+                    correction->toPlainText().toStdString());
+        });
+    connect(deleteCapture, &QPushButton::clicked, this,
+        [this]
+        {
+            if (!controls.discard || shownCapture.empty())
+                return;
+            const std::string id = shownCapture;
+            if (QMessageBox::question(this, "Delete capture",
+                    "Delete this kept exchange and its correction? It is also listed as withdrawn, so a dataset already "
+                    "exported with it is refused.") == QMessageBox::Yes)
+                controls.discard(id);
+        });
     SetSnapshot({});
 }
 
@@ -190,7 +264,50 @@ void LearningStudioPanel::SetSnapshot(const revia::runtime::LearningStudioSnapsh
     if (selected != candidates->currentData())
         feedback->clear();
     ShowCandidate();
+    captureStatus->setText(Text(snapshot.captureStatus));
+    {
+        const QSignalBlocker blockCaptures(captures);
+        captures->clear();
+        for (const auto& capture : snapshot.captures)
+            captures->addItem(CaptureLabel(capture), Text(capture.captureId));
+        const int kept = captures->findData(Text(shownCapture));
+        if (kept >= 0)
+            captures->setCurrentIndex(kept);
+    }
+    ShowCapture(captures->currentData().toString().toStdString() != shownCapture);
     SetBusy(busy);
+}
+
+void LearningStudioPanel::ShowCapture(const bool selectionChanged)
+{
+    const auto id = captures->currentData().toString().toStdString();
+    const auto* capture = FindCapture(snapshot, id);
+    shownCapture = capture ? id : std::string{};
+    if (!capture)
+    {
+        captureDetails->clear();
+        correction->clear();
+        captureDecision->setCurrentIndex(0);
+    }
+    else
+    {
+        QString text = "You said:\n" + Text(capture->input) + "\n\nThe reply you judged:\n" + Text(capture->failedOutput);
+        if (capture->repaired)
+            text += "\n\nThe model's own text, before style repair changed it:\n" + Text(capture->modelOutput);
+        text += "\n\nYour judgment (" + Text(capture->issue) + "): " + Text(capture->criterion) + "\nEvidence: " + Text(capture->evidence);
+        text += "\n\nCapture " + Text(capture->captureId) +
+                (capture->revision == 0 ? QString(" · no correction saved")
+                                        : " · " + Decision(capture->decision) + ", revision " + QString::number(capture->revision));
+        captureDetails->setPlainText(text);
+        if (selectionChanged)
+        {
+            correction->setPlainText(Text(capture->correction));
+            const int saved = captureDecision->findData(static_cast<int>(capture->decision));
+            captureDecision->setCurrentIndex(saved >= 0 ? saved : 0);
+        }
+    }
+    saveCorrection->setEnabled(!busy && capture != nullptr);
+    deleteCapture->setEnabled(!busy && capture != nullptr);
 }
 
 void LearningStudioPanel::ShowCandidate()
@@ -232,6 +349,10 @@ void LearningStudioPanel::SetBusy(const bool value)
     exportPackage->setEnabled(!busy && snapshot.inventorySkill.has_value());
     decision->setEnabled(!busy);
     ShowCandidate();
+    captureDecision->setEnabled(!busy);
+    correction->setReadOnly(busy);
+    saveCorrection->setEnabled(!busy && !shownCapture.empty());
+    deleteCapture->setEnabled(!busy && !shownCapture.empty());
 }
 
 void LearningStudioPanel::SetOutcome(const bool success, const std::string& message)
@@ -246,5 +367,8 @@ void LearningStudioPanel::ResetForCompanion()
     outcome->clear();
     decision->setCurrentIndex(0);
     busy = false;
+    // Another companion's private exchange and draft go with its selection.
+    shownCapture.clear();
+    correction->clear();
     SetSnapshot({});
 }

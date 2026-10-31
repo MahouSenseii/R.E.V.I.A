@@ -22,6 +22,9 @@ class LearningStudioPanel final : public QWidget
         std::function<void()> rollback;
         std::function<void()> exportPackage;
         std::function<void(const std::string&, revia::learning::LearningDecision, const std::string&)> decide;
+        // A kept capture's decision and correct reply, and deleting a kept capture.
+        std::function<void(const std::string&, revia::learning::LearningDecision, const std::string&)> correct;
+        std::function<void(const std::string&)> discard;
     };
     explicit LearningStudioPanel(Controls controls, QWidget* parent = nullptr);
     void SetSnapshot(const revia::runtime::LearningStudioSnapshot& snapshot);
@@ -31,6 +34,9 @@ class LearningStudioPanel final : public QWidget
 
   private:
     void ShowCandidate();
+    // Shows the selected capture. Its saved decision and correction replace the editors only
+    // when the selection changes, so the one-second refresh never discards a draft.
+    void ShowCapture(bool selectionChanged);
     Controls controls;
     revia::runtime::LearningStudioSnapshot snapshot;
     bool busy = false;
@@ -46,4 +52,12 @@ class LearningStudioPanel final : public QWidget
     QPushButton* rollback = nullptr;
     QPushButton* exportPackage = nullptr;
     QPushButton* recordDecision = nullptr;
+    QLabel* captureStatus = nullptr;
+    QComboBox* captures = nullptr;
+    QPlainTextEdit* captureDetails = nullptr;
+    QComboBox* captureDecision = nullptr;
+    QPlainTextEdit* correction = nullptr;
+    QPushButton* saveCorrection = nullptr;
+    QPushButton* deleteCapture = nullptr;
+    std::string shownCapture;
 };

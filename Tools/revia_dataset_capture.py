@@ -11,7 +11,9 @@ The messages the model actually received, and the tools it was offered, are kept
 corrections template is written for the owner.
 
 The running companion writes live captures itself, one file per judged reply, each carrying the
-owner's recorded judgment. `template` writes their corrections template.
+owner's recorded judgment. The owner writes their corrections in the companion's Training
+corrections screen, which saves them beside the captures; `template` writes a corrections file
+instead, for editing by hand.
 
 `candidates` joins the owner's corrections and decisions to either kind of capture in the
 interchange format ReviaDatasetExport reads. Nothing here judges a reply or writes a correction.
@@ -29,6 +31,7 @@ import sys
 
 VERSION = "stage-e-capture-v1"
 LIVE_VERSION = "live-capture-v1"
+CORRECTION_SCHEMA = "revia-live-correction-v1"
 CANDIDATES_SCHEMA = "revia-dataset-candidates-v1"
 ROLES = ("system", "user", "assistant", "tool")
 ISSUES = ("answer-coverage", "unsupported-claim", "memory-continuity", "missing-acceptance-evidence")
@@ -244,9 +247,29 @@ def command_template(arguments):
     return {"captures": len(template)}
 
 
+def load_corrections(arguments, captures):
+    """The owner's decisions: a corrections file, or the ones the companion saved beside live captures."""
+    path = Path(arguments.corrections) if arguments.corrections else Path(arguments.captures).parent / "corrections"
+    if path.is_file():
+        return json.loads(read_bytes(path))
+    require(all(capture["source"]["kind"] == "live" for capture in captures),
+            "Recorded captures need a --corrections file; only live captures have saved corrections.")
+    corrections = {}
+    for capture in captures:
+        saved = path / f"{capture['captureId']}.json"
+        if not saved.is_file():
+            continue
+        value = json.loads(read_bytes(saved))
+        require(value.get("schema") == CORRECTION_SCHEMA and value.get("captureId") == capture["captureId"] and
+                value.get("failedOutputSha256") == capture["failedOutputSha256"],
+                f"{saved} is not the saved correction of capture {capture['captureId']}.")
+        corrections[capture["captureId"]] = {"decision": value["decision"], "correction": value["correction"]}
+    return corrections
+
+
 def command_candidates(arguments):
     captures = load_captures(arguments.captures)
-    corrections = json.loads(read_bytes(arguments.corrections))
+    corrections = load_corrections(arguments, captures)
     output = Path(arguments.output)
     require(not output.exists(), f"{output} already exists; a candidate file is never replaced.")
     candidates, waiting = [], []
@@ -335,7 +358,8 @@ def main(argv=None):
     template.add_argument("--output", required=True)
     candidates = commands.add_parser("candidates")
     candidates.add_argument("--captures", required=True)
-    candidates.add_argument("--corrections", required=True)
+    candidates.add_argument("--corrections", help="A corrections file. For live captures, the default is the corrections the "
+                                                  "companion saved beside them.")
     candidates.add_argument("--output", required=True)
     candidates.add_argument("--prefix", default="stage-e")
     candidates.add_argument("--companion", default="revia")

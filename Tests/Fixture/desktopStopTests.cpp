@@ -222,7 +222,21 @@ struct ReviaWindowStopTests
         lesson.id = "private-learning-selection-A";
         lesson.candidate.lesson.statement = "Private learning detail sentinel A";
         learning.lessons = {lesson};
+        revia::learning::LiveCaptureSummary kept;
+        kept.captureId = "0123456789abcdef";
+        kept.input = "Private capture input sentinel A";
+        kept.failedOutput = "Private capture reply sentinel A";
+        kept.criterion = "Private capture criterion sentinel A";
+        learning.captures = {kept};
+        learning.captureStatus = "1 kept, 0 decided.";
         window.learningStudioPanel->SetSnapshot(learning);
+        window.findChild<QPlainTextEdit*>("learningCaptureCorrection")->setPlainText("Private correction draft sentinel A");
+        // The panel is refreshed every second; a refresh of the same capture keeps the draft.
+        window.learningStudioPanel->SetSnapshot(learning);
+        expect(window.findChild<QPlainTextEdit*>("learningCaptureCorrection")->toPlainText() == "Private correction draft sentinel A" &&
+                   window.findChild<QPlainTextEdit*>("learningCaptureDetails")->toPlainText().contains("Private capture reply sentinel A") &&
+                   window.findChild<QPushButton*>("learningSaveCorrection")->isEnabled(),
+            "a refresh discarded the owner's correction draft, or the kept exchange was not shown for correction");
         window.findChild<QLineEdit*>("learningInventoryDirectory")->setText("private-inventory-draft-A");
         window.findChild<QPlainTextEdit*>("learningReviewFeedback")->setPlainText("Private learning feedback sentinel A");
         window.learningStudioPanel->SetOutcome(false, "Private learning outcome sentinel A");
@@ -322,6 +336,11 @@ struct ReviaWindowStopTests
                    window.findChild<QComboBox*>("learningCandidates")->count() == 0 &&
                    window.findChild<QLabel*>("learningOutcome")->text().isEmpty(),
             "B Skills and Learning retained A's private path, feedback, candidate selection or outcome");
+        expect(window.findChild<QComboBox*>("learningCaptures")->count() == 0 &&
+                   window.findChild<QPlainTextEdit*>("learningCaptureDetails")->toPlainText().isEmpty() &&
+                   window.findChild<QPlainTextEdit*>("learningCaptureCorrection")->toPlainText().isEmpty() &&
+                   !window.findChild<QPushButton*>("learningSaveCorrection")->isEnabled(),
+            "B Skills and Learning retained A's kept exchange or correction draft");
         expect(window.findChild<QPlainTextEdit*>("developmentDetails")->toPlainText().isEmpty() &&
                    window.findChild<QLabel*>("developmentOutcome")->text().isEmpty() &&
                    !window.findChild<QPushButton*>("developmentValidate")->isEnabled(),

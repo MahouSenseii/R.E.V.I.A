@@ -2505,7 +2505,7 @@ void ReviaWindow::ReviewDisplayedAnswer()
                         std::string captureId, captureError;
                         message += current.CaptureJudgedTurn(feedback, captureId, captureError, stopToken)
                                        ? " Kept the exact exchange as dataset capture " + captureId +
-                                             "; it needs your correct reply before it can be exported."
+                                             "; write the correct reply in Skills & Learning, under Training corrections."
                                        : " The exact exchange was not kept: " + captureError;
                     }
                     return true;

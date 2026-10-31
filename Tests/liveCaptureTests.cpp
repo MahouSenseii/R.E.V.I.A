@@ -78,6 +78,18 @@ QualityFeedback Judgment(const DeliveredReply& reply = Reply())
     return value;
 }
 
+// Another judged reply: the same request, as when a reply is regenerated, but its own text and
+// its own displayed-reply ID.
+std::pair<DeliveredReply, QualityFeedback> OtherReply(const std::string& conversationId = "conversation-1")
+{
+    auto reply = Reply();
+    reply.conversationId = conversationId;
+    reply.displayed = reply.modelText = "I can't say.";
+    auto judgment = Judgment(reply);
+    judgment.targetId = "displayed-reply:reply-2";
+    return {reply, judgment};
+}
+
 LiveCapture Built(const DeliveredReply& reply = Reply(), const QualityFeedback& judgment = Judgment())
 {
     LiveCapture capture;
@@ -264,26 +276,24 @@ void TestKeptCapturesAreImmutableAndWithdrawn()
     unnamed.captureId = "../escape";
     Check(!store.Keep(unnamed, error), "A capture without its own identity was written.");
 
-    auto otherReply = Reply();
-    otherReply.conversationId = "conversation-2";
-    otherReply.displayed = otherReply.modelText = "I can't say.";
-    const auto second = Built(otherReply, Judgment(otherReply));
+    const auto [otherReply, otherJudgment] = OtherReply("conversation-2");
+    const auto second = Built(otherReply, otherJudgment);
     Check(store.Keep(second, error), error);
     Check(store.Withdraw("conversation:conversation-1", removed, error) && removed == 1, "Deleting a chat did not withdraw its capture: " + error);
     Check(!std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")) &&
               std::filesystem::exists(store.LiveDirectory() / (second.captureId + ".json")),
         "The withdrawal did not remove exactly the deleted chat's capture.");
     auto listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
-    Check(listed == std::vector<std::string>{"conversation:conversation-1", first.sources.front()},
-        "The withdrawal list does not name the chat and its capture's request, or named the speaker too.");
+    // Not the shared request: the other chat's capture stays eligible.
+    Check(listed == std::vector<std::string>{"conversation:conversation-1", "displayed-reply:reply-1"},
+        "The withdrawal list does not name exactly the chat and its capture's judged reply.");
 
     Check(store.WithdrawAll(removed, error) && removed == 1 && std::filesystem::is_empty(store.LiveDirectory()),
         "Forgetting every chat left a capture: " + error);
     listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
-    Check(std::find(listed.begin(), listed.end(), "conversation:conversation-2") != listed.end() &&
-              std::find(listed.begin(), listed.end(), second.sources.front()) != listed.end() &&
-              std::find(listed.begin(), listed.end(), "conversation:conversation-1") != listed.end(),
-        "Forgetting every chat did not list each capture's conversation and request, or lost an earlier withdrawal.");
+    Check(listed == std::vector<std::string>{"conversation:conversation-1", "conversation:conversation-2", "displayed-reply:reply-1",
+                        "displayed-reply:reply-2"},
+        "Forgetting every chat did not list each capture's conversation and judged reply, or lost an earlier withdrawal.");
 
     Check(store.Keep(first, error), error);
     std::ofstream(store.WithdrawnList(), std::ios::binary | std::ios::trunc) << "{broken";
@@ -291,13 +301,94 @@ void TestKeptCapturesAreImmutableAndWithdrawn()
               std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")),
         "An unreadable withdrawal list was replaced, or a capture deleted without being listed.");
 }
+void TestOwnerCorrectionsAreRevisedAndWithdrawn()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    std::string error;
+    Check(store.List(error).empty() && error.empty(), "An unused store listed captures.");
+    const auto unused = store.Revision();
+    const auto capture = Built();
+    Check(store.Keep(capture, error), error);
+    Check(store.Revision() != unused, "Keeping a capture did not change the store's revision.");
+    auto listed = store.List(error);
+    Check(listed.size() == 1 && listed[0].captureId == capture.captureId && listed[0].decision == LearningDecision::Pending &&
+              listed[0].revision == 0 && listed[0].input == "How did the poem make you feel?" && listed[0].failedOutput == Displayed &&
+              listed[0].criterion == Judgment().criterion && listed[0].issue == "answer-coverage" &&
+              listed[0].conversationId == "conversation-1",
+        "A kept capture was not listed with its judged reply, recorded judgment and pending decision.");
+
+    std::uint64_t revision = 0;
+    Check(!store.Correct(capture.captureId, LearningDecision::Accept, " \n", revision, error), "An accepted capture was saved without a reply.");
+    Check(!store.Correct(capture.captureId, LearningDecision::Accept, Displayed, revision, error),
+        "An accepted correction repeated the judged reply.");
+    Check(!store.Correct(capture.captureId, LearningDecision::Pending, "Later.", revision, error), "Pending was saved as a decision.");
+    Check(!store.Correct(capture.captureId, LearningDecision::Accept, "My password=synthetic-secret-credential", revision, error) &&
+              error.find("contains") != std::string::npos,
+        "A correction holding a secret was saved.");
+    Check(!store.Correct("0123456789abcdef", LearningDecision::Reject, "", revision, error) &&
+              !store.Correct("../escape", LearningDecision::Reject, "", revision, error),
+        "A correction was saved for a capture that is not kept.");
+    Check(!std::filesystem::exists(store.CorrectionsDirectory()), "A refused correction wrote something.");
+
+    const std::string draft = "Draft: the last line made me smile.";
+    const std::string correct = "Honestly, the last line about the lake made me smile.";
+    Check(store.Correct(capture.captureId, LearningDecision::Rework, draft, revision, error) && revision == 1, error);
+    Check(store.Correct(capture.captureId, LearningDecision::Accept, correct, revision, error) && revision == 2, error);
+    listed = store.List(error);
+    Check(listed.size() == 1 && listed[0].decision == LearningDecision::Accept && listed[0].correction == correct &&
+              listed[0].revision == 2,
+        "The latest revision is not the one listed.");
+    const auto savedPath = store.CorrectionsDirectory() / (capture.captureId + ".json");
+    const auto saved = json::parse(Read(savedPath));
+    Check(saved["schema"] == "revia-live-correction-v1" && saved["decision"] == "accept" &&
+              saved["failedOutputSha256"] == revia::audit::ContentDigest(Displayed) && saved["history"].size() == 1 &&
+              saved["history"][0] == json{{"revision", 1}, {"decision", "rework"}, {"correction", draft}},
+        "The earlier revision was not kept, or the correction is not bound to its capture.");
+    // The contract fixture the Python capture tests read beside Tests/Fixture/liveCapture.json.
+    if (const char* output = std::getenv("REVIA_LIVE_CORRECTION_FIXTURE_OUT"))
+        std::ofstream(output, std::ios::binary) << Read(savedPath);
+    const auto expected = Read("Tests/Fixture/liveCorrection.json");
+    Check(!expected.empty() && json::parse(expected) == saved,
+        "Tests/Fixture/liveCorrection.json no longer matches the saved correction; regenerate it with REVIA_LIVE_CORRECTION_FIXTURE_OUT.");
+
+    // A regenerated reply from the same request, kept separately. A correction file that names
+    // another reply is not shown as its decision.
+    const auto [otherReply, otherJudgment] = OtherReply();
+    const auto other = Built(otherReply, otherJudgment);
+    Check(store.Keep(other, error), error);
+    auto forged = saved;
+    forged["captureId"] = other.captureId;
+    std::ofstream(store.CorrectionsDirectory() / (other.captureId + ".json"), std::ios::binary) << forged.dump();
+    listed = store.List(error);
+    Check(listed.size() == 1 && listed[0].captureId == capture.captureId && error.find("1 kept capture") != std::string::npos,
+        "A correction bound to another reply was listed as this capture's decision.");
+    Check(!store.Correct(other.captureId, LearningDecision::Reject, "", revision, error) &&
+              error.find("another capture") != std::string::npos,
+        "A correction bound to another reply was revised.");
+
+    const bool discarded = store.Discard(capture.captureId, error);
+    Check(discarded, "A kept capture could not be deleted: " + error);
+    Check(!std::filesystem::exists(store.LiveDirectory() / (capture.captureId + ".json")) && !std::filesystem::exists(savedPath) &&
+              !std::filesystem::exists(savedPath.string() + ".bak") &&
+              std::filesystem::exists(store.LiveDirectory() / (other.captureId + ".json")),
+        "Deleting a capture left it or its correction behind, or deleted the capture sharing its request.");
+    const auto withdrawn = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    Check(withdrawn == std::vector<std::string>{"displayed-reply:reply-1"},
+        "Deleting one capture did not list exactly its judged reply as withdrawn.");
+    Check(!store.Discard(capture.captureId, error), "A deleted capture was deleted again.");
+    std::size_t removed = 0;
+    Check(store.WithdrawAll(removed, error) && removed == 1 && std::filesystem::is_empty(store.CorrectionsDirectory()),
+        "Forgetting every chat left a capture's correction behind: " + error);
+}
 } // namespace
 
 void RunLiveCaptureTests()
 {
     std::string errors;
     for (const auto test : {TestJudgedReplyKeepsItsExactExchange, TestRepairedReplyKeepsTheModelsOwnText,
-             TestInexactOrUnwithdrawableExchangesAreRefused, TestKeptCapturesAreImmutableAndWithdrawn})
+             TestInexactOrUnwithdrawableExchangesAreRefused, TestKeptCapturesAreImmutableAndWithdrawn,
+             TestOwnerCorrectionsAreRevisedAndWithdrawn})
         try
         {
             test();
@@ -307,5 +398,5 @@ void RunLiveCaptureTests()
             errors += std::string(error.what()) + '\n';
         }
     Check(errors.empty(), errors);
-    std::cout << "Live capture binding, exactness, refusals, immutable keeping and withdrawal passed.\n";
+    std::cout << "Live capture binding, exactness, refusals, immutable keeping, owner corrections and withdrawal passed.\n";
 }

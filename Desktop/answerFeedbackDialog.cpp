@@ -48,8 +48,9 @@ AnswerFeedbackDialog::AnswerFeedbackDialog(revia::learning::QualityFeedback valu
     layout->addWidget(evidence);
     keepExchange = new QCheckBox("Also keep the exact exchange for a training dataset (stays on this computer)", this);
     keepExchange->setObjectName("answerFeedbackKeepExchange");
-    keepExchange->setToolTip("Saves the prompt the model received and this reply under RuntimeData/Learning/Captures, so you can "
-                             "write the correct reply later. Deleting this chat or forgetting the speaker removes it.");
+    keepExchange->setToolTip("Saves the prompt the model received and this reply under RuntimeData/Learning/Captures. Write the "
+                             "correct reply later in Skills & Learning, under Training corrections. Deleting this chat or forgetting "
+                             "the speaker removes it.");
     layout->addWidget(keepExchange);
     outcome = new QLabel(this);
     outcome->setObjectName("answerFeedbackOutcome");

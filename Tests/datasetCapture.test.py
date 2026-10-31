@@ -11,8 +11,10 @@ from contextlib import redirect_stderr, redirect_stdout
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# The record ReviaLiveCaptureTests checks the C++ builder still produces.
+# The record ReviaLiveCaptureTests checks the C++ builder still produces, and the correction its
+# store saves for it.
 LIVE_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCapture.json"
+CORRECTION_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCorrection.json"
 TOOLS = [{"type": "function", "function": {"name": "calculator", "description": "Evaluate arithmetic.",
                                            "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}}}}]
 
@@ -207,12 +209,17 @@ class DatasetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn(message, result["error"])
 
-    def live(self, *records):
-        """The companion's live capture directory, holding the C++ builder's record."""
+    def live(self, *records, corrected=False):
+        """The companion's live capture directory, holding the C++ builder's record and, when asked,
+        the correction its store saved for it."""
         directory = self.evidence.root / "Captures" / "live"
         directory.mkdir(parents=True, exist_ok=True)
         for record in records or (json.loads(LIVE_FIXTURE.read_text(encoding="utf-8")),):
             (directory / f"{record['captureId']}.json").write_text(json.dumps(record, indent=2))
+        if corrected:
+            saved = json.loads(CORRECTION_FIXTURE.read_text(encoding="utf-8"))
+            (directory.parent / "corrections").mkdir(exist_ok=True)
+            (directory.parent / "corrections" / f"{saved['captureId']}.json").write_text(json.dumps(saved, indent=2))
         return directory
 
     def live_corrections(self, directory, entry):
@@ -269,13 +276,39 @@ class DatasetCaptureTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("not a live capture", result["error"])
 
+    def test_saved_corrections_need_no_corrections_file(self):
+        fixture = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
+        saved = json.loads(CORRECTION_FIXTURE.read_text(encoding="utf-8"))
+        directory = self.live()
+        code, result = run(["candidates", "--captures", str(directory), "--output", str(directory.parent / "none.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("No capture has a decision yet", result["error"])
+        directory = self.live(corrected=True)
+        output = directory.parent / "candidates.json"
+        code, result = run(["candidates", "--captures", str(directory), "--output", str(output), "--prefix", "live"])
+        self.assertEqual((code, result["candidates"]), (0, 1), result)
+        [candidate] = json.loads(output.read_text())["candidates"]
+        self.assertEqual((candidate["review"], candidate["response"], candidate["rejectedResponse"], candidate["judgment"]),
+                         (saved["decision"], saved["correction"], fixture["failedOutput"], fixture["judgment"]),
+                         "The saved decision and correction were not joined to the capture and its recorded judgment.")
+        forged = dict(saved, failedOutputSha256=sha("Another reply."))
+        (directory.parent / "corrections" / f"{saved['captureId']}.json").write_text(json.dumps(forged))
+        code, result = run(["candidates", "--captures", str(directory), "--output", str(directory.parent / "forged.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("is not the saved correction", result["error"])
+        self.evidence.capture("recorded", "feeling:2")
+        code, result = run(["candidates", "--captures", str(self.evidence.root / "recorded"),
+                            "--output", str(self.evidence.root / "recorded" / "c.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("need a --corrections file", result["error"])
+
     @unittest.skipUnless(EXPORT_TOOL and Path(EXPORT_TOOL).is_file(), "Set REVIA_DATASET_EXPORT to the built ReviaDatasetExport")
     def test_live_capture_exports_with_its_tools_and_is_withdrawn(self):
         fixture = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
-        directory = self.live()
-        corrections = self.live_corrections(directory, {"decision": "accept", "correction": "Honestly, it made me smile."})
+        # Corrected in the companion's screen: nothing is edited by hand.
+        directory = self.live(corrected=True)
         candidates = directory.parent / "candidates.json"
-        run(["candidates", "--captures", str(directory), "--corrections", str(corrections), "--output", str(candidates), "--prefix", "live"])
+        run(["candidates", "--captures", str(directory), "--output", str(candidates), "--prefix", "live"])
         withdrawn = directory.parent / "withdrawn.json"
         withdrawn.write_text("[]")
         export = self.evidence.root / "live-export"

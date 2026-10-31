@@ -15,8 +15,8 @@ Status on 2026-10-31:
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
 - The owner approved the downloads, including the 4B base for the separately evaluated 4B
   experiment.
-- No review screen for corrections, real export or real training job exists yet. The live
-  capture has not run against the companion on the host.
+- No real export or real training job exists yet. The live capture and its correction
+  screen have not run against the companion on the host.
 
 ## Dataset export
 
@@ -71,10 +71,8 @@ ordering each made it fail. It is registered as `ReviaDatasetExportTests`.
 
 Still needed before a real export:
 
-1. A review screen for corrections. Live and recorded captures are both corrected in a JSON
-   file for now (see Capture from recorded failures and Live capture below).
-2. A source list must be complete for derived data, such as frame extracts and captions.
-3. Live captures keep their own withdrawal list for deleted chats and forgotten speakers.
+1. A source list must be complete for derived data, such as frame extracts and captions.
+2. Live captures keep their own withdrawal list for deleted chats and forgotten speakers.
    The attachment library and memory still have no Forget receipts that reach it, so live
    capture refuses their material, and the host writes `withdrawn.json` by hand for recorded
    captures.
@@ -201,49 +199,111 @@ Withdrawal follows the companion's own deletes:
 - forgetting every chat withdraws them all;
 - forgetting a speaker withdraws the captures of conversations with them.
 
-In each case the capture file is deleted, and the source is added to
-`RuntimeData/Learning/Captures/withdrawn.json` with each deleted capture's request. Pass that
-file to `ReviaDatasetExport --withdrawn`, and as a training job's `withdrawnSourcesPath`, so
-that a copy exported before the deletion is refused too. It exists from the first
-withdrawal; until then, use a file containing `[]`.
+In each case the capture file and its correction are deleted. The source is added to
+`RuntimeData/Learning/Captures/withdrawn.json`, together with each deleted capture's judged
+reply (`displayed-reply:<id>`), which no other capture shares. The request is not listed:
+a reply regenerated from the same request and judged separately would be withdrawn with it.
+
+Pass that file to `ReviaDatasetExport --withdrawn`, and as a training job's
+`withdrawnSourcesPath`, so that a copy exported before the deletion is refused too. It
+exists from the first withdrawal; until then, use a file containing `[]`.
 
 Memories quoted in the prompt are not named as sources. Memory has no delete today: owner
 revisions keep the history. Before a memory forget exists, it must name its records in both
 places they are rendered, the retrieved-memory block and the state packet.
 
+### Writing corrections
+
+The owner corrects kept captures in **Skills & Learning**, under **Training corrections**.
+It is listed only while the audience is private, like past chats.
+
+For each capture, newest first, the screen shows:
+
+- what the person said, without the runtime context the prompt placed ahead of it;
+- the judged reply, and the model's own text when style repair changed it;
+- the judgment recorded when the capture was kept.
+
+The owner chooses a decision (accept, rework, need evidence or reject) and writes the reply
+the companion should have given. **Save correction** saves it as the capture's next
+revision in `RuntimeData/Learning/Captures/corrections/<captureId>.json`
+(`revia-live-correction-v1`). That file holds:
+
+- the decision and correction;
+- the judged reply's digest, which binds the correction to its capture;
+- up to 32 earlier revisions.
+
+An accepted capture needs a correct reply that differs from the judged one, and the secret
+gate applies to it.
+
+The panel refreshes every second. A refresh never replaces a draft: the saved decision and
+correction are loaded only when another capture is selected. Switching companion clears the
+capture and the draft.
+
+**Delete capture…** asks first. It then deletes the capture and its correction, and lists
+its judged reply as withdrawn.
+
+Exporting stays a separate step. Without `--corrections`, `candidates` reads the saved
+corrections beside live captures. It refuses one bound to another reply, and treats a
+capture without one as pending.
+
 ```powershell
-python -I -B Tools\revia_dataset_capture.py template --captures <companion>\RuntimeData\Learning\Captures\live --output corrections.template.json
-# Set each decision and, for an accepted capture, the correct reply; save it as corrections.json.
-python -I -B Tools\revia_dataset_capture.py candidates --captures <companion>\RuntimeData\Learning\Captures\live --corrections corrections.json --output candidates.json --prefix live
+python -I -B Tools\revia_dataset_capture.py candidates --captures <companion>\RuntimeData\Learning\Captures\live --output candidates.json --prefix live
 <build>\ReviaDatasetExport.exe --candidates candidates.json --name live --salt live-1 --withdrawn <companion>\RuntimeData\Learning\Captures\withdrawn.json --output D:\ReviaTraining\datasets\live-1
 ```
 
-The template shows the recorded issue, criterion and evidence as context, and asks only for
-a decision and a correction. `candidates` uses the recorded judgment verbatim, and refuses a
-corrections entry that tries to change it.
+`template` still writes a corrections file to edit by hand, passed with `--corrections`. It
+shows the recorded issue, criterion and evidence as context, and asks only for a decision
+and a correction. In both ways, `candidates` uses the recorded judgment verbatim, and refuses
+a corrections entry that tries to change it. Recorded captures still need a corrections
+file.
 
 Evidence:
 
-- On Linux, `Tests/liveCaptureTests.cpp` (`ReviaLiveCaptureTests`) passed against the
-  production builder and store. It covers:
+- On Linux, `Tests/liveCaptureTests.cpp` (`ReviaLiveCaptureTests`, 5 tests) passed
+  against the production builder and store. It covers:
   - exactness and binding to the judged reply;
   - each refusal;
   - immutable keeping;
+  - corrections and their revisions;
   - withdrawal and its list.
 - A read of the record through the strict interchange reader and the exporter succeeded,
   and the export was refused once the chat was withdrawn.
-- Removing each of 8 builder protections, and 2 store protections, made it fail.
-- `Tests/Fixture/liveCapture.json` is the builder's record. The C++ test checks the
-  builder still produces it, and the Python tests read it, so the two cannot drift apart.
-- `Tests/datasetCapture.test.py` (8 tests) passed on Linux. It covers:
+- Removing each of 16 protections made it fail: 8 in the builder, 2 in keeping and
+  withdrawal, and 6 in corrections. The correction protections are:
+  - accepting needs a different reply;
+  - the secret gate;
+  - the binding to the judged reply;
+  - deleting only the chosen capture;
+  - deleting its correction with it;
+  - keeping earlier revisions.
+- Fixtures shared between C++ and Python, so the two cannot drift apart:
+  - `Tests/Fixture/liveCapture.json` is the builder's record.
+  - `Tests/Fixture/liveCorrection.json` is a correction the store saved for it.
+  - The C++ test checks the store still produces both, and the Python tests read them.
+- `Tests/datasetCapture.test.py` (9 tests) passed on Linux. It covers:
   - live templates and candidates using the recorded judgment verbatim;
+  - saved corrections read without a corrections file;
   - the record through the real C++ `ReviaDatasetExport` with its tools;
   - the worker's read, and its refusal once the chat was withdrawn.
-- Removing each of 5 capture-tool protections made a Python test fail.
-- `Tests/qualityFeedbackRuntimeTests.cpp` adds the session path: holding, admissions,
-  fingerprints, refusing a second keep, and withdrawal when every chat is forgotten. The
-  desktop test checks that the box exists and starts unticked. Both build only on Windows,
-  so they run in Windows CI.
+- Removing each of 7 capture-tool protections made a Python test fail.
+- The Learning panel compiled against Qt 6.4.2 on Linux with no warnings. A headless
+  harness, not committed, drove the real panel. These held:
+  - drafts survive refreshes;
+  - Save sends the shown capture with Accept by default;
+  - a busy panel is locked;
+  - choosing a capture loads its saved state;
+  - a deleted capture's draft does not move to another capture;
+  - a hidden list and a companion switch show nothing private.
+- The changed window sources and the desktop test also compiled against those headers.
+- `Tests/qualityFeedbackRuntimeTests.cpp` adds the session path. It covers:
+  - holding, admissions and fingerprints;
+  - refusing a second keep;
+  - withdrawal when every chat is forgotten;
+  - listing, correcting and deleting, all refused for a public audience.
+
+  The desktop test checks that the box exists and starts unticked. It also checks that
+  correction drafts survive refreshes, and that a companion switch clears them. Both tests
+  build only on Windows, so they run in Windows CI.
 - Windows CI (run 41178797203, commit `64da0c5`):
   - The desktop and session changes built.
   - These passed: `ReviaLiveCaptureTests`, `Revia.DatasetCapturePolicy` (all 8, including
@@ -254,8 +314,8 @@ Evidence:
   - The fix (commit `e8d8f1c`) holds a fresh reply under the current audience before
     forgetting, and checks the reason for each refusal. In run 41181811601 the suite passed,
     along with every other branch check.
-- Not yet run: the Qt dialog, a real server's `/props` template, and a real judged turn on
-  the host.
+- Not yet run: the Qt dialog and screen on the host, a real server's `/props` template, and
+  a real judged turn.
 
 ## Training worker
 

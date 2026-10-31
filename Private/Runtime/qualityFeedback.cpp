@@ -201,10 +201,11 @@ bool ReviaSession::CaptureJudgedTurn(
         }
         learning::LiveCapture capture;
         if (OwnerMutationCanceled(stopToken, error) || !learning::BuildLiveCapture(*held, captured, capture, error) ||
-            !learning::LiveCaptureStore(companionPaths.Resolve("RuntimeData/Learning/Captures")).Keep(capture, error))
+            !CaptureStore().Keep(capture, error))
             return false;
         captureId = capture.captureId;
     }
+    InvalidateLiveCaptureIndex();
     PublishComponent("Dataset capture", "Kept", "The exact exchange behind the judged reply awaits the owner's correction.");
     return true;
 }
@@ -218,10 +219,11 @@ std::string ReviaSession::WithdrawLiveCaptures(const std::string& source)
         std::erase_if(deliveredReplies,
             [&source](const learning::DeliveredReply& reply)
             { return source.empty() || source == "conversation:" + reply.conversationId || source == "participant:" + reply.participantId; });
-        const learning::LiveCaptureStore store(companionPaths.Resolve("RuntimeData/Learning/Captures"));
+        const auto store = CaptureStore();
         if (!(source.empty() ? store.WithdrawAll(removed, error) : store.Withdraw(source, removed, error)))
             error = "The kept dataset captures could not be withdrawn: " + error;
     }
+    InvalidateLiveCaptureIndex();
     if (!error.empty())
     {
         // Logged as well: a caller whose own operation succeeded may not show it.
@@ -232,6 +234,80 @@ std::string ReviaSession::WithdrawLiveCaptures(const std::string& source)
         appLogger.Log("Withdrew " + std::to_string(removed) + " kept dataset capture" + (removed == 1 ? "" : "s") + " with " +
                       (source.empty() ? std::string("every conversation") : source) + ".");
     return {};
+}
+
+learning::LiveCaptureStore ReviaSession::CaptureStore() const
+{
+    return learning::LiveCaptureStore(companionPaths.Resolve("RuntimeData/Learning/Captures"));
+}
+
+void ReviaSession::InvalidateLiveCaptureIndex()
+{
+    std::lock_guard indexLock(liveCaptureIndexMutex);
+    liveCaptureIndexRevision.clear();
+}
+
+void ReviaSession::ListLiveCaptures(LearningStudioSnapshot& snapshot, const bool privateAudience)
+{
+    if (!privateAudience)
+    {
+        snapshot.captureStatus = "Kept training exchanges are hidden while the audience is not private.";
+        return;
+    }
+    const auto store = CaptureStore();
+    const auto revision = store.Revision();
+    std::lock_guard indexLock(liveCaptureIndexMutex);
+    if (liveCaptureIndexRevision.empty() || revision != liveCaptureIndexRevision)
+    {
+        liveCaptureIndex = store.List(liveCaptureIndexError);
+        liveCaptureIndexRevision = revision;
+    }
+    snapshot.captures = liveCaptureIndex;
+    const std::size_t decided = static_cast<std::size_t>(std::count_if(liveCaptureIndex.begin(), liveCaptureIndex.end(),
+        [](const learning::LiveCaptureSummary& capture) { return capture.decision != learning::LearningDecision::Pending; }));
+    snapshot.captureStatus = !liveCaptureIndexError.empty() ? liveCaptureIndexError
+                             : liveCaptureIndex.empty()
+                                 ? std::string("No exchanges are kept. Tick \"Also keep the exact exchange\" when you judge a reply.")
+                                 : std::to_string(liveCaptureIndex.size()) + " kept, " + std::to_string(decided) +
+                                       " decided. Exporting them is a separate step.";
+}
+
+bool ReviaSession::CorrectLiveCapture(const std::string& captureId, const learning::LearningDecision decision,
+    const std::string& correction, std::uint64_t& revision, std::string& error, const std::stop_token stopToken)
+{
+    revision = 0;
+    if (OwnerMutationCanceled(stopToken, error))
+        return false;
+    if (Audience().kind != identity::AudienceKind::Private)
+    {
+        error = "Training corrections are saved only while the audience is private.";
+        return false;
+    }
+    {
+        // The capture store's lock: a chat deleted meanwhile cannot leave a correction behind.
+        std::lock_guard heldLock(deliveredRepliesMutex);
+        if (!CaptureStore().Correct(captureId, decision, correction, revision, error))
+            return false;
+    }
+    InvalidateLiveCaptureIndex();
+    return true;
+}
+
+bool ReviaSession::DiscardLiveCapture(const std::string& captureId, std::string& error)
+{
+    if (Audience().kind != identity::AudienceKind::Private)
+    {
+        error = "Kept training exchanges are deleted only while the audience is private.";
+        return false;
+    }
+    {
+        std::lock_guard heldLock(deliveredRepliesMutex);
+        if (!CaptureStore().Discard(captureId, error))
+            return false;
+    }
+    InvalidateLiveCaptureIndex();
+    appLogger.Log("Deleted kept dataset capture " + captureId + " at the owner's request.");
+    return true;
 }
 
 bool ReviaSession::RetestQualityFeedback(const std::string& taskId, const learning::QualityFeedback& feedback, std::string& error,
