@@ -388,6 +388,12 @@ Inventory at `8aa4ca5`, from tracked code only:
     - Full suite: the unfixed build failed 2 of 15 runs, both on yields. The fixed build hit
       the ordering race once in 15 runs, and with the ordering fix as well it passed
       30 of 30 runs.
+
+    Windows CI: run 41230268393 (commit `510b838`, which carries this fix) ran 148 of 150
+    tests, the other two being the approved optional video skips. `ReviaDelegationTests`,
+    `Revia.ObservedLocalModel`, both proactive-state tests, `Revia.NliDedupBenchmarkContract`
+    and every branch check passed. The only failure was `ReviaAudiencePrivacyTests`, which
+    waits on the owner's host candidate patch.
 19. **The evaluation proxy's refusals reset on Windows (2026-10-31).** This was the
     intermittent `Revia.ObservedLocalModel` failure, "Wrong credentials must be refused before
     forwarding or observation", seen in runs 41156920820 and 41226112183.
@@ -411,6 +417,12 @@ Inventory at `8aa4ca5`, from tracked code only:
       3 runs.
     - With the fix, 1,200 of 1,200 POSTs read their 401, and the test passed 20 of 20 runs.
     - On Linux natively, the old proxy never reset in 4,000 tries.
+
+    Windows CI: run 41230268393 (commit `510b838`, which carries this fix) ran 148 of 150
+    tests, the other two being the approved optional video skips. `ReviaDelegationTests`,
+    `Revia.ObservedLocalModel`, both proactive-state tests, `Revia.NliDedupBenchmarkContract`
+    and every branch check passed. The only failure was `ReviaAudiencePrivacyTests`, which
+    waits on the owner's host candidate patch.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
