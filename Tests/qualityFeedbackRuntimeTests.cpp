@@ -6,8 +6,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
+#include <nlohmann/json.hpp>
 
 namespace
 {
@@ -130,6 +133,89 @@ void TestPrivateCandidateCapturedConfigurationAndOrdinaryReview()
     Check(memory.Load().size() == 1 && memory.Load().front().source == "reviewed_lesson:" + recordId &&
               memory.Load().front().category == "constraint",
         "Explicit ordinary learning review did not produce the actual quality-memory receipt.");
+}
+
+responseOutput HeldReply(const std::string& displayed)
+{
+    responseOutput reply;
+    reply.bSuccess = true;
+    reply.response = reply.rawResponse = displayed;
+    auto exchange = std::make_shared<revia::llm::ProviderExchange>();
+    exchange->requestBody = nlohmann::json{{"model", "main"},
+        {"messages", {{{"role", "system"}, {"content", "You are a synthetic companion."}},
+                         {{"role", "user"}, {"content", "Which object file does the linker need?"}}}},
+        {"chat_template_kwargs", {{"enable_thinking", false}}}, {"stream", true}}
+                                .dump();
+    exchange->responseText = displayed;
+    exchange->finishReason = "stop";
+    exchange->completeStream = true;
+    exchange->model = "main";
+    exchange->templateSha256 = revia::audit::ContentDigest("{{ messages }}");
+    reply.exchange = std::move(exchange);
+    return reply;
+}
+
+std::string ReadFile(const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const CompanionPaths paths(fixture.root, {"capture-bridge", "Synthetic capture bridge", "assistant", false});
+    ReviaSession session(paths);
+    Prepare(session, fixture.root);
+    const auto feedback = Feedback(session);
+    std::string captureId, error;
+    Check(!session.CaptureJudgedTurn(feedback, captureId, error) && error.find("no longer held") != std::string::npos,
+        "A reply that was never held was kept.");
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
+    Check(!std::filesystem::exists(paths.Resolve("RuntimeData/Learning/Captures")), "Holding a delivered reply wrote it to disk.");
+    auto invalid = feedback;
+    invalid.criterionSatisfied = true;
+    Check(!session.CaptureJudgedTurn(invalid, captureId, error), "A satisfied criterion kept an exchange.");
+    invalid = feedback;
+    ++invalid.origin.generation;
+    Check(!session.CaptureJudgedTurn(invalid, captureId, error), "A stale origin kept an exchange.");
+
+    std::string taskId, recordId;
+    Check(session.RecordQualityFeedback(feedback, taskId, recordId, error), error);
+    Check(session.CaptureJudgedTurn(feedback, captureId, error), "The judged, held reply was not kept: " + error);
+    const auto kept = paths.Resolve("RuntimeData/Learning/Captures/live") / (captureId + ".json");
+    const auto record = nlohmann::json::parse(ReadFile(kept));
+    const auto sources = record["sources"].get<std::vector<std::string>>();
+    Check(record["judgment"]["judgmentId"] == feedback.judgmentId && record["judgment"]["targetDigest"] == feedback.targetDigest &&
+              record["judgment"]["dependencies"].contains("loaded-profile-sha256") && record["origin"]["sessionId"] == session.Stamp().sessionId &&
+              std::find(sources.begin(), sources.end(), "participant:owner") != sources.end(),
+        "The kept capture lost the owner's judgment, the captured fingerprints, its origin or its speaker.");
+    std::string again;
+    Check(!session.CaptureJudgedTurn(feedback, again, error) && error.find("already kept") != std::string::npos,
+        "The same judged reply was kept twice.");
+
+    // A configuration change after the reply means the exchange is no longer what the
+    // judgment's fingerprints describe.
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Second synthetic displayed reply"), "owner");
+    ReviaSessionTestAccess::PlannedMainDevice(session, "synthetic-new-device");
+    auto later = feedback;
+    later.judgmentId = "explicit-owner-judgment-later";
+    later.targetId = "displayed-reply:second";
+    later.targetDigest = revia::audit::ContentDigest("Second synthetic displayed reply");
+    later.dependencies["displayed-result"] = later.targetDigest;
+    Check(!session.CaptureJudgedTurn(later, again, error) && error.find("changed after this reply") != std::string::npos,
+        "An exchange was kept under a configuration that did not produce it.");
+    Check(session.SetAudience({revia::identity::AudienceKind::Public, "fixture-public", 0, {}}, error), error);
+    Check(!session.CaptureJudgedTurn(Feedback(session), again, error), "A public audience kept a private exchange.");
+    Check(session.SetAudience({revia::identity::AudienceKind::Private, "fixture-private", 0, {}}, error), error);
+
+    session.ForgetConversations();
+    const auto withdrawn = nlohmann::json::parse(ReadFile(paths.Resolve("RuntimeData/Learning/Captures/withdrawn.json")))
+                               .get<std::vector<std::string>>();
+    Check(!std::filesystem::exists(kept) && std::find(withdrawn.begin(), withdrawn.end(), sources.front()) != withdrawn.end(),
+        "Forgetting every chat left its kept capture, or did not list it as withdrawn.");
+    Check(!session.CaptureJudgedTurn(feedback, again, error) && error.find("no longer held") != std::string::npos,
+        "A forgotten chat's reply was still held in memory.");
 }
 
 void TestRuntimeMemorySelectionAndAudienceEpoch()
@@ -283,9 +369,10 @@ void RunQualityFeedbackRuntimeTests()
 {
     TestRuntimeJudgmentAuthorityAndAudienceEpoch();
     TestPrivateCandidateCapturedConfigurationAndOrdinaryReview();
+    TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn();
     TestRuntimeMemorySelectionAndAudienceEpoch();
     TestCanceledQualityMutationsDoNotWriteAfterForegroundWait();
     TestCanceledQualityRetestPreservesAttemptHistory();
-    std::cout << "Runtime quality feedback checks passed: owner authority, audience epochs, captured dependencies and ordinary reviewed "
-                 "receipts.\n";
+    std::cout << "Runtime quality feedback checks passed: owner authority, audience epochs, captured dependencies, ordinary reviewed "
+                 "receipts, and judged exchanges kept only on request and withdrawn with their chats.\n";
 }

@@ -403,6 +403,13 @@ struct ReviaSessionTestAccess
     { return session.initiativeWorker.joinable() && session.curiosityWorker.joinable(); }
     static void PlannedMainDevice(ReviaSession& session, const std::string& device)
     { session.settings.llm.device = device; }
+    // What the conversation runtime's observer does as a private reply is delivered.
+    static void HoldDeliveredReply(ReviaSession& session, const responseOutput& reply, const std::string& participantId)
+    {
+        const auto revision = session.Audience().revision;
+        std::lock_guard operationLock(session.operationMutex);
+        session.HoldDeliveredReply(reply, revision, participantId);
+    }
     static std::string PlannedMainDevice(const ReviaSession& session)
     { return session.settings.llm.device; }
 

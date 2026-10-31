@@ -6,6 +6,7 @@
 #include "LLM/responseTypes.h"
 #include "Memory/memoryTypes.h"
 #include "LLM/LLamaCPP/llamaCppService.h"
+#include "Audit/contentDigest.h"
 #include "cancellableHttpClient.h"
 #include "serverKeyProof.h"
 #include "Core/utf8.h"
@@ -2056,6 +2057,24 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     output.bWasStreamed = static_cast<bool>(onDelta);
     if (jsonReply && !replyContract.reason.empty())
         output.reason = replyContract.reason;
+    // Kept for a text reply only: a request that carried pictures holds their encoded bytes,
+    // and the text dataset could not hold it exactly anyway.
+    constexpr std::size_t MaximumRetainedRequestBytes = 4 * 1024 * 1024;
+    if (!boundedFrameReply && turnImages.empty() && req.body.size() <= MaximumRetainedRequestBytes)
+    {
+        auto exchange = std::make_shared<revia::llm::ProviderExchange>();
+        exchange->requestBody = req.body;
+        exchange->responseText = fullResponse;
+        exchange->finishReason = finishReason;
+        exchange->completeStream = completeStream;
+        exchange->requestedTools = !requestedCalls.empty();
+        exchange->model = modelName;
+        {
+            std::lock_guard templateLock(servedTemplateMutex);
+            exchange->templateSha256 = servedTemplateDigest;
+        }
+        output.exchange = std::move(exchange);
+    }
 
     return output;
 }
@@ -3169,6 +3188,12 @@ healthOutput llamaCppService::CheckHealth(const std::stop_token stopToken) const
                 output.contextTokens = props["default_generation_settings"].value("n_ctx", 0);
             }
             output.parallelSlots = props.value("total_slots", 0);
+            {
+                const std::string servedTemplate =
+                    props.contains("chat_template") && props["chat_template"].is_string() ? props["chat_template"].get<std::string>() : "";
+                std::lock_guard templateLock(servedTemplateMutex);
+                servedTemplateDigest = servedTemplate.empty() ? std::string{} : revia::audit::ContentDigest(servedTemplate);
+            }
             if (bVisionExpected)
             {
                 const bool visionAvailable = props.contains("modalities") &&

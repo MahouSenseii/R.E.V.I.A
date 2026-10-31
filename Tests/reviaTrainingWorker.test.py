@@ -33,7 +33,7 @@ class FakeBackend:
     def __init__(self, configuration, device, cancel_at=None, fail_at=None, job_directory=None):
         self.configuration, self.device = configuration, device
         self.cancel_at, self.fail_at, self.job_directory = cancel_at, fail_at, job_directory
-        self.steps, self.resumed = 0, None
+        self.steps, self.resumed, self.tools_seen = 0, None, {}
         FakeBackend.created.append(self)
 
     def versions(self):
@@ -45,7 +45,8 @@ class FakeBackend:
     def load(self, directory):
         self.loaded = directory
 
-    def encode(self, messages):
+    def encode(self, messages, tools=None):
+        self.tools_seen[messages[-1]["content"]] = tools
         return messages[-1]["content"]
 
     def step(self, examples):
@@ -72,8 +73,14 @@ class FakeBackend:
         (directory / "adapter_config.json").write_text("{}")
 
 
+# As the exporter writes them: keys sorted, and here without a description.
+EXPORTED_TOOLS = [{"function": {"name": "calculator", "parameters": {"properties": {"expression": {"type": "string"}},
+                                                                    "required": ["expression"], "type": "object"}},
+                   "type": "function"}]
+
+
 class Fixture:
-    def __init__(self, root, base_directory=None):
+    def __init__(self, root, base_directory=None, tools=None):
         self.root = Path(root)
         self.base = Path(base_directory) if base_directory else self.root / "base"
         if not base_directory:
@@ -99,7 +106,10 @@ class Fixture:
                 messages = [{"role": "system", "content": "You are Revia."},
                             {"role": "user", "content": f"How did poem {identifier} make you feel?"},
                             {"role": "assistant", "content": f"Honestly, poem {identifier} made me smile."}]
-                lines += json.dumps({"id": identifier, "messages": messages}, sort_keys=True) + "\n"
+                record = {"id": identifier, "messages": messages}
+                if tools is not None and identifier == "t0":
+                    record["tools"] = tools
+                lines += json.dumps(record, sort_keys=True) + "\n"
                 examples.append({"id": identifier, "eligible": True, "partition": partition, "sources": [f"source-{identifier}"]})
             # Bytes, not text: Windows text mode would turn each newline into CRLF and break the digest.
             (self.dataset / f"{partition}.jsonl").write_bytes(lines.encode("utf-8"))
@@ -268,6 +278,26 @@ class TrainingWorkerTests(unittest.TestCase):
             self.assertEqual(sorted(flat[epoch * 5:(epoch + 1) * 5]), list(range(5)))
         self.assertEqual(picks, [MODULE.schedule(5, 7, step, 2) for step in range(10)])
 
+    def test_offered_tools_reach_the_template_in_server_order(self):
+        self.temporary.cleanup()
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(self.temporary.name, tools=EXPORTED_TOOLS)
+        code, _, result = self.fixture.run()
+        self.assertEqual(code, 0, result)
+        seen = FakeBackend.created[-1].tools_seen
+        served = seen["Honestly, poem t0 made me smile."]
+        # The pinned llama-server's own rebuild: type, then name, description and parameters.
+        self.assertEqual(json.dumps(served), json.dumps([{"type": "function", "function": {
+            "name": "calculator", "description": "", "parameters": EXPORTED_TOOLS[0]["function"]["parameters"]}}]))
+        self.assertIsNone(seen["Honestly, poem t1 made me smile."], "Tools were invented for an example that offered none.")
+
+    def test_malformed_tools_refuse_the_dataset(self):
+        for tools in ([], [{"type": "function"}], [{"type": "other", "function": {"name": "x"}}], "calculator"):
+            self.temporary.cleanup()
+            self.temporary = tempfile.TemporaryDirectory()
+            self.fixture = Fixture(self.temporary.name, tools=tools)
+            self.refused("tool")
+
     def test_missing_runtime_is_refused_without_importing_it(self):
         with mock.patch.dict(sys.modules, {"peft": None}):
             with self.assertRaisesRegex(ValueError, "optional training runtime is not installed: peft"):
@@ -282,7 +312,7 @@ class TrainingWorkerTests(unittest.TestCase):
 
         smoke = Path(self.temporary.name) / "smoke"
         shutil.copytree(SMOKE_MODEL, smoke / "base", ignore=shutil.ignore_patterns(".*"))
-        fixture = Fixture(smoke, base_directory=smoke / "base")
+        fixture = Fixture(smoke, base_directory=smoke / "base", tools=EXPORTED_TOOLS)
         fixture.job["configuration"].update(backend="transformers-peft", maxSteps=4, gradientAccumulation=1,
                                             checkpointEverySteps=2, learningRate=0.01, loraRank=4, loraAlpha=8,
                                             targetModules=["q_proj", "k_proj", "v_proj", "o_proj"])

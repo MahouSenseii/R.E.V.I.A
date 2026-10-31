@@ -8,13 +8,15 @@ itself.
 Status on 2026-10-31:
 
 - The dataset exporter, the training worker, the pinned asset installer, the llama.cpp
-  conversion and check tool, the evaluation runner and the recorded-failure capture exist.
+  conversion and check tool, the evaluation runner, the recorded-failure capture and the
+  live capture from the running companion exist.
 - Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
   build.
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
 - The owner approved the downloads, including the 4B base for the separately evaluated 4B
   experiment.
-- No runtime capture, owner review screen, real export or real training job exists yet.
+- No review screen for corrections, real export or real training job exists yet. The live
+  capture has not run against the companion on the host.
 
 ## Dataset export
 
@@ -22,6 +24,8 @@ Status on 2026-10-31:
 `WriteDatasetExport`) works on `DatasetCandidate` records. Each record carries:
 
 - the exact model input and the desired response;
+- the tool definitions the request offered, when it offered any, because the chat template
+  renders them into the prompt;
 - the quality receipt: judgment, criterion, judged output digest, and the profile and
   configuration fingerprints the runtime captures;
 - the owner's review decision;
@@ -37,6 +41,7 @@ An example is eligible only when all of the following hold:
     does not repeat it; or
   - a model output whose exact digest a satisfied criterion recorded.
 - None of its sources is withdrawn, including the judged turn itself.
+- Any tools it carries are a bounded list of named functions.
 - The shared secret gate finds nothing in it.
 - It does not duplicate an earlier example.
 
@@ -66,11 +71,13 @@ ordering each made it fail. It is registered as `ReviaDatasetExportTests`.
 
 Still needed before a real export:
 
-1. Live runtime capture. Recorded failures can now be captured exactly (see Capture from
-   recorded failures below). Turns from the running companion still have no capture path.
+1. A review screen for corrections. Live and recorded captures are both corrected in a JSON
+   file for now (see Capture from recorded failures and Live capture below).
 2. A source list must be complete for derived data, such as frame extracts and captions.
-3. The withdrawal set must come from the attachment library's and memory's own Forget
-   receipts. For now the host writes `withdrawn.json` by hand.
+3. Live captures keep their own withdrawal list for deleted chats and forgotten speakers.
+   The attachment library and memory still have no Forget receipts that reach it, so live
+   capture refuses their material, and the host writes `withdrawn.json` by hand for recorded
+   captures.
 
 ## Capture from recorded failures
 
@@ -86,11 +93,17 @@ reconstructing anything.
   response from any other harness. It also needs `--profile-digest` and `--template-sha256`,
   because an exact capture needs its model, profile and template.
 
-A capture keeps the messages the model received, byte for byte, together with the failed
-output and its digest, the request's sampling settings and their digest, and the source file
-digests. It refuses, with a reason, anything a text dataset cannot hold exactly: image or
-other non-text parts, tool-call history, and replies that are tool calls. Each capture also
-writes `corrections.template.json`.
+A capture keeps the messages the model received, byte for byte, and the tools the request
+offered, together with the failed output and its digest, the request's sampling settings
+and their digest, and the source file digests. It refuses, with a reason, anything a text
+dataset cannot hold exactly:
+
+- image or other non-text parts;
+- tool-call history, and replies that are tool calls;
+- a reply generated without thinking explicitly off, because the training path renders
+  with thinking off.
+
+Each capture also writes `corrections.template.json`.
 
 For each capture, the owner fills in:
 
@@ -137,6 +150,103 @@ Evidence, all on Linux:
 - `Tests/datasetExportTests.cpp` now also checks that `ReadDatasetCandidates` round-trips a
   candidate and refuses unknown values, missing fields and non-text content.
 
+## Live capture from the running companion
+
+When the owner judges a displayed reply a failure in the Review dialog, they can tick **Also
+keep the exact exchange for a training dataset**. The box is off by default, and nothing is
+written unless it is ticked.
+
+1. `llamaCppService` attaches the exact request body it sent, and the raw streamed text, to
+   every text reply (`responseOutput::exchange`, `LLM/providerExchange.h`). It adds the
+   served model and the digest of the chat template the server reported at its last health
+   check. A request that carried pictures is not attached.
+2. The session holds the last 8 private replies in memory. Each keeps its exchange, the
+   attributed speaker, the archived chat, and the profile and configuration fingerprints at
+   delivery. Nothing is written yet.
+3. Once the judgment itself is recorded, `ReviaSession::CaptureJudgedTurn` looks up the
+   held reply whose displayed text has the judgment's target digest. It applies the same
+   admissions as the judgment: an owner failure judgment from the current private session
+   and audience revision.
+4. `Learning/liveCapture` (`BuildLiveCapture`) builds the capture.
+5. `LiveCaptureStore` writes it as `RuntimeData/Learning/Captures/live/<captureId>.json`.
+   It never replaces a capture.
+
+A live capture keeps:
+
+- the messages and tools the model received, exactly as the request held them;
+- the judged reply as `failedOutput`, the text the owner judgment is bound to;
+- the model's own streamed text as `modelOutput`, with `repaired` set when style repair
+  changed it;
+- the owner's recorded judgment, unchanged;
+- the request's sampling settings, the finish reason, the model, the template digest and
+  the fingerprints;
+- its sources: `request:<digest>`, `conversation:<archived chat>` and
+  `participant:<speaker>`.
+
+It refuses, and the dialog shows why:
+
+- a reply that is no longer held, or that was shown in parts (a spoken reply's fragments);
+- a safety replacement or an AI reviewer's rewrite, which the request did not produce;
+- a cloud reply, and an unknown template;
+- a profile or model configuration that changed since the reply;
+- pictures, tool-call history, a tool-call reply, or thinking that is not explicitly off;
+- private reference material whose sources the runtime does not name yet: conversation
+  recalled from other chats, attached files, kept documents, the clipboard, live page text
+  and visible-browser results;
+- anything the secret gate finds.
+
+Withdrawal follows the companion's own deletes:
+
+- deleting a chat withdraws its captures;
+- forgetting every chat withdraws them all;
+- forgetting a speaker withdraws the captures of conversations with them.
+
+In each case the capture file is deleted, and the source is added to
+`RuntimeData/Learning/Captures/withdrawn.json` with each deleted capture's request. Pass that
+file to `ReviaDatasetExport --withdrawn`, and as a training job's `withdrawnSourcesPath`, so
+that a copy exported before the deletion is refused too. It exists from the first
+withdrawal; until then, use a file containing `[]`.
+
+Memories quoted in the prompt are not named as sources. Memory has no delete today: owner
+revisions keep the history. Before a memory forget exists, it must name its records in both
+places they are rendered, the retrieved-memory block and the state packet.
+
+```powershell
+python -I -B Tools\revia_dataset_capture.py template --captures <companion>\RuntimeData\Learning\Captures\live --output corrections.template.json
+# Set each decision and, for an accepted capture, the correct reply; save it as corrections.json.
+python -I -B Tools\revia_dataset_capture.py candidates --captures <companion>\RuntimeData\Learning\Captures\live --corrections corrections.json --output candidates.json --prefix live
+<build>\ReviaDatasetExport.exe --candidates candidates.json --name live --salt live-1 --withdrawn <companion>\RuntimeData\Learning\Captures\withdrawn.json --output D:\ReviaTraining\datasets\live-1
+```
+
+The template shows the recorded issue, criterion and evidence as context, and asks only for
+a decision and a correction. `candidates` uses the recorded judgment verbatim, and refuses a
+corrections entry that tries to change it.
+
+Evidence:
+
+- On Linux, `Tests/liveCaptureTests.cpp` (`ReviaLiveCaptureTests`) passed against the
+  production builder and store. It covers:
+  - exactness and binding to the judged reply;
+  - each refusal;
+  - immutable keeping;
+  - withdrawal and its list.
+- A read of the record through the strict interchange reader and the exporter succeeded,
+  and the export was refused once the chat was withdrawn.
+- Removing each of 8 builder protections, and 2 store protections, made it fail.
+- `Tests/Fixture/liveCapture.json` is the builder's record. The C++ test checks the
+  builder still produces it, and the Python tests read it, so the two cannot drift apart.
+- `Tests/datasetCapture.test.py` (8 tests) passed on Linux. It covers:
+  - live templates and candidates using the recorded judgment verbatim;
+  - the record through the real C++ `ReviaDatasetExport` with its tools;
+  - the worker's read, and its refusal once the chat was withdrawn.
+- Removing each of 5 capture-tool protections made a Python test fail.
+- `Tests/qualityFeedbackRuntimeTests.cpp` adds the session path: holding, admissions,
+  fingerprints, refusing a second keep, and withdrawal when every chat is forgotten. The
+  desktop test checks that the box exists and starts unticked. Both build only on Windows,
+  so they run in Windows CI.
+- Not yet run: the Qt dialog, a real server's `/props` template, and a real judged turn on
+  the host.
+
 ## Training worker
 
 `Tools/revia_training_worker.py` runs one supervised BF16 LoRA job on a dataset export.
@@ -169,6 +279,15 @@ with the reason the current Qwen3.5 guidance gives: 4-bit training shows larger 
 normal quantization differences. A checkpoint from another base, dataset or configuration
 is refused rather than resumed. An existing candidate is never replaced.
 
+Offered tools are handed to the chat template the way the pinned llama-server hands them.
+It rebuilds each tool as `type`, then `function` with `name`, `description` and
+`parameters`. A missing description becomes empty, and the parameters keep their own order.
+This was checked against b10453's `/apply-template` on the tiny Qwen3.5:
+
+- transformers rendered the identical prompt only in that order;
+- in the exporter's sorted order the prompt differed;
+- the masking prefix still held with tools.
+
 Examples are rendered with `enable_thinking=False`, the setting Revia uses for ordinary
 turns, and only the assistant reply, including its end-of-turn token, is supervised. An
 actual Qwen3.5 template check found that with thinking on, the generation prompt
@@ -194,13 +313,17 @@ Its state is `candidate`. Nothing activates, converts or merges it.
 Evidence, all on Linux:
 
 - `Tests/reviaTrainingWorker.test.py` covers orchestration with a deterministic fixture
-  backend, in 11 tests. Removing the withdrawal recheck, reading the test partition or
-  dropping the checkpoint identity check each made its own test fail.
+  backend, in 13 tests. Each of these changes made its own test fail:
+  - removing the withdrawal recheck;
+  - reading the test partition;
+  - dropping the checkpoint identity check;
+  - rendering tools in the exported order instead of the server's.
 - With `REVIA_TRAINING_SMOKE_MODEL` set, the real backend trained
   `trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think` (`6860d7ec`, a hybrid
   linear-attention plus full-attention Qwen3.5) on CPU. The software was torch 2.15.0+cpu,
   transformers 5.22.1 and peft 0.21.2. The run was cancelled at its step-2 checkpoint,
-  resumed and finished, and the published adapter changed the base model's output.
+  resumed and finished, and the published adapter changed the base model's output. One of
+  its examples offered a tool, rendered through the real template.
 - Without optimized kernels, transformers fell back to reference implementations of the
   gated delta rule and causal convolution. A real job's environment should include
   `flash-linear-attention` and `causal-conv1d`.
@@ -413,6 +536,8 @@ The `score` exit code is 0 for accept, 1 for reject and 2 for incomplete.
   2. Write their corrections.
   3. Export them, aiming for enough distinct cases that the held-out partition reaches the
      evaluation plan's minimum of five.
+
+  Replies the owner judges in ordinary use can now add live captures to the same export.
 - **Evaluation runner on the host.** The runner exists, but on this branch it has only driven
   stand-ins for the C++ quality tools. Its first host run is also the first check that
   `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` work against an owned llama-server.

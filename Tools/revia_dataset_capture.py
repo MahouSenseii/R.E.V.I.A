@@ -7,8 +7,13 @@ Optional and offline. `capture` reads recorded failures in one of two forms:
 * one exact serialized request and its raw response, from any harness that kept them.
 
 Each selected failing turn is bound to the single request whose raw output is that turn's reply.
-The messages the model actually received are kept exactly, and a corrections template is written
-for the owner. `candidates` joins the owner's corrections and decisions to the captures in the
+The messages the model actually received, and the tools it was offered, are kept exactly, and a
+corrections template is written for the owner.
+
+The running companion writes live captures itself, one file per judged reply, each carrying the
+owner's recorded judgment. `template` writes their corrections template.
+
+`candidates` joins the owner's corrections and decisions to either kind of capture in the
 interchange format ReviaDatasetExport reads. Nothing here judges a reply or writes a correction.
 """
 
@@ -23,13 +28,14 @@ import sys
 
 
 VERSION = "stage-e-capture-v1"
+LIVE_VERSION = "live-capture-v1"
 CANDIDATES_SCHEMA = "revia-dataset-candidates-v1"
 ROLES = ("system", "user", "assistant", "tool")
 ISSUES = ("answer-coverage", "unsupported-claim", "memory-continuity", "missing-acceptance-evidence")
 DECISIONS = ("pending", "accept", "rework", "reject", "need-evidence")
 SETTINGS = ("model", "temperature", "top_p", "top_k", "min_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed",
             "dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n", "chat_template_kwargs",
-            "reasoning_budget_tokens", "stream", "stop", "response_format")
+            "reasoning_budget_tokens", "stream", "stop", "response_format", "tool_choice", "parallel_tool_calls")
 
 
 def require(condition, message):
@@ -71,8 +77,17 @@ def prompt_of(request_body):
         require(not message.get("tool_calls"), "The prompt contains tool-call history, which the text dataset cannot hold exactly.")
         prompt.append({"role": message["role"], "content": message["content"]})
     require(prompt[-1]["role"] in ("user", "tool"), "The prompt does not end with the turn being answered.")
+    # The training path renders without thinking, so only a reply made that way is reproduced.
+    require((request.get("chat_template_kwargs") or {}).get("enable_thinking") is False,
+            "The reply was not generated with thinking explicitly off, which the dataset cannot reproduce.")
+    tools = request.get("tools")
+    if tools is not None:
+        require(isinstance(tools, list) and tools and all(
+            isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("function"), dict) and
+            isinstance(tool["function"].get("name"), str) and tool["function"]["name"] for tool in tools),
+            "The request offered tools that are not named functions.")
     settings = {key: request[key] for key in SETTINGS if key in request}
-    return prompt, settings
+    return prompt, settings, tools
 
 
 def output_of(response_body):
@@ -98,14 +113,17 @@ def output_of(response_body):
     return "".join(parts)
 
 
-def record(prompt, settings, failed, source, provenance, context):
+def record(prompt, settings, tools, failed, source, provenance, context):
     require(failed, "The failed reply is empty; there is nothing to correct.")
     capture_id = sha(json.dumps(prompt, sort_keys=True) + "\n" + failed)[:16]
     provenance = {**provenance, "configurationSha256": sha(json.dumps(settings, sort_keys=True))}
     require(all(provenance.get(key) for key in ("model", "profileDigest", "templateSha256")),
             "The model, profile digest and chat template must all be known for an exact capture.")
-    return {"captureId": capture_id, "source": source, "prompt": prompt, "failedOutput": failed, "failedOutputSha256": sha(failed),
-            "requestSettings": settings, "provenance": provenance, "context": context}
+    value = {"captureId": capture_id, "source": source, "prompt": prompt, "failedOutput": failed, "failedOutputSha256": sha(failed),
+             "requestSettings": settings, "provenance": provenance, "context": context}
+    if tools is not None:
+        value["tools"] = tools
+    return value
 
 
 def capture_traffic(report, selections):
@@ -152,8 +170,8 @@ def capture_traffic(report, selections):
             require(len(bound) == 1, f"The turn's reply matches {len(bound)} recorded requests; select exactly one with @requestIndex."
                     if bound else "No recorded request produced the turn's reply.")
             item, _ = bound[0]
-            prompt, settings = prompt_of(item["body"])
-            captures.append(record(prompt, settings, failed, {**source_base, "kind": "traffic", "case": case_id, "turn": turn_number,
+            prompt, settings, tools = prompt_of(item["body"])
+            captures.append(record(prompt, settings, tools, failed, {**source_base, "kind": "traffic", "case": case_id, "turn": turn_number,
                                                               "requestIndex": item["requestIndex"], "requestBodySha256": sha(item["body"])},
                                    provenance, {"input": turn.get("input", ""), "failures": turn.get("failures", [])}))
         except (ValueError, KeyError, json.JSONDecodeError) as error:
@@ -163,13 +181,13 @@ def capture_traffic(report, selections):
 
 def capture_pair(arguments):
     request_body, response_body = body_of(arguments.request), body_of(arguments.response)
-    prompt, settings = prompt_of(request_body)
+    prompt, settings, tools = prompt_of(request_body)
     failed = output_of(response_body)
     source = {"kind": "pair", "request": str(Path(arguments.request).absolute()), "requestBodySha256": sha(request_body),
               "response": str(Path(arguments.response).absolute()), "responseBodySha256": sha(response_body)}
     provenance = {"model": arguments.model or settings.get("model", ""), "profileDigest": arguments.profile_digest or "",
                   "templateSha256": arguments.template_sha256 or ""}
-    return [record(prompt, settings, failed, source, provenance, {"input": prompt[-1]["content"], "failures": []})], []
+    return [record(prompt, settings, tools, failed, source, provenance, {"input": prompt[-1]["content"], "failures": []})], []
 
 
 def command_capture(arguments):
@@ -193,9 +211,41 @@ def command_capture(arguments):
     return {"captured": len(captures), "refused": refused}
 
 
+def load_captures(directory):
+    """A recorded capture's captures.jsonl, or the companion's live captures, one file each."""
+    directory = Path(directory)
+    if (directory / "captures.jsonl").exists():
+        return [json.loads(line) for line in read_bytes(directory / "captures.jsonl").decode("utf-8").splitlines() if line.strip()]
+    captures = [json.loads(read_bytes(path)) for path in sorted(directory.glob("*.json"))]
+    for capture in captures:
+        require(capture.get("source", {}).get("kind") == "live" and isinstance(capture.get("judgment"), dict),
+                f"{directory} holds a file that is not a live capture.")
+    require(captures, f"{directory} holds no captures.")
+    return captures
+
+
+def command_template(arguments):
+    output = Path(arguments.output)
+    require(not output.exists(), f"{output} already exists; a corrections template is never replaced.")
+    template = {}
+    for capture in load_captures(arguments.captures):
+        context = {**capture["context"], "failedOutput": capture["failedOutput"]}
+        if capture["source"]["kind"] != "live":
+            template[capture["captureId"]] = {"decision": "pending", "issue": "answer-coverage", "criterion": "", "evidence": "",
+                                              "correction": "", "context": context}
+            continue
+        # The owner already judged a live capture; that judgment is shown, not asked again.
+        judgment = capture["judgment"]
+        context.update(issue=judgment["issue"], criterion=judgment["criterion"], evidence=judgment["evidence"])
+        if capture.get("repaired"):
+            context["modelOutput"] = capture["modelOutput"]
+        template[capture["captureId"]] = {"decision": "pending", "correction": "", "context": context}
+    output.write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
+    return {"captures": len(template)}
+
+
 def command_candidates(arguments):
-    directory = Path(arguments.captures)
-    captures = [json.loads(line) for line in read_bytes(directory / "captures.jsonl").decode("utf-8").splitlines() if line.strip()]
+    captures = load_captures(arguments.captures)
     corrections = json.loads(read_bytes(arguments.corrections))
     output = Path(arguments.output)
     require(not output.exists(), f"{output} already exists; a candidate file is never replaced.")
@@ -206,6 +256,9 @@ def command_candidates(arguments):
         require(decision in DECISIONS, f"{capture['captureId']}: unknown decision {decision!r}.")
         if decision == "pending":
             waiting.append(capture["captureId"])
+            continue
+        if capture["source"]["kind"] == "live":
+            candidates.append(live_candidate(capture, entry, decision, arguments.prefix))
             continue
         require(entry.get("issue") in ISSUES, f"{capture['captureId']}: the issue must be one of {', '.join(ISSUES)}.")
         require(str(entry.get("criterion", "")).strip() and str(entry.get("evidence", "")).strip(),
@@ -227,7 +280,7 @@ def command_candidates(arguments):
         sources = [f"request:{source['requestBodySha256']}"]
         candidates.append({
             "exampleId": f"{arguments.prefix}:{capture['captureId']}", "origin": origin, "sourceIds": sources,
-            "prompt": capture["prompt"], "response": correction, "targetOrigin": "reviewed-correction",
+            "prompt": capture["prompt"], "tools": capture.get("tools", []), "response": correction, "targetOrigin": "reviewed-correction",
             "rejectedResponse": capture["failedOutput"],
             "judgment": {"source": "owner-judgment", "target": "conversation-turn", "issue": entry["issue"],
                          "judgmentId": f"owner:{capture['captureId']}", "sourceId": f"request:{capture['captureId']}",
@@ -241,8 +294,28 @@ def command_candidates(arguments):
             "review": decision, "modelId": provenance["model"], "templateId": f"chat-template-sha256:{provenance['templateSha256']}",
             "transformationVersion": VERSION})
     require(candidates, "No capture has a decision yet; fill in the corrections first.")
+    require(len({item["exampleId"] for item in candidates}) == len(candidates), "Two captures would make the same example.")
     output.write_text(json.dumps({"schema": CANDIDATES_SCHEMA, "candidates": candidates}, indent=2) + "\n", encoding="utf-8")
     return {"candidates": len(candidates), "waiting": waiting}
+
+
+def live_candidate(capture, entry, decision, prefix):
+    """A live capture keeps the judgment the owner recorded in the companion; only the decision and correction are added here."""
+    judgment = capture["judgment"]
+    for key in ("issue", "criterion", "evidence"):
+        require(key not in entry or entry[key] == judgment[key],
+                f"{capture['captureId']}: the recorded {key} cannot be edited here; judge the reply again in the companion instead.")
+    correction = str(entry.get("correction", ""))
+    require(decision != "accept" or (correction.strip() and correction != capture["failedOutput"]),
+            f"{capture['captureId']}: an accepted capture needs a correction that differs from the failed reply.")
+    require(judgment["targetDigest"] == capture["failedOutputSha256"] == sha(capture["failedOutput"]),
+            f"{capture['captureId']}: the recorded judgment is not bound to the captured reply.")
+    provenance = capture["provenance"]
+    return {"exampleId": f"{prefix}:{capture['captureId']}", "origin": capture["origin"], "sourceIds": capture["sources"],
+            "prompt": capture["prompt"], "tools": capture.get("tools", []), "response": correction,
+            "targetOrigin": "reviewed-correction", "rejectedResponse": capture["failedOutput"], "judgment": judgment,
+            "review": decision, "modelId": provenance["model"], "templateId": f"chat-template-sha256:{provenance['templateSha256']}",
+            "transformationVersion": LIVE_VERSION}
 
 
 def main(argv=None):
@@ -257,6 +330,9 @@ def main(argv=None):
     capture.add_argument("--model")
     capture.add_argument("--profile-digest", dest="profile_digest")
     capture.add_argument("--template-sha256", dest="template_sha256")
+    template = commands.add_parser("template")
+    template.add_argument("--captures", required=True, help="A directory of captures, such as the companion's live captures.")
+    template.add_argument("--output", required=True)
     candidates = commands.add_parser("candidates")
     candidates.add_argument("--captures", required=True)
     candidates.add_argument("--corrections", required=True)
@@ -265,7 +341,8 @@ def main(argv=None):
     candidates.add_argument("--companion", default="revia")
     arguments = parser.parse_args(argv)
     try:
-        result = {"capture": command_capture, "candidates": command_candidates}[arguments.command](arguments)
+        result = {"capture": command_capture, "template": command_template,
+                  "candidates": command_candidates}[arguments.command](arguments)
     except (ValueError, KeyError, OSError, json.JSONDecodeError) as error:
         print(json.dumps({"state": "failed", "error": f"{type(error).__name__}: {error}"}), file=sys.stderr)
         return 1

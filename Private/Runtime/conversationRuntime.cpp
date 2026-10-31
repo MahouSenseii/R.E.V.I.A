@@ -764,6 +764,11 @@ void ConversationRuntime::SetSavedFileContextProvider(SavedFileContextProvider p
     savedFileContextProvider = std::move(provider);
 }
 
+void ConversationRuntime::SetDeliveredReplyObserver(DeliveredReplyObserver observer)
+{
+    deliveredReplyObserver = std::move(observer);
+}
+
 std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
     const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy) const
 {
@@ -2663,6 +2668,17 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                 conversationMessage assistant{"assistant", output.response, turnPolicy.memoryScope.participantId, turnPolicy.memoryScope};
                 assistant.mediaReferences = pendingGeneratedMedia;
                 context.AddMessage(std::move(assistant));
+                // A reply that brought generated media is not a text exchange to judge on its own.
+                if (deliveredReplyObserver && pendingGeneratedMedia.empty())
+                {
+                    try
+                    {
+                        deliveredReplyObserver(output, turnPolicy.audienceRevision, turnPolicy.memoryScope.participantId);
+                    }
+                    catch (...)
+                    {
+                    }
+                }
             }
             // Commit routing continuity only after finish rechecks delivery admission.
             // Router fallbacks report the answering tier; absent metadata stays unknown.

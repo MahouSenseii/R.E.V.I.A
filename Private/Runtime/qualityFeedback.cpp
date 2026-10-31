@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <tuple>
+#include <utility>
 
 namespace revia::runtime
 {
@@ -61,8 +63,9 @@ nlohmann::json LlmFingerprintFields(const llmSettings& value)
         {"stablePromptPrefix", value.bStablePromptPrefix}, {"allowPromptCache", value.bAllowPromptCache}};
 }
 
-learning::QualityFeedback CapturedFeedback(learning::QualityFeedback feedback, const aiProfile& profile, const llmSettings& main,
-    const llmSettings& fast, const llmSettings& expert, const intelligenceSettings& routing)
+// The loaded-profile-sha256 and effective-llm-config-sha256 fingerprints.
+std::pair<std::string, std::string> Fingerprints(const aiProfile& profile, const llmSettings& main, const llmSettings& fast,
+    const llmSettings& expert, const intelligenceSettings& routing)
 {
     const nlohmann::json baseline = {{"id", profile.id}, {"displayName", profile.displayName}, {"description", profile.description},
         {"systemPrompt", profile.systemPrompt}, {"memoryEnabled", profile.bMemoryEnabled},
@@ -72,11 +75,20 @@ learning::QualityFeedback CapturedFeedback(learning::QualityFeedback feedback, c
     const nlohmann::json configuration = {{"main", LlmFingerprintFields(main)}, {"fast", LlmFingerprintFields(fast)},
         {"expert", LlmFingerprintFields(expert)}, {"routingEnabled", routing.bEnabled}, {"fastEnabled", routing.fast.bEnabled},
         {"expertEnabled", routing.expert.bEnabled}};
-    feedback.dependencies["loaded-profile-sha256"] = audit::ContentDigest(baseline.dump());
-    feedback.dependencies["effective-llm-config-sha256"] = audit::ContentDigest(configuration.dump());
+    return {audit::ContentDigest(baseline.dump()), audit::ContentDigest(configuration.dump())};
+}
+
+learning::QualityFeedback CapturedFeedback(learning::QualityFeedback feedback, const aiProfile& profile, const llmSettings& main,
+    const llmSettings& fast, const llmSettings& expert, const intelligenceSettings& routing)
+{
+    std::tie(feedback.dependencies["loaded-profile-sha256"], feedback.dependencies["effective-llm-config-sha256"]) =
+        Fingerprints(profile, main, fast, expert, routing);
     feedback.dependencies["native-answer-contract"] = "judged-quality-v1";
     return feedback;
 }
+
+// Enough to judge the reply on screen and a few before it; older ones are let go.
+constexpr std::size_t MaximumHeldReplies = 8;
 }
 
 bool ReviaSession::RecordQualityFeedback(const learning::QualityFeedback& feedback, std::string& taskId, std::string& recordId,
@@ -133,6 +145,93 @@ bool ReviaSession::RecordQualityFeedback(const learning::QualityFeedback& feedba
     PublishComponent(
         "Quality feedback", "Pending review", "The exact owner judgment was recorded; its factual lesson awaits ordinary learning review.");
     return true;
+}
+
+void ReviaSession::HoldDeliveredReply(const responseOutput& reply, const std::uint64_t audienceRevision, const std::string& participantId)
+{
+    // Runs on the turn's thread, under the operation lock that also guards the profile and settings.
+    learning::DeliveredReply held;
+    held.origin = Stamp();
+    held.audienceRevision = audienceRevision;
+    held.conversationId = CurrentConversationId();
+    held.participantId = participantId;
+    held.displayed = reply.response;
+    held.modelText = reply.rawResponse;
+    held.replaced = reply.bHardFilterBlocked || reply.bAiFilterChanged;
+    std::tie(held.profileDigest, held.configurationDigest) =
+        Fingerprints(profile, settings.llm, fastLlmSettings, expertLlmSettings, settings.intelligence);
+    held.exchange = reply.exchange;
+    std::lock_guard heldLock(deliveredRepliesMutex);
+    deliveredReplies.push_back(std::move(held));
+    while (deliveredReplies.size() > MaximumHeldReplies)
+        deliveredReplies.pop_front();
+}
+
+bool ReviaSession::CaptureJudgedTurn(
+    const learning::QualityFeedback& feedback, std::string& captureId, std::string& error, const std::stop_token stopToken)
+{
+    captureId.clear();
+    if (OwnerMutationCanceled(stopToken, error))
+        return false;
+    {
+        const std::scoped_lock lock(operationMutex, learningStudioMutex, audienceMutex);
+        const RuntimeStamp current = Stamp();
+        if (feedback.source != learning::QualityEvidenceSource::OwnerJudgment || feedback.criterionSatisfied || !Admits(feedback.origin) ||
+            !feedback.origin.SameSession(current) || feedback.origin.policyVersion != current.policyVersion ||
+            feedback.audienceRevision == 0 || feedback.audienceRevision != configuredAudience.revision ||
+            configuredAudience.kind != identity::AudienceKind::Private || lastInputAudience != identity::AudienceKind::Private)
+        {
+            error = "Keeping an exchange requires an explicit owner failure judgment from this current private session.";
+            return false;
+        }
+        const auto captured = CapturedFeedback(feedback, profile, settings.llm, fastLlmSettings, expertLlmSettings, settings.intelligence);
+        // Held across the write, so a chat deleted meanwhile either withdraws this capture or
+        // has already dropped the reply it was made from.
+        std::lock_guard heldLock(deliveredRepliesMutex);
+        const auto held = std::find_if(deliveredReplies.rbegin(), deliveredReplies.rend(),
+            [&feedback](const learning::DeliveredReply& reply)
+            {
+                return reply.origin.SameSession(feedback.origin) && reply.audienceRevision == feedback.audienceRevision &&
+                    audit::ContentDigest(reply.displayed) == feedback.targetDigest;
+            });
+        if (held == deliveredReplies.rend())
+        {
+            error = "That reply is no longer held, or was shown in parts, so its exact exchange cannot be kept.";
+            return false;
+        }
+        learning::LiveCapture capture;
+        if (OwnerMutationCanceled(stopToken, error) || !learning::BuildLiveCapture(*held, captured, capture, error) ||
+            !learning::LiveCaptureStore(companionPaths.Resolve("RuntimeData/Learning/Captures")).Keep(capture, error))
+            return false;
+        captureId = capture.captureId;
+    }
+    PublishComponent("Dataset capture", "Kept", "The exact exchange behind the judged reply awaits the owner's correction.");
+    return true;
+}
+
+std::string ReviaSession::WithdrawLiveCaptures(const std::string& source)
+{
+    std::size_t removed = 0;
+    std::string error;
+    {
+        std::lock_guard heldLock(deliveredRepliesMutex);
+        std::erase_if(deliveredReplies,
+            [&source](const learning::DeliveredReply& reply)
+            { return source.empty() || source == "conversation:" + reply.conversationId || source == "participant:" + reply.participantId; });
+        const learning::LiveCaptureStore store(companionPaths.Resolve("RuntimeData/Learning/Captures"));
+        if (!(source.empty() ? store.WithdrawAll(removed, error) : store.Withdraw(source, removed, error)))
+            error = "The kept dataset captures could not be withdrawn: " + error;
+    }
+    if (!error.empty())
+    {
+        // Logged as well: a caller whose own operation succeeded may not show it.
+        appLogger.Warning(error);
+        return error;
+    }
+    if (removed > 0)
+        appLogger.Log("Withdrew " + std::to_string(removed) + " kept dataset capture" + (removed == 1 ? "" : "s") + " with " +
+                      (source.empty() ? std::string("every conversation") : source) + ".");
+    return {};
 }
 
 bool ReviaSession::RetestQualityFeedback(const std::string& taskId, const learning::QualityFeedback& feedback, std::string& error,

@@ -80,6 +80,7 @@ ReviaInitiativeModeTests
 ReviaInvestigationCheckTests
 ReviaLearningReviewTests
 ReviaDatasetExportTests
+ReviaLiveCaptureTests
 ReviaLocalApiTests
 ReviaMcpClientTests
 ReviaMemoryCorrectionAgentTests

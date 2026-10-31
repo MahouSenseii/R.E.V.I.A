@@ -133,6 +133,9 @@ private:
     // Set when this server refused a request for offering tools. Later turns then skip
     // straight to the caller's fallback instead of sending a request that will fail.
     mutable std::atomic<bool> toolsUnsupported = false;
+    // The digest of the chat template /props last reported, for exact reply provenance.
+    mutable std::mutex servedTemplateMutex;
+    mutable std::string servedTemplateDigest;
 
     promptBuilder builder;
     llamaCppEmbeddingService embeddings;

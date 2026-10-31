@@ -13,6 +13,7 @@
 #include "Runtime/companion.h"
 #include "Runtime/sessionIdentity.h"
 #include "Runtime/learningStudio.h"
+#include "Learning/liveCapture.h"
 #include "Learning/qualityFeedback.h"
 #include "Policy/companionAuthority.h"
 #include "Agents/agentWorkflow.h"
@@ -289,6 +290,12 @@ class ReviaSession
         std::string& outError, std::stop_token stopToken = {});
     bool RetestQualityFeedback(const std::string& taskId, const learning::QualityFeedback& feedback, std::string& outError,
         bool ownerRequested = false, std::stop_token stopToken = {});
+    // Keeps the exact exchange behind a displayed reply the owner just judged a failure, as a
+    // dataset capture under RuntimeData/Learning/Captures. Only on the owner's request, in the
+    // current private session, for a reply still held in memory. Nothing else is written, and
+    // deleting the chat or forgetting the speaker withdraws it.
+    bool CaptureJudgedTurn(const learning::QualityFeedback& feedback, std::string& outCaptureId, std::string& outError,
+        std::stop_token stopToken = {});
     bool ReviseMemoryOwnerRequested(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::vector<memory::MemoryCorrectionProposal> PendingMemoryCorrections();
@@ -1121,6 +1128,13 @@ class ReviaSession
     std::mutex learningStudioMutex;
     std::unique_ptr<skills::SkillPackageStore> skillPackages;
     std::unique_ptr<learning::LearningRecordStore> learningRecords;
+    // The last few private replies with their exact exchanges, in memory only, newest last.
+    std::mutex deliveredRepliesMutex;
+    std::deque<learning::DeliveredReply> deliveredReplies;
+    void HoldDeliveredReply(const responseOutput& reply, std::uint64_t audienceRevision, const std::string& participantId);
+    // Drops held replies and kept captures that name `source`, or every one when it is empty.
+    // Returns why kept captures could not be withdrawn, or nothing.
+    std::string WithdrawLiveCaptures(const std::string& source);
     mutable std::mutex developmentStudioMutex;
     std::shared_ptr<improvement::SelfDevelopment> selfDevelopment;
     std::string presentationCandidateId;

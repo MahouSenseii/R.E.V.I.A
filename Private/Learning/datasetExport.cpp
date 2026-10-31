@@ -22,6 +22,7 @@ constexpr std::size_t MaximumCandidates = 100000;
 constexpr std::size_t MaximumMessages = 256;
 constexpr std::size_t MaximumText = 64 * 1024;
 constexpr std::size_t MaximumSources = 64;
+constexpr std::size_t MaximumTools = 64;
 
 const char* PartitionFile(const DatasetPartition value)
 {
@@ -65,7 +66,30 @@ std::string PromptDigest(const DatasetCandidate& value)
 
 std::string ContentKey(const DatasetCandidate& value)
 {
-    return audit::ContentDigest(json{{"prompt", MessagesJson(value.prompt)}, {"response", value.response}}.dump());
+    return audit::ContentDigest(json{{"prompt", MessagesJson(value.prompt)}, {"tools", value.tools}, {"response", value.response}}.dump());
+}
+
+// The offered tools as a bounded list of named functions, or nothing when none were offered.
+std::optional<json> ToolsJson(const std::string& text)
+{
+    if (text.empty())
+        return json::array();
+    if (text.size() > 4 * MaximumText)
+        return std::nullopt;
+    const json tools = json::parse(text, nullptr, false);
+    if (!tools.is_array() || tools.empty() || tools.size() > MaximumTools)
+        return std::nullopt;
+    for (const auto& tool : tools)
+    {
+        if (!tool.is_object() || tool.value("type", "") != "function" || !tool.contains("function") || !tool["function"].is_object())
+            return std::nullopt;
+        const auto& function = tool["function"];
+        if (!function.contains("name") || !function["name"].is_string() || function["name"].get_ref<const std::string&>().empty() ||
+            (function.contains("description") && !function["description"].is_string()) ||
+            (function.contains("parameters") && !function["parameters"].is_object()))
+            return std::nullopt;
+    }
+    return tools;
 }
 
 std::vector<std::string> AllSources(const DatasetCandidate& value)
@@ -106,6 +130,8 @@ std::string Ineligibility(const DatasetCandidate& value, const std::set<std::str
             }) ||
         !Bounded(value.response, MaximumText) || value.rejectedResponse.size() > MaximumText || value.sourceIds.size() > MaximumSources)
         return "its messages are empty, unbounded or do not end with the turn being answered";
+    if (!ToolsJson(value.tools))
+        return "its tool definitions are not a bounded list of named functions";
     if (value.targetOrigin == DatasetTargetOrigin::ReviewedCorrection)
     {
         // The rejected side must be exactly the output the owner judged a failure.
@@ -118,7 +144,7 @@ std::string Ineligibility(const DatasetCandidate& value, const std::set<std::str
     else if (!value.judgment.criterionSatisfied || audit::ContentDigest(value.response) != value.judgment.targetDigest ||
              !value.rejectedResponse.empty())
         return "its output was not the one the recorded criterion accepted";
-    std::string text;
+    std::string text = value.tools + '\n';
     for (const auto& message : value.prompt)
         text += message.content + '\n';
     if (const auto finding = memory::DetectSensitiveContent(text + value.response + '\n' + value.rejectedResponse))
@@ -302,6 +328,9 @@ bool BuildDatasetExport(const std::vector<DatasetCandidate>& input, const std::s
         json record = {{"id", value.exampleId}, {"lineage", LineageJson(value)}};
         record["messages"] = MessagesJson(value.prompt);
         record["messages"].push_back({{"role", "assistant"}, {"content", value.response}});
+        // Kept as offered. The worker renders them in the order the pinned server does.
+        if (!value.tools.empty())
+            record["tools"] = *ToolsJson(value.tools);
         if (!value.rejectedResponse.empty())
             record["rejected"] = value.rejectedResponse;
         lines[decision.partition].push_back(std::move(record));
@@ -454,6 +483,13 @@ bool ReadDatasetCandidates(const std::string& text, std::vector<DatasetCandidate
             value.sourceIds = item.at("sourceIds").get<std::vector<std::string>>();
             for (const auto& message : item.at("prompt"))
                 value.prompt.push_back({message.at("role").get<std::string>(), message.at("content").get<std::string>()});
+            if (const auto tools = item.find("tools"); tools != item.end())
+            {
+                if (!tools->is_array())
+                    throw std::runtime_error("tools must be an array");
+                if (!tools->empty())
+                    value.tools = tools->dump();
+            }
             value.response = item.at("response").get<std::string>();
             value.rejectedResponse = item.value("rejectedResponse", std::string{});
             value.targetOrigin = Named<DatasetTargetOrigin>(item.at("targetOrigin"),

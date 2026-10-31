@@ -190,6 +190,26 @@ def verify_base(job):
             "templateSha256": files["chat_template.jinja"]["sha256"]}
 
 
+def served_tools(tools):
+    """The offered tools as the pinned llama-server hands them to the chat template.
+
+    It rebuilds each one as type, then function with name, description and parameters, and
+    fills in an empty description; parameters keep the order they were sent in. Rendering the
+    exported order instead would train on a prompt the server never produced.
+    """
+    if tools is None:
+        return None
+    require(isinstance(tools, list) and tools, "An example's tools must be a non-empty list.")
+    served = []
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) and tool.get("type") == "function" else None
+        require(isinstance(function, dict) and isinstance(function.get("name"), str) and function["name"],
+                "An example offers a tool that is not a named function.")
+        served.append({"type": "function", "function": {"name": function["name"], "description": function.get("description", ""),
+                                                         "parameters": function.get("parameters", {})}})
+    return served
+
+
 def load_partition(directory, name, entry, limit=1 << 30):
     data = read_bounded(directory / name, limit)
     require(digest_bytes(data) == entry.get("sha256"), f"{name} does not match its dataset manifest.")
@@ -200,6 +220,7 @@ def load_partition(directory, name, entry, limit=1 << 30):
         require(isinstance(messages, list) and len(messages) >= 2 and messages[-1].get("role") == "assistant" and
                 all(isinstance(message.get("content"), str) and message.get("role") in ("system", "user", "assistant", "tool")
                     for message in messages), f"{name} holds an example that does not end with its supervised reply.")
+        record["tools"] = served_tools(record.get("tools"))
     return records
 
 
@@ -307,8 +328,8 @@ def run(job, backend_factory=None):
     cancel = Path(job["directory"]) / "cancel"
     emit("loading")
     backend.load(Path(job["base"]["directory"]))
-    encoded = [backend.encode(record["messages"]) for record in train]
-    held = [backend.encode(record["messages"]) for record in validation]
+    encoded = [backend.encode(record["messages"], record["tools"]) for record in train]
+    held = [backend.encode(record["messages"], record["tools"]) for record in validation]
     step = resume_step(job, backend, identity)
     resumed = step
     loss = None
@@ -388,9 +409,10 @@ class TransformersPeftBackend:
         value = self.tokenizer.apply_chat_template(messages, tokenize=True, enable_thinking=False, **options)
         return list(value["input_ids"] if hasattr(value, "keys") else value)
 
-    def encode(self, messages):
-        prompt = self._ids(messages[:-1], add_generation_prompt=True)
-        full = self._ids(messages)
+    def encode(self, messages, tools=None):
+        options = {"tools": tools} if tools else {}
+        prompt = self._ids(messages[:-1], add_generation_prompt=True, **options)
+        full = self._ids(messages, **options)
         require(len(full) > len(prompt) and full[:len(prompt)] == prompt,
                 "The chat template does not render an example's prompt as a prefix of its conversation, so its reply cannot be masked exactly.")
         require(len(full) <= self.configuration["maxSequenceTokens"], "An example exceeds maxSequenceTokens; it is refused rather than truncated.")

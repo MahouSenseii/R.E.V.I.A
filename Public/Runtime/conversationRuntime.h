@@ -182,6 +182,12 @@ public:
     void SetEditorContextProvider(EditorContextProvider provider);
     // The source owner supplies availability after authorization and revision checks.
     void SetSavedFileContextProvider(SavedFileContextProvider provider);
+    // Called on the turn's thread as each ordinary private reply enters the conversation,
+    // with the reply as delivered, including the exact local exchange behind it when there
+    // was one. The session holds a few so an owner judgment can be bound to that request.
+    using DeliveredReplyObserver =
+        std::function<void(const responseOutput& reply, std::uint64_t audienceRevision, const std::string& participantId)>;
+    void SetDeliveredReplyObserver(DeliveredReplyObserver observer);
     void ResetParticipantContinuity();
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
@@ -377,6 +383,7 @@ private:
     ResponseFilterSettingsProvider filterSettingsProvider;
     ScreenContextProvider screenContextProvider;
     SavedFileContextProvider savedFileContextProvider;
+    DeliveredReplyObserver deliveredReplyObserver;
     RelationshipProvider relationshipProvider;
     DevelopmentProvider developmentProvider;
     PreferenceProvider preferenceProvider;

@@ -1,9 +1,11 @@
 #pragma once
 
+#include "LLM/providerExchange.h"
 #include "LLM/toolCall.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -91,6 +93,9 @@ struct responseOutput
     bool bToolsRejected = false;
     // Tool calls the host actually executed for this reply, across every step.
     std::size_t toolCallsExecuted = 0;
+    // The exact local request and raw output behind a delivered text reply, so an owner
+    // judgment can be bound to it. Shared and immutable: copying the reply does not copy it.
+    std::shared_ptr<const revia::llm::ProviderExchange> exchange;
 
     [[nodiscard]] std::uint32_t TotalTokens() const
     {

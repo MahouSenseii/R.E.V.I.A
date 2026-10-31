@@ -1,5 +1,6 @@
 #include "answerFeedbackDialog.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QLabel>
@@ -45,6 +46,11 @@ AnswerFeedbackDialog::AnswerFeedbackDialog(revia::learning::QualityFeedback valu
     evidence->setPlaceholderText("What in the displayed reply failed that criterion?");
     evidence->setMaximumHeight(100);
     layout->addWidget(evidence);
+    keepExchange = new QCheckBox("Also keep the exact exchange for a training dataset (stays on this computer)", this);
+    keepExchange->setObjectName("answerFeedbackKeepExchange");
+    keepExchange->setToolTip("Saves the prompt the model received and this reply under RuntimeData/Learning/Captures, so you can "
+                             "write the correct reply later. Deleting this chat or forgetting the speaker removes it.");
+    layout->addWidget(keepExchange);
     outcome = new QLabel(this);
     outcome->setObjectName("answerFeedbackOutcome");
     outcome->setWordWrap(true);
@@ -76,6 +82,12 @@ void AnswerFeedbackDialog::SetBusy(const bool busy)
     issue->setEnabled(!busy);
     criterion->setEnabled(!busy);
     evidence->setEnabled(!busy);
+    keepExchange->setEnabled(!busy);
+}
+
+bool AnswerFeedbackDialog::KeepExchange() const
+{
+    return keepExchange->isChecked();
 }
 
 void AnswerFeedbackDialog::SetOutcome(const bool success, const std::string& message)

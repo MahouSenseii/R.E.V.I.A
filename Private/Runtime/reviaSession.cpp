@@ -588,6 +588,9 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
             };
         });
     conversationRuntime.SetSavedFileContextProvider([this] { return CurrentSavedFileContext(); });
+    conversationRuntime.SetDeliveredReplyObserver(
+        [this](const responseOutput& reply, const std::uint64_t audienceRevision, const std::string& participantId)
+        { HoldDeliveredReply(reply, audienceRevision, participantId); });
     speechCoordinator.SetAdmissionFactory([this] { return CaptureSpeechAdmission(Audience(), Stamp()); });
     goalRunner.SetProgressHandler([this](const goals::GoalProgress& progress) { PublishGoalProgress(progress); });
     // A goal step that needs confirmation asks the same handler an interactive action
@@ -3687,6 +3690,8 @@ std::size_t ReviaSession::ForgetConversations()
     // The live context is cleared too. Forgetting the file while the current prompt still
     // carries the same turns would be a forget in name only.
     context.Clear();
+    // So are the exchanges kept from those chats for training review.
+    static_cast<void>(WithdrawLiveCaptures({}));
     conversationEpoch.fetch_add(1);
     if (!conversationSessionId.empty())
     {

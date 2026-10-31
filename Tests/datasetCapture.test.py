@@ -11,6 +11,10 @@ from contextlib import redirect_stderr, redirect_stdout
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# The record ReviaLiveCaptureTests checks the C++ builder still produces.
+LIVE_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCapture.json"
+TOOLS = [{"type": "function", "function": {"name": "calculator", "description": "Evaluate arithmetic.",
+                                           "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}}}}]
 
 
 def load(name, path):
@@ -43,10 +47,12 @@ class Evidence:
         self.root = Path(root)
         self.requests, self.responses, cases = [], [], []
 
-        def chat(messages, reply, streamed=True, path="/v1/chat/completions"):
+        def chat(messages, reply, streamed=True, path="/v1/chat/completions", tools=None, thinking=False):
             index = len(self.requests)
             body = {"model": "revia", "messages": messages, "temperature": 0.8, "dry_multiplier": 0.8, "stream": streamed,
-                    "chat_template_kwargs": {"enable_thinking": False}}
+                    "chat_template_kwargs": {"enable_thinking": thinking}}
+            if tools:
+                body.update(tools=tools, tool_choice="auto")
             self.requests.append({"requestIndex": index, "method": "POST", "path": path, "body": json.dumps(body)})
             payload = stream(reply) if streamed else json.dumps({"choices": [{"message": {"role": "assistant", "content": reply}}]})
             self.responses.append({"requestIndex": index, "status": 200, "body": payload})
@@ -72,6 +78,12 @@ class Evidence:
         image = [system, {"role": "user", "content": [{"type": "text", "text": "Look."}, {"type": "image_url", "image_url": {"url": "data:"}}]}]
         chat(image, "A cat.")
         cases.append({"record": "case", "id": "image", "verdict": "fail", "turns": [{"input": "Look.", "reply": "A cat.", "model_reply": "A cat."}]})
+        self.tooled_request = chat([system, {"role": "user", "content": "What is 6 times 7?"}], "It is 41.", tools=TOOLS)
+        cases.append({"record": "case", "id": "tooled", "verdict": "fail",
+                      "turns": [{"input": "What is 6 times 7?", "reply": "It is 41.", "model_reply": "It is 41.", "failures": ["Wrong."]}]})
+        chat([system, {"role": "user", "content": "Think it over."}], "Thought it over.", thinking=True)
+        cases.append({"record": "case", "id": "thinking", "verdict": "fail",
+                      "turns": [{"input": "Think it over.", "reply": "Thought it over.", "model_reply": "Thought it over."}]})
         self.duplicates = [chat([system, {"role": "user", "content": f"Say same {index}."}], "Same.") for index in range(2)]
         cases.append({"record": "case", "id": "same", "verdict": "fail", "turns": [{"input": "Say same 1.", "reply": "Same.", "model_reply": "Same."}]})
         self.report = self.root / "native-e1.jsonl"
@@ -137,6 +149,19 @@ class DatasetCaptureTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Nothing was captured", result["error"])
 
+    def test_offered_tools_are_kept_and_thinking_is_refused(self):
+        code, result = self.evidence.capture("tools", "tooled:1", "thinking:1")
+        self.assertEqual((code, result["captured"]), (0, 1))
+        [item] = captures(self.evidence.root / "tools")
+        self.assertEqual((item["tools"], item["requestSettings"]["tool_choice"]), (TOOLS, "auto"),
+                         "The tools the template rendered into the prompt were not kept.")
+        self.assertIn("thinking", result["refused"][0]["reason"])
+        corrections = self.corrections(self.evidence.root / "tools", [("accept", "It is 42.")])
+        run(["candidates", "--captures", str(self.evidence.root / "tools"), "--corrections", str(corrections),
+             "--output", str(self.evidence.root / "tools" / "candidates.json")])
+        [candidate] = json.loads((self.evidence.root / "tools" / "candidates.json").read_text())["candidates"]
+        self.assertEqual(candidate["tools"], TOOLS)
+
     def test_pair_mode_needs_full_provenance(self):
         request = self.evidence.root / "request.json"
         request.write_text(json.dumps(self.evidence.requests[self.evidence.feeling_request]))
@@ -181,6 +206,97 @@ class DatasetCaptureTests(unittest.TestCase):
                                 "--output", str(directory / f"other-{len(message)}.json")])
             self.assertEqual(code, 1)
             self.assertIn(message, result["error"])
+
+    def live(self, *records):
+        """The companion's live capture directory, holding the C++ builder's record."""
+        directory = self.evidence.root / "Captures" / "live"
+        directory.mkdir(parents=True, exist_ok=True)
+        for record in records or (json.loads(LIVE_FIXTURE.read_text(encoding="utf-8")),):
+            (directory / f"{record['captureId']}.json").write_text(json.dumps(record, indent=2))
+        return directory
+
+    def live_corrections(self, directory, entry):
+        number = len(list(directory.parent.glob("corrections-*")))
+        written = directory.parent / f"template-{number}.json"
+        code, _ = run(["template", "--captures", str(directory), "--output", str(written)])
+        self.assertEqual(code, 0)
+        template = json.loads(written.read_text())
+        [key] = template
+        template[key].update(entry)
+        path = directory.parent / f"corrections-{number}.json"
+        path.write_text(json.dumps(template))
+        return path
+
+    def test_live_capture_keeps_the_recorded_judgment(self):
+        fixture = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
+        directory = self.live()
+        code, _ = run(["template", "--captures", str(directory), "--output", str(directory.parent / "template.json")])
+        entry = json.loads((directory.parent / "template.json").read_text())[fixture["captureId"]]
+        self.assertEqual((code, set(entry)), (0, {"decision", "correction", "context"}),
+                         "A live capture's template asked for the judgment the owner already recorded.")
+        code, result = run(["template", "--captures", str(directory), "--output", str(directory.parent / "template.json")])
+        self.assertEqual(code, 1, "An existing corrections template was replaced.")
+        self.assertEqual(entry["context"]["criterion"], fixture["judgment"]["criterion"])
+        corrections = self.live_corrections(directory, {"decision": "accept", "correction": "Honestly, it made me smile."})
+        output = directory.parent / "candidates.json"
+        code, result = run(["candidates", "--captures", str(directory), "--corrections", str(corrections), "--output", str(output),
+                            "--prefix", "live"])
+        self.assertEqual((code, result["candidates"]), (0, 1), result)
+        [candidate] = json.loads(output.read_text())["candidates"]
+        self.assertEqual(candidate["judgment"], fixture["judgment"], "The owner's recorded judgment was not used verbatim.")
+        self.assertEqual((candidate["origin"], candidate["sourceIds"], candidate["tools"], candidate["rejectedResponse"]),
+                         (fixture["origin"], fixture["sources"], fixture["tools"], fixture["failedOutput"]))
+        self.assertEqual((candidate["exampleId"], candidate["transformationVersion"]), (f"live:{fixture['captureId']}", "live-capture-v1"))
+
+        refusals = [({"decision": "accept", "correction": "x", "criterion": "Something easier."}, "cannot be edited here"),
+                    ({"decision": "accept", "correction": fixture["failedOutput"]}, "differs from the failed reply")]
+        for entry, message in refusals:
+            path = self.live_corrections(directory, entry)
+            code, result = run(["candidates", "--captures", str(directory), "--corrections", str(path),
+                                "--output", str(directory.parent / f"refused-{len(message)}.json")])
+            self.assertEqual(code, 1)
+            self.assertIn(message, result["error"])
+        tampered = dict(fixture, failedOutput="A different reply.")
+        other = self.evidence.root / "tampered" / "live"
+        other.mkdir(parents=True)
+        (other / f"{fixture['captureId']}.json").write_text(json.dumps(tampered))
+        path = self.live_corrections(other, {"decision": "accept", "correction": "Honestly, it made me smile."})
+        code, result = run(["candidates", "--captures", str(other), "--corrections", str(path), "--output", str(other.parent / "c.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("not bound to the captured reply", result["error"])
+        (other / "stray.json").write_text(json.dumps({"source": {"kind": "traffic"}}))
+        code, result = run(["template", "--captures", str(other), "--output", str(other.parent / "t2.json")])
+        self.assertEqual(code, 1)
+        self.assertIn("not a live capture", result["error"])
+
+    @unittest.skipUnless(EXPORT_TOOL and Path(EXPORT_TOOL).is_file(), "Set REVIA_DATASET_EXPORT to the built ReviaDatasetExport")
+    def test_live_capture_exports_with_its_tools_and_is_withdrawn(self):
+        fixture = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
+        directory = self.live()
+        corrections = self.live_corrections(directory, {"decision": "accept", "correction": "Honestly, it made me smile."})
+        candidates = directory.parent / "candidates.json"
+        run(["candidates", "--captures", str(directory), "--corrections", str(corrections), "--output", str(candidates), "--prefix", "live"])
+        withdrawn = directory.parent / "withdrawn.json"
+        withdrawn.write_text("[]")
+        export = self.evidence.root / "live-export"
+        completed = subprocess.run([EXPORT_TOOL, "--candidates", str(candidates), "--name", "live", "--salt", "live-1",
+                                    "--output", str(export), "--withdrawn", str(withdrawn), "--validation-percent", "0",
+                                    "--test-percent", "0"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["eligible"], 1, completed.stdout)
+        [line] = (export / "train.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads(line)["tools"], fixture["tools"], "The exported example lost the tools its prompt was rendered with.")
+        manifest = (export / "manifest.json").read_bytes()
+        job = {"dataset": {"directory": str(export), "manifestSha256": hashlib.sha256(manifest).hexdigest()},
+               "withdrawnSourcesPath": str(withdrawn)}
+        [record], _, _ = WORKER.verify_dataset(job)
+        self.assertEqual(list(record["tools"][0]), ["type", "function"])
+        self.assertEqual(list(record["tools"][0]["function"]), ["name", "description", "parameters"],
+                         "The worker would not render the tools in the order the pinned server does.")
+        # Deleting the chat in the companion lists it as withdrawn; the export is then refused.
+        withdrawn.write_text(json.dumps(["conversation:conversation-1"]))
+        with self.assertRaisesRegex(ValueError, "withdrawn since the export"):
+            WORKER.verify_dataset(job)
 
     @unittest.skipUnless(EXPORT_TOOL and Path(EXPORT_TOOL).is_file(), "Set REVIA_DATASET_EXPORT to the built ReviaDatasetExport")
     def test_export_tool_makes_a_dataset_the_worker_reads(self):

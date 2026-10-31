@@ -2491,13 +2491,23 @@ void ReviaWindow::ReviewDisplayedAnswer()
             }
             dialog->SetBusy(true);
             RunStudioOperation(
-                [feedback](revia::runtime::ReviaSession& current, const std::stop_token stopToken, std::string& message)
+                [feedback, keepExchange = dialog->KeepExchange()](
+                    revia::runtime::ReviaSession& current, const std::stop_token stopToken, std::string& message)
                 {
                     std::string taskId, recordId;
                     if (!current.RecordQualityFeedback(feedback, taskId, recordId, message, stopToken))
                         return false;
                     message = "Pending quality task " + taskId + "; private lesson " + recordId +
                               ". Review the candidate in the Learning window. No lesson has been accepted.";
+                    // Only after the judgment itself is recorded, and never a reason to undo it.
+                    if (keepExchange)
+                    {
+                        std::string captureId, captureError;
+                        message += current.CaptureJudgedTurn(feedback, captureId, captureError, stopToken)
+                                       ? " Kept the exact exchange as dataset capture " + captureId +
+                                             "; it needs your correct reply before it can be exported."
+                                       : " The exact exchange was not kept: " + captureError;
+                    }
                     return true;
                 },
                 [this, dialog](const bool success, const std::string& message)

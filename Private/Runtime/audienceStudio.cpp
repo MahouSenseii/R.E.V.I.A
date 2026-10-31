@@ -209,7 +209,10 @@ bool ReviaSession::ForgetSpeaker(const std::string& entityId, std::string& outEr
     if (!relationships.RevokeRecognitionConsent(entityId, outError)) return false;
     speech::SpeakerRecognition(relationships).Forget(entityId);
     InvalidateAudience();
-    return relationships.Save(outError);
+    if (!relationships.Save(outError)) return false;
+    // Kept training captures of conversations with them go too.
+    outError = WithdrawLiveCaptures("participant:" + entityId);
+    return true;
 }
 
 bool ReviaSession::CorrectSpeakerEvidence(const std::string& evidenceId, const std::string& entityId, std::string& outError)

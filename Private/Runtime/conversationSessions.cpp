@@ -227,6 +227,7 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
             outError = "The conversation archive could not delete that chat.";
             return false;
         }
+        outError = WithdrawLiveCaptures("conversation:" + sessionId);
         return true;
     }
     // Deleting the chat in progress also clears what the prompt still carries from it;
@@ -240,6 +241,7 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
     conversationArchive.ForgetSession(sessionId);
     conversationRuntime.ResetParticipantContinuity();
     lastExchange.reset();
+    const std::string withdrawal = WithdrawLiveCaptures("conversation:" + sessionId);
     // The id is reused for the fresh chat, so the epoch is what tells a delegated task apart.
     conversationEpoch.fetch_add(1);
     std::string error;
@@ -249,6 +251,8 @@ bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string&
         conversationSessionId.clear();
         outError = "The chat was deleted, but new turns will not be saved: " + error;
     }
+    if (!withdrawal.empty())
+        outError = outError.empty() ? withdrawal : outError + " " + withdrawal;
     return true;
 }
 

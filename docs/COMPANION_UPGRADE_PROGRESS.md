@@ -121,6 +121,35 @@ Inventory at `8aa4ca5`, from tracked code only:
    with the built exporter. The Stage E text failures can be captured on the host; the
    image-feeling failure cannot, because the training path is text-only.
 
+10. **Live capture from the running companion (2026-10-31).** The owner judges a displayed
+    reply and ticks a new, unticked-by-default box in the Review dialog. The session then
+    writes the exact exchange behind that reply to
+    `RuntimeData/Learning/Captures/live/<id>.json`, carrying the owner's recorded judgment.
+    - `llamaCppService` attaches the exact request and raw output to each text reply, and
+      the session holds the last 8 private replies in memory only.
+    - `Learning/liveCapture` binds the capture to the judged reply's digest. It refuses
+      replacements and rewrites, configuration changes, pictures, tool steps, thinking,
+      unnamed private reference material and secrets.
+    - Deleting the chat, forgetting all chats or forgetting the speaker deletes the capture
+      and lists it in `withdrawn.json`.
+    - Private turns always offer at least the calculator, so offered tool definitions now
+      travel through the exporter and the worker. The worker renders them in the order the
+      pinned llama-server does: transformers matched the server's `/apply-template` only in
+      that order.
+    - Recorded captures now keep tools too, and refuse replies generated without thinking
+      explicitly off.
+
+    Linux evidence:
+    - The production builder and store passed 4 tests, and 10 removals each made one fail.
+    - The capture tool passed 8 tests and the worker 13. Removing any of 6 Python protections
+      made a test fail.
+    - The real exporter carried a live capture and its tools to the worker, which refused it
+      after its chat was withdrawn.
+    - A tiny-model training run included a tool example.
+
+    The session test and the desktop check build only on Windows. Neither has run against the
+    companion on the host.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins

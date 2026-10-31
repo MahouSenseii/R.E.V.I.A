@@ -43,6 +43,9 @@ struct DatasetCandidate
     std::vector<std::string> sourceIds;
     // The exact model input, ending with the turn being answered.
     std::vector<DatasetMessage> prompt;
+    // The tool definitions the request offered, as the exact JSON array sent, or empty when
+    // none were. The chat template renders them into the prompt, so the example needs them.
+    std::string tools;
     std::string response;
     DatasetTargetOrigin targetOrigin = DatasetTargetOrigin::ReviewedCorrection;
     std::string rejectedResponse;

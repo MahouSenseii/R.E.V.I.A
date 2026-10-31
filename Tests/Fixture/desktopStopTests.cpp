@@ -800,6 +800,9 @@ struct ReviaWindowStopTests
             std::string error;
             expect(!window.answerFeedbackDialog->CaptureFeedback(feedback, error),
                 "a diagnostic flag must not supply an owner criterion or judgment");
+            auto* keep = window.findChild<QCheckBox*>("answerFeedbackKeepExchange");
+            expect(keep && !keep->isChecked() && !window.answerFeedbackDialog->KeepExchange(),
+                "keeping a judged reply's exact exchange must be the owner's explicit choice, off by default");
             window.findChild<QLineEdit*>("answerFeedbackCriterion")->setText("Answer the requested fact.");
             window.findChild<QPlainTextEdit*>("answerFeedbackEvidence")->setPlainText("The reply omitted the requested fact.");
             expect(window.answerFeedbackDialog->CaptureFeedback(feedback, error) && feedback.criterion == "Answer the requested fact." &&
