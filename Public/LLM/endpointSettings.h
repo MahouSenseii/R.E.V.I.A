@@ -41,6 +41,13 @@ struct llmSettings
     // llama.cpp's f16 default. A quantized V cache requires flash attention, so a
     // quantized type also switches flash attention from "auto" to "on".
     std::string kvCacheType;
+    // Prompt processing batches, passed as --batch-size (logical: tokens submitted per
+    // decode call) and --ubatch-size (physical: tokens the backend computes at once).
+    // Zero keeps llama.cpp's default, so the launch is unchanged until a value has been
+    // measured on the device it will run on. A micro-batch needs an explicit batch that
+    // is at least as large; settings validation refuses anything else.
+    int batchSize = 0;
+    int microBatchSize = 0;
     int parallelRequests = 2;
     int startupTimeoutSeconds = 120;
     bool bShutdownServerOnExit = true;

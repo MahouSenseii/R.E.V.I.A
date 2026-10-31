@@ -201,6 +201,12 @@ commandOutput commandManager::BuildStatusOutput(const appSettings& settings,
     stream << "Server Slots:   " << (settings.llm.bAutoTune
         ? "Auto"
         : std::to_string(settings.llm.parallelRequests)) << "\n";
+    // As configured; the startup log reports what llama.cpp actually built.
+    stream << "Prompt Batch:   " << (settings.llm.batchSize > 0
+        ? std::to_string(settings.llm.batchSize) + " logical, " +
+            (settings.llm.microBatchSize > 0 ? std::to_string(settings.llm.microBatchSize) : std::string("default")) +
+            " physical"
+        : std::string("llama.cpp default")) << "\n";
     stream << "Temperature:    " << settings.llm.temperature << "\n";
     stream << "Response Tokens:" << (settings.llm.bAutoMaxTokens ? " Auto, ceiling " : " ")
            << settings.llm.maxTokens << "\n";

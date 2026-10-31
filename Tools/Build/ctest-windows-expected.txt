@@ -122,6 +122,7 @@ ReviaVideoAttachmentTests
 ReviaFileTranscriptionTests
 Revia.VideoPreview
 ReviaImageTokenSettingsTests
+ReviaPromptBatchSettingsTests
 ReviaSourceDiagnosticTests
 ReviaSpeakerEnrollmentDialogueTests
 ReviaSpeakerEnrollmentRuntimeTests

@@ -1,5 +1,41 @@
 # Companion upgrade continuation
 
+## Cloud branch continuation, 2026-10-31 (not a local checkpoint)
+
+This work is on branch `claude/revia-companion-upgrade-eyhpjs`, started from `8aa4ca5`.
+It was done in a cloud Linux container without the Windows checkout, `build/` receipts,
+models, GPUs, Qt/MinGW or the desktop. The D5 wrap checkpoint below remains the
+authoritative local state: nothing here qualifies Stage D or E, or changes the normal
+deployment. Evidence is labeled by where it ran: **Linux fixture** (production sources
+compiled with g++ 13.3 on Linux), **Windows CI** (GitHub's runner, not the owner's host),
+or **host** (not run).
+
+Inventory at `8aa4ca5`, from tracked code only:
+
+- Main's chat launch passes no `--batch-size`/`--ubatch-size` (only the embedding server
+  does) and no speculative-decoding flags.
+- Ordinary chat, including code written in chat, samples with DRY 0.8 and allowed length
+  2. The self code review and saved-source review paths turn DRY off, and their comment
+  records it shortening code lines with "..." and ending replies mid-string. That is a
+  lead for the Stage E malformed-code failure, not a result. The prepared exact-request
+  pair is still the test.
+- The error messages at `Tools/revia_video_worker.py:220,227` are missing spaces
+  ("at least45GiB"). The file was left unchanged because it is part of the pending D5 run;
+  fix it before that run so the qualification covers the final bytes.
+- `Tests/audiencePrivacyTests.cpp:948` still expects the Stage B `Reference-image` refusal.
+- Linux fixture: `Tests/reviaVideoWorker.test.py` 7 passed and 1 skipped (it needs the
+  Windows resource API); `Tests/reviaImageService.test.py` 26 of 26 passed.
+
+1. **Prompt batch settings (roadmap 6.3).** `llm.batchSize` and `llm.microBatchSize`
+   (owners: `endpointSettings`/`configManager`) are validated, reach `--batch-size` and
+   `--ubatch-size` only when set, reset to llama.cpp's defaults for Fast and Expert
+   (`reviaSession`), and are reported as actually built from the launch's own llama.cpp
+   log (`llamaCppServerProcess`). Configured values appear in `/status`. Linux fixture:
+   `Tests/promptBatchSettingsTests.cpp` passed, and three deliberate code removals each
+   failed it; the existing image-token check still passes. Windows CI: pending. Host: not
+   benchmarked, and the default launch is unchanged. Next: the `llama-bench` sweep in
+   `docs/CONTEXT_BENCHMARK.md`.
+
 ## Wrap checkpoint, 2026-10-30, D5
 
 The owner requested wrapping up with 6% usage remaining. Further model trials

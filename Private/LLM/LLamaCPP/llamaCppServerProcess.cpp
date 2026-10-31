@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
 #include <initializer_list>
 #include <string>
 #include <system_error>
@@ -255,6 +256,10 @@ std::vector<std::string> BuildLlamaServerArguments(
     add({"--jinja"});
     if (settings.bVisionEnabled && settings.imageMinTokens > 0)
         add({"--image-min-tokens", std::to_string(std::min(settings.imageMinTokens, 4096))});
+    if (settings.batchSize > 0)
+        add({"--batch-size", std::to_string(settings.batchSize)});
+    if (settings.microBatchSize > 0)
+        add({"--ubatch-size", std::to_string(settings.microBatchSize)});
     if (!settings.device.empty() && settings.device != "auto")
     {
         add({"--device", settings.device, "--split-mode", settings.splitMode});
@@ -280,6 +285,50 @@ std::vector<std::string> BuildLlamaServerArguments(
     if (!settings.kvCacheType.empty())
         add({"--cache-type-k", settings.kvCacheType, "--cache-type-v", settings.kvCacheType});
     return arguments;
+}
+
+std::optional<llamaPromptBatch> ParseLlamaContextBatch(const std::string_view log)
+{
+    // The value after "<key> =" on a context line, or -1. "n_ubatch" does not contain
+    // "n_batch", so the two keys cannot be confused.
+    const auto valueOf = [](const std::string_view line, const std::string_view key) -> long long
+    {
+        const auto found = line.find(key);
+        if (found == std::string_view::npos)
+            return -1;
+        auto position = line.find_first_not_of(' ', found + key.size());
+        if (position == std::string_view::npos || line[position] != '=')
+            return -1;
+        position = line.find_first_not_of(' ', position + 1);
+        long long value = 0;
+        std::size_t digits = 0;
+        for (; position < line.size() && line[position] >= '0' && line[position] <= '9'; ++position)
+        {
+            if (++digits > 7)
+                return -1;
+            value = value * 10 + (line[position] - '0');
+        }
+        return digits == 0 ? -1 : value;
+    };
+
+    std::optional<int> logical;
+    std::size_t start = 0;
+    while (start < log.size())
+    {
+        const auto end = std::min(log.find('\n', start), log.size());
+        const auto line = log.substr(start, end - start);
+        start = end + 1;
+        // Current builds print "llama_context:", builds before the 2025 context rewrite
+        // printed "llama_new_context_with_model:". Other lines are not the context's.
+        if (line.find("llama_context:") == std::string_view::npos &&
+            line.find("llama_new_context_with_model:") == std::string_view::npos)
+            continue;
+        if (const auto value = valueOf(line, "n_batch"); value > 0 && value <= 1'000'000)
+            logical = static_cast<int>(value);
+        else if (const auto physical = valueOf(line, "n_ubatch"); physical > 0 && physical <= 1'000'000 && logical)
+            return llamaPromptBatch{*logical, static_cast<int>(physical)};
+    }
+    return std::nullopt;
 }
 
 llamaHardwareMemory DetectLlamaHardwareMemory()
@@ -346,6 +395,21 @@ llamaCppServerProcess::~llamaCppServerProcess()
 #endif
 }
 
+std::optional<llamaPromptBatch> llamaCppServerProcess::LaunchedPromptBatch() const
+{
+    if (stderrLog.empty())
+        return std::nullopt;
+    std::ifstream stream(stderrLog, std::ios::binary);
+    if (!stream.seekg(static_cast<std::streamoff>(stderrLaunchOffset)))
+        return std::nullopt;
+    // The context is built right after the model loads. The bound keeps a long-running
+    // server's request lines out of the read.
+    std::string text(std::size_t{1} << 20, '\0');
+    stream.read(text.data(), static_cast<std::streamsize>(text.size()));
+    text.resize(static_cast<std::size_t>(stream.gcount()));
+    return ParseLlamaContextBatch(text);
+}
+
 bool llamaCppServerProcess::Start(const llmSettings& settings, std::string& outError)
 {
     return StartInternal(settings, false, "", "", outError);
@@ -381,6 +445,7 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
     const bool embeddingMode, const std::string& pooling, const std::string& device, std::string& outError)
 {
     outError.clear();
+    stderrLog.clear();
 
 #ifndef _WIN32
     (void)settings;
@@ -502,6 +567,15 @@ bool llamaCppServerProcess::StartInternal(const llmSettings& settings,
         outError = WindowsError("Opening the llama.cpp stderr log");
         CloseHandle(standardOutput);
         return false;
+    }
+    // The append-only handle cannot report the length, so ask the file system. Without a
+    // length, the earlier launches' lines could not be told apart, and none are read.
+    std::error_code lengthError;
+    const auto existingLength = std::filesystem::file_size(std::filesystem::path(stderrPath), lengthError);
+    if (!lengthError)
+    {
+        stderrLog = std::filesystem::path(stderrPath);
+        stderrLaunchOffset = existingLength;
     }
 
     const HANDLE standardInput = CreateFileW(

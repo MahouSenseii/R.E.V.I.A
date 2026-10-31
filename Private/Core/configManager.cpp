@@ -63,6 +63,27 @@ namespace
         output = value.get<int>();
     }
 
+    // Zero keeps llama.cpp's default. The bounds catch typos rather than encode a tuned
+    // value; a measured setting comes from a benchmark on the device it will run on.
+    void ReadPromptBatch(const json& data, llmSettings& output)
+    {
+        const auto read = [&data](const char* key, int& target)
+        {
+            if (!data.contains(key))
+                return;
+            const auto& value = data[key];
+            if (!value.is_number_integer() || value < 0 || value > 65536 || (value > 0 && value < 32))
+                throw std::invalid_argument(std::string(key) + " must be 0 or an integer from 32 through 65536.");
+            target = value.get<int>();
+        };
+        read("batchSize", output.batchSize);
+        read("microBatchSize", output.microBatchSize);
+        // llama.cpp silently shrinks a micro-batch to the batch. Refusing the pair keeps the
+        // value that was asked for the value that runs.
+        if (output.microBatchSize > 0 && (output.batchSize == 0 || output.microBatchSize > output.batchSize))
+            throw std::invalid_argument("microBatchSize requires a batchSize at least as large.");
+    }
+
     void ReadModelTier(const json& data, modelTierSettings& output)
     {
         ReadImageMinimum(data, output.imageMinTokens);
@@ -201,6 +222,7 @@ bool ReadSettings(json& data, appSettings& outSettings)
             {
                 outSettings.llm.kvCacheType = llmData["kvCacheType"].get<std::string>();
             }
+            ReadPromptBatch(llmData, outSettings.llm);
 
             if (llmData.contains("parallelRequests"))
             {

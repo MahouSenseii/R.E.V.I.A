@@ -189,6 +189,16 @@ std::string BackendCapacity(const healthOutput& health)
     return stream.str();
 }
 
+// What the launched server actually built, which can differ from what was asked:
+// llama.cpp fits the batch to the context.
+std::string PromptBatchDescription(const std::optional<llamaPromptBatch>& batch)
+{
+    if (!batch)
+        return " Its prompt batch sizes were not found in the llama.cpp log.";
+    return " Prompt batch: " + std::to_string(batch->logical) + " logical, " + std::to_string(batch->physical) +
+        " physical tokens.";
+}
+
 double AggregateMilliseconds(const std::vector<latencySample>& timings)
 {
     const auto aggregate = std::find_if(timings.rbegin(), timings.rend(), [](const latencySample& sample) { return sample.bAggregate; });
@@ -209,6 +219,10 @@ llmSettings BuildTierSettings(const llmSettings& base, const modelTierSettings& 
     // The quantized KV cache was chosen for Main's 32K context. Fast and Expert keep
     // llama.cpp's default cache at their own smaller contexts.
     output.kvCacheType.clear();
+    // Prompt batches are measured for Main's model on Main's device; they say nothing
+    // about another model on another device.
+    output.batchSize = 0;
+    output.microBatchSize = 0;
     output.parallelRequests = 1;
     output.maxTokens = tier.maxTokens;
     output.temperature = tier.temperature;
@@ -8527,7 +8541,8 @@ bool ReviaSession::EnsureLLMAvailable(const std::stop_token stopToken)
         const healthOutput readyHealth = router.CheckLLMHealth();
         if (readyHealth.bIsAvailable)
         {
-            appLogger.Log("llama.cpp started with automatic hardware fitting." + BackendCapacity(readyHealth));
+            appLogger.Log("llama.cpp started with automatic hardware fitting." + BackendCapacity(readyHealth) +
+                PromptBatchDescription(llamaServerProcess.LaunchedPromptBatch()));
             appLogger.Log("Preparing the first-response graph before the language model is marked ready...");
             PrepareBrain(intelligence::IntelligenceTier::Main, stopToken, true);
             return true;

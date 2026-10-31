@@ -482,7 +482,7 @@ Having a file in `Models\` does not mean it is used. This is the live map:
 | Reply voice | `Qwen3-TTS-12Hz-0.6B-Base` | RTX 5070 (BF16) + RTX 2070 Super (FP32) |
 | Voice creation | `Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Loaded only while creating a voice |
 
-Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `llm.kvCacheType`); Fast and Expert keep 8,192 tokens. How much recent conversation she keeps follows Main's context: about 60 messages at 32K, 24 at 8K. Set `llm.contextSize` back to `8192` on a GPU with little free memory. See [docs/CONTEXT_BENCHMARK.md](docs/CONTEXT_BENCHMARK.md) for what has and has not been measured at 32K.
+Main runs with a 32,768-token context and a q8_0 KV cache (`llm.contextSize`, `llm.kvCacheType`); Fast and Expert keep 8,192 tokens. How much recent conversation she keeps follows Main's context: about 60 messages at 32K, 24 at 8K. Set `llm.contextSize` back to `8192` on a GPU with little free memory. See [docs/CONTEXT_BENCHMARK.md](docs/CONTEXT_BENCHMARK.md) for what has and has not been measured at 32K. Main's prompt batches (`llm.batchSize`, `llm.microBatchSize`) keep llama.cpp's defaults unless set; no other value has been measured yet, and the same document says how to qualify one.
 
 The embedding worker keeps its last 64 embeddings, so text embedded for the reply, the self-inquiry and the memory check is computed once. It runs with a 2,048-token batch so long recall queries are not refused, and when Main fits entirely on its GPU, the planner moves up to half of Main's CPU threads to it (embeddings get at most eight).
 

@@ -3,7 +3,10 @@
 
 #include "LLM/endpointSettings.h"
 #include <string>
+#include <string_view>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <vector>
 
 struct llamaHardwarePlan
@@ -35,6 +38,19 @@ struct llamaHardwareMemory
 [[nodiscard]] std::vector<std::string> BuildLlamaServerArguments(
     const llmSettings& settings, bool embeddingMode, const std::string& pooling, const std::string& device);
 
+// The prompt batches llama.cpp built a context with. /props does not report them, so
+// they are read from the server's own startup log.
+struct llamaPromptBatch
+{
+    int logical = 0;
+    int physical = 0;
+};
+
+// The first n_batch/n_ubatch pair a llama.cpp context printed in this log text: the
+// target model's context comes before a draft model's. Pure, so it can be checked on
+// any platform.
+[[nodiscard]] std::optional<llamaPromptBatch> ParseLlamaContextBatch(std::string_view log);
+
 class llamaCppServerProcess
 {
 public:
@@ -49,10 +65,16 @@ public:
     bool IsRunning() const;
     bool WasStartedByRevia() const;
     void Stop();
+    // The prompt batches the last server this owner launched reported building its
+    // context with. Empty when it launched nothing, or the log does not show them yet.
+    [[nodiscard]] std::optional<llamaPromptBatch> LaunchedPromptBatch() const;
 
 private:
     bool StartInternal(const llmSettings& settings,
         bool embeddingMode, const std::string& pooling, const std::string& device, std::string& outError);
+    // Every launch on a port appends to the same log, so a launch's own lines start here.
+    std::filesystem::path stderrLog;
+    std::uintmax_t stderrLaunchOffset = 0;
 #ifdef _WIN32
     void* processHandle = nullptr;
     void* jobHandle = nullptr;

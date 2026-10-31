@@ -119,6 +119,42 @@ this tool yet, and the change has only been unit-tested (launch arguments, histo
 planner estimate, settings validation), not run live. To measure it, rerun the tool with
 `--cache-type-k q8_0 --cache-type-v q8_0` in `server_arguments`.
 
+## Prompt batch settings (added 2026-10-31, not yet measured)
+
+`llm.batchSize` and `llm.microBatchSize` set Main's logical prompt batch (`--batch-size`,
+tokens submitted per decode call) and physical micro-batch (`--ubatch-size`, tokens the
+backend computes at once). Both default to `0`, which passes neither flag, so Main's
+launch is unchanged until a value has been measured. Each must be `0` or an integer from
+32 through 65,536, and a micro-batch needs an explicit batch at least as large; anything
+else fails settings validation. Fast and Expert keep llama.cpp's defaults, as they do for
+the KV cache type, and the embedding server keeps its own context-sized batch.
+
+llama.cpp fits the batch to the context and the micro-batch to the batch, and `/props`
+does not report either. After Revia launches Main, it reads that launch's own section of
+`llama-server-<port>.stderr.log` and logs the values the context was actually built with,
+for example `Prompt batch: 2048 logical, 512 physical tokens.`, or says they were not
+found. `/status` shows the configured values. Prompt batching only changes how known input
+is processed. It is separate from `llm.parallelRequests` (independent requests) and from
+speculative decoding, which Revia does not configure.
+
+Evidence so far: settings, launch arguments and log parsing are covered by
+`Tests/promptBatchSettingsTests.cpp`. It ran on Linux against the real production owners,
+and the configuration, flag and first-pair checks each failed when their code was removed.
+That is compile and fixture evidence only. No batch value has been benchmarked, launched
+or recommended. To qualify one on the host, first sweep prompt processing on Main's own
+device, with Revia stopped so nothing else holds that GPU:
+
+```powershell
+.\ThirdParty\llama.cpp\llama-bench.exe -m Models\Qwen3.5-9B-Q4_K_M.gguf -dev CUDA0 -ngl 99 -fa on `
+  -ctk q8_0 -ctv q8_0 -p 512,4096,16384 -n 0 -b 2048,4096 -ub 256,512,1024,2048 -r 3 -o json
+```
+
+A candidate then needs a Revia launch with the setting, the startup line confirming the
+values, measured free VRAM with image or video work loaded (a larger micro-batch enlarges
+the compute buffer that `--fit` must place), and first-visible-token and total latency for
+long and ordinary turns compared with the default. Change the default only if those
+measurements favor it.
+
 ## Quality observation proxy and checks
 
 `Tools/Quality/observedLocalModel.h` now forwards the two accounting POST endpoints
