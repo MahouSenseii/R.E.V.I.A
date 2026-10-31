@@ -161,7 +161,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.15.0'
+      # Install Qt runs its own setup-python and moves PATH to a newer interpreter
+      # without numpy, so configure pins CMake to this one through its python-path.
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: '3.12'
       - name: Install the retrieval contract dependency
@@ -268,7 +271,7 @@ jobs:
         timeout-minutes: 5
         shell: pwsh
         run: |
-          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_C_FLAGS_DEBUG=-O0 -g0" "-DCMAKE_CXX_FLAGS_DEBUG=-O0 -g0" -DREVIA_USE_LLD=ON -DREVIA_COMPILE_JOBS=2 -DREVIA_LINK_JOBS=3 -DBUILD_TESTING=ON -DREVIA_REQUIRE_DESKTOP=ON "-DCMAKE_C_COMPILER=$env:REVIA_COMPILER_BIN/gcc.exe" "-DCMAKE_CXX_COMPILER=$env:REVIA_COMPILER_BIN/g++.exe" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "-DREVIA_QT_ROOT=$env:QT_ROOT_DIR" 2>&1 | Tee-Object build/ci-evidence/configure.log
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_C_FLAGS_DEBUG=-O0 -g0" "-DCMAKE_CXX_FLAGS_DEBUG=-O0 -g0" -DREVIA_USE_LLD=ON -DREVIA_COMPILE_JOBS=2 -DREVIA_LINK_JOBS=3 -DBUILD_TESTING=ON -DREVIA_REQUIRE_DESKTOP=ON "-DCMAKE_C_COMPILER=$env:REVIA_COMPILER_BIN/gcc.exe" "-DCMAKE_CXX_COMPILER=$env:REVIA_COMPILER_BIN/g++.exe" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "-DREVIA_QT_ROOT=$env:QT_ROOT_DIR" "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}" 2>&1 | Tee-Object build/ci-evidence/configure.log
           exit $LASTEXITCODE
 
       # CMake keeps GNU ld when Qt's gcc cannot run lld. Say so where it is seen.
