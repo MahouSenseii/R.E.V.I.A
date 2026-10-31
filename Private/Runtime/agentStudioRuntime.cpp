@@ -347,6 +347,11 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                 if (!answered->bPreempted || tries > MaximumProviderYields || !usagePersisted || stop.stop_requested() ||
                     !Admits(request.stamp))
                     break;
+                // Her turn makes several requests, and the scheduler frees the slot between
+                // them. A try taken in such a gap only lost again to the turn's next request,
+                // so one turn could use up every yield. The next try waits for the turn to end.
+                while (busy.load() && !stop.stop_requested() && Admits(request.stamp))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
             return answered;
         };

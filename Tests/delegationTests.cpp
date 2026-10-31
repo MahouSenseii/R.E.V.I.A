@@ -431,7 +431,13 @@ struct SessionFixture
         std::string text = "status " + (task ? ToString(task->status) + " r" + std::to_string(task->revision) : std::string("none")) +
                            "; workflow " + revia::agents::ToString(snapshot.state) + " (";
         for (const auto& node : snapshot.nodes)
-            text += node.id + "=" + revia::agents::ToString(node.state) + "/" + std::to_string(node.attempts.size()) + " ";
+        {
+            text += node.id + "=" + revia::agents::ToString(node.state) + "/" + std::to_string(node.attempts.size());
+            // How the latest attempt ended, so a failure here names its own cause.
+            if (!node.attempts.empty() && !node.attempts.back().diagnostic.empty())
+                text += " [" + std::to_string(node.attempts.back().providerCalls) + " calls: " + node.attempts.back().diagnostic + "]";
+            text += " ";
+        }
         return text + ")" + (task && !task->detail.empty() ? "; " + task->detail : std::string{});
     }
     DelegatedTaskStatus Status()
@@ -754,11 +760,21 @@ void TestChatDelegationReportsThroughHerReply()
               reportRequests[0].dump().find("Use your agents to check which fixture file sets the service port") != std::string::npos,
         "The report turn had tools, or did not examine the exact deliverable and the person's own words.");
     // Accepted only after the report: the acceptance snapshot is published after the message.
+    // Whichever thread is draining the workflow's notifications publishes it, so it can arrive
+    // a moment after the task already reads as reported.
+    const auto isAcceptance = [](const auto& event)
+    { return event.kind == RuntimeEventKind::AgentWorkflow && event.component == "Agent Studio" && event.phase == "Accepted"; };
+    (void)fixture.PollUntil(
+        [&]
+        {
+            const auto published = fixture.Snapshot();
+            return std::any_of(published.begin(), published.end(), isAcceptance);
+        },
+        10s);
     const auto events = fixture.Snapshot();
     const auto reported = std::find_if(events.begin(), events.end(),
         [](const auto& event) { return event.kind == RuntimeEventKind::AssistantMessage && event.component == "Delegation"; });
-    const auto accepted = std::find_if(events.begin(), events.end(),
-        [](const auto& event) { return event.kind == RuntimeEventKind::AgentWorkflow && event.component == "Agent Studio" && event.phase == "Accepted"; });
+    const auto accepted = std::find_if(events.begin(), events.end(), isAcceptance);
     Check(reported != events.end() && accepted != events.end() && reported < accepted, "The work was accepted before she reported it.");
     // Saved just after the status changes, so read once the file itself says so.
     Json persisted;
