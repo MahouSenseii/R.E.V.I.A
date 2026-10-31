@@ -249,6 +249,13 @@ Inventory at `8aa4ca5`, from tracked code only:
     - A smoke-prepared job with the full default configuration trained the tiny Qwen3.5
       with the real backend.
 
+    Windows CI: run 41208914554 (commit `c2959cf`) built cleanly and ran 149 of 150 tests,
+    the other being the approved optional video skip. `Revia.TrainingWorkerPolicy` passed
+    under the runner's Python 3.12.10, including all three new `prepare` tests on Windows
+    paths, as did every other branch check. Besides the three failures `main` shares, two
+    tests failed, both intermittent (below): `ReviaProactiveStateTests` and, for the first
+    time, `Revia.Foundation`. Since the previous run, only Python and docs had changed.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
@@ -272,15 +279,21 @@ Intermittent:
   passed in run 41159287582, on identical C++ sources (commits `58335fd` and `1e00faa`).
 - `ReviaProactiveStateTests`: passed once, then failed in runs 41159287582 and 41164612553.
   A request after a prior native source finding lacked the profile's 0.75 temperature. It
-  passed in runs 41175961328 and 41178797203.
+  passed in runs 41175961328 and 41178797203, and failed again in run 41208914554.
+- `Revia.Foundation`: failed once, in run 41208914554, at "A verified private saved reference
+  changed a public reply's sampling". That check is in `Tests/proactiveStateTests.cpp`, which
+  `ReviaTests` also compiles, and is the same kind as the `ReviaProactiveStateTests` failure:
+  the fixture's last recorded request did not carry the expected temperature. The C++ sources
+  were identical to run 41205772282, where it passed.
 - `ReviaDelegationTests`: failed once, in run 41175961328 (commit `4df13d5`), at
   `TestWorkersYieldToTheConversation`. An analysis worker preempted by the conversation
   failed instead of retrying. That commit's only production change was an uncalled reader,
   and the test passed in the three runs before it and in run 41178797203.
 
 Of these, `Revia.ObservedLocalModel`, `ReviaProactiveStateTests` and the three tests failing
-in both runs are queued as a separate task. `ReviaDelegationTests` was found after that task
-was queued.
+in both runs are queued as a separate task. `ReviaDelegationTests` and `Revia.Foundation` were
+found after that task was queued; the latter's failing check is in the same source file as
+`ReviaProactiveStateTests`.
 
 ## Wrap checkpoint, 2026-10-30, D5
 
