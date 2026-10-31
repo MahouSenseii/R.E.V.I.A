@@ -225,7 +225,14 @@ Inventory at `8aa4ca5`, from tracked code only:
     - The tests caught a dangling loop over a destroyed temporary in the manifest merge.
     - The panel passed the headless Qt harness, and the window sources compiled.
 
-    The session and desktop tests run in Windows CI.
+    Windows CI run 41205772282 (commit `374fc20`):
+    - The build passed, and 149 of 150 tests ran; the other is the approved optional video
+      skip.
+    - Every branch check passed, including `ReviaLiveDatasetExportTests`.
+    - The session tests also passed. They export through the real Windows folder checks
+      against the runner's temp folder.
+    - The only failures were the three that also fail on `main`. The intermittent tests
+      passed.
 
 13. **Training jobs prepared from an export (2026-10-31).** `revia_training_worker.py prepare`
     writes the job for a dataset export and an installed base. Before, `job.json` was

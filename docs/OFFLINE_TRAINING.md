@@ -375,6 +375,9 @@ Evidence:
     earlier partition;
   - under Wine, a network path refused as "not a full path", because libstdc++ on Windows
     does not count UNC paths as absolute.
+- Windows CI run 41205772282 (commit `374fc20`) passed `ReviaLiveDatasetExportTests`. It also
+  passed the session tests, which export through the real Windows folder checks, and every
+  other branch check.
 - The test was also built for Windows with MinGW-w64 GCC 13.2 and LLD 18.1.3, using CI's
   flags. That build passed all 5 tests under Wine 9, including Windows file replacement for
   correction revisions.
