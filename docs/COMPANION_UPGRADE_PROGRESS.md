@@ -195,7 +195,37 @@ Inventory at `8aa4ca5`, from tracked code only:
     - Reproduced locally without that failure: MinGW-w64 GCC 13.2 and LLD 18.1.3 compiled
       the test with CI's flags and linked it. Its Windows build then passed all 5 tests
       under Wine 9, including the `ReplaceFileW` path a second correction revision takes.
-    - The next commit's run is the retry. Nothing in the code was changed for it.
+    - Retry run 41203033290 (commit `ea226c6`, no code change) built cleanly, and 148 of 149
+      tests ran. The session test and the desktop suite passed with the correction checks, as
+      did every other branch check. The failures were the three that fail on `main` and the
+      known intermittent `ReviaProactiveStateTests` temperature check.
+
+12. **In-app dataset export (2026-10-31).** **Export dataset…** in Training corrections writes
+    every decided capture as the next numbered dataset of the companion's lineage, such as
+    `revia-live-3`, into a parent folder the owner chooses. The owner chose numbered exports
+    with fixed 10% validation and 10% test.
+    - The lineage in `RuntimeData/Learning/Datasets` keeps one salt and a copy of every
+      export's manifest. An example keeps any partition an earlier export gave it, even
+      after deletion, return and regrouping.
+    - OneDrive, network and linked folders are refused. The withdrawal list is applied, and
+      its path is named for the training job.
+    - The C++ candidates match `revia_dataset_capture.py candidates`, pinned by
+      `Tests/Fixture/liveCandidates.json`.
+    - Building it exposed two grouping faults. Every capture listed `participant:owner` as a
+      source, which put all of a person's captures in one partition, so no held-out set could
+      ever form; the speaker is now recorded beside the sources. And the exporter grouped a
+      whole app run together. On the owner's choice, a candidate naming its chat is now
+      grouped by that chat.
+
+    Evidence:
+    - On Linux, the export passed 4 tests, and 8 removals each made one fail; 3 more
+      removals covered the grouping fixes.
+    - The same export tests passed as a Windows build under Wine 9. That run found that
+      libstdc++ on Windows does not count UNC paths as absolute, now handled.
+    - The tests caught a dangling loop over a destroyed temporary in the manifest merge.
+    - The panel passed the headless Qt harness, and the window sources compiled.
+
+    The session and desktop tests run in Windows CI.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so

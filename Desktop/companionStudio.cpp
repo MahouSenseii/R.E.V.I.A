@@ -270,6 +270,19 @@ void ReviaWindow::BuildAdditionalStudioPanels()
             },
             [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
     };
+    learning.exportDataset = [this](const std::string& folder)
+    {
+        RunStudioOperation(
+            [folder](auto& session, const auto stop, std::string& message)
+            {
+                revia::learning::LiveDatasetExport exported;
+                if (!session.ExportLiveDataset(revia::actions::Utf8ToPath(folder), exported, message, stop))
+                    return false;
+                message = revia::learning::DescribeLiveDatasetExport(exported);
+                return true;
+            },
+            [this](const bool success, const auto& message) { learningStudioPanel->SetOutcome(success, message); });
+    };
     learningStudioPanel = new LearningStudioPanel(std::move(learning));
     add(learningStudioPanel, "learningStudioScroll");
     DevelopmentStudioPanel::Controls development;

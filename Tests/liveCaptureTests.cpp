@@ -123,9 +123,10 @@ void TestJudgedReplyKeepsItsExactExchange()
               record["judgment"]["targetDigest"] == record["failedOutputSha256"] && record["repaired"] == false,
         "The judged reply and its digest were not kept together.");
     const auto requestDigest = revia::audit::ContentDigest(request.dump());
-    Check(capture.sources == std::vector<std::string>{"request:" + requestDigest, "conversation:conversation-1", "participant:owner"} &&
-              record["sources"] == capture.sources && record["source"]["requestBodySha256"] == requestDigest,
-        "The capture does not name the request, conversation and speaker that withdraw it.");
+    Check(capture.sources == std::vector<std::string>{"request:" + requestDigest, "conversation:conversation-1"} &&
+              record["sources"] == capture.sources && record["source"]["requestBodySha256"] == requestDigest &&
+              record["source"]["participantId"] == "owner",
+        "The capture does not name the request and conversation it came from, or record its speaker beside them.");
     Check(record["requestSettings"]["dry_multiplier"] == 0.8 && record["requestSettings"]["tool_choice"] == "auto" &&
               !record["requestSettings"].contains("cache_prompt") && record["provenance"]["templateSha256"] == Reply().exchange->templateSha256,
         "The capture did not keep the generation settings and provenance.");
@@ -295,7 +296,25 @@ void TestKeptCapturesAreImmutableAndWithdrawn()
                         "displayed-reply:reply-2"},
         "Forgetting every chat did not list each capture's conversation and judged reply, or lost an earlier withdrawal.");
 
+    // Forgetting a speaker matches the speaker each capture recorded.
     Check(store.Keep(first, error), error);
+    auto guestReply = Reply();
+    guestReply.participantId = "guest";
+    guestReply.conversationId = "conversation-3";
+    guestReply.displayed = guestReply.modelText = "A reply to the guest.";
+    auto guestJudgment = Judgment(guestReply);
+    guestJudgment.targetId = "displayed-reply:reply-3";
+    const auto guest = Built(guestReply, guestJudgment);
+    Check(store.Keep(guest, error), error);
+    Check(store.Withdraw("participant:guest", removed, error) && removed == 1 &&
+              !std::filesystem::exists(store.LiveDirectory() / (guest.captureId + ".json")) &&
+              std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")),
+        "Forgetting a speaker did not withdraw exactly the captures of conversations with them: " + error);
+    listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    Check(std::find(listed.begin(), listed.end(), "participant:guest") != listed.end() &&
+              std::find(listed.begin(), listed.end(), "displayed-reply:reply-3") != listed.end(),
+        "Forgetting a speaker did not list them and their capture's judged reply as withdrawn.");
+
     std::ofstream(store.WithdrawnList(), std::ios::binary | std::ios::trunc) << "{broken";
     Check(!store.Withdraw("participant:owner", removed, error) && removed == 0 &&
               std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")),

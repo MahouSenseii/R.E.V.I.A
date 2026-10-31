@@ -103,8 +103,7 @@
   },
   "sources": [
     "request:cb6df3bc0e2e9594e8ea2471c4170a8872121f4170c0d0989f28952da1f4e42a",
-    "conversation:conversation-1",
-    "participant:owner"
+    "conversation:conversation-1"
   ],
   "tools": [
     {

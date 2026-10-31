@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # store saves for it.
 LIVE_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCapture.json"
 CORRECTION_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCorrection.json"
+# What this tool makes of those two; ReviaLiveDatasetExportTests checks the in-app export makes the same.
+CANDIDATES_FIXTURE = ROOT / "Tests" / "Fixture" / "liveCandidates.json"
 TOOLS = [{"type": "function", "function": {"name": "calculator", "description": "Evaluate arithmetic.",
                                            "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}}}}]
 
@@ -291,6 +293,8 @@ class DatasetCaptureTests(unittest.TestCase):
         self.assertEqual((candidate["review"], candidate["response"], candidate["rejectedResponse"], candidate["judgment"]),
                          (saved["decision"], saved["correction"], fixture["failedOutput"], fixture["judgment"]),
                          "The saved decision and correction were not joined to the capture and its recorded judgment.")
+        self.assertEqual(json.loads(output.read_text()), json.loads(CANDIDATES_FIXTURE.read_text(encoding="utf-8")),
+                         "The candidates differ from Tests/Fixture/liveCandidates.json, which the in-app export must also match.")
         forged = dict(saved, failedOutputSha256=sha("Another reply."))
         (directory.parent / "corrections" / f"{saved['captureId']}.json").write_text(json.dumps(forged))
         code, result = run(["candidates", "--captures", str(directory), "--output", str(directory.parent / "forged.json")])

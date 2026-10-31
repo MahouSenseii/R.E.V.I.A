@@ -25,6 +25,8 @@ class LearningStudioPanel final : public QWidget
         // A kept capture's decision and correct reply, and deleting a kept capture.
         std::function<void(const std::string&, revia::learning::LearningDecision, const std::string&)> correct;
         std::function<void(const std::string&)> discard;
+        // Exports the decided captures under the chosen parent folder.
+        std::function<void(const std::string&)> exportDataset;
     };
     explicit LearningStudioPanel(Controls controls, QWidget* parent = nullptr);
     void SetSnapshot(const revia::runtime::LearningStudioSnapshot& snapshot);
@@ -59,5 +61,7 @@ class LearningStudioPanel final : public QWidget
     QPlainTextEdit* correction = nullptr;
     QPushButton* saveCorrection = nullptr;
     QPushButton* deleteCapture = nullptr;
+    QPushButton* exportDataset = nullptr;
+    QString exportFolder;
     std::string shownCapture;
 };

@@ -13,6 +13,8 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace
 {
 QString Text(const std::string& value)
@@ -177,6 +179,11 @@ LearningStudioPanel::LearningStudioPanel(Controls value, QWidget* parent) : QWid
     captureButtons->addWidget(saveCorrection);
     captureButtons->addWidget(deleteCapture);
     trainingLayout->addLayout(captureButtons);
+    exportDataset = new QPushButton("Export dataset…", training);
+    exportDataset->setObjectName("learningExportDataset");
+    exportDataset->setToolTip("Writes every decided capture as the next numbered dataset in a folder you choose. Examples keep the "
+                              "partition an earlier export gave them. OneDrive, network and linked folders are refused.");
+    trainingLayout->addWidget(exportDataset);
     layout->addWidget(training);
     outcome = Label({}, this, "learningOutcome");
     layout->addWidget(outcome);
@@ -243,6 +250,17 @@ LearningStudioPanel::LearningStudioPanel(Controls value, QWidget* parent) : QWid
                     "Delete this kept exchange and its correction? It is also listed as withdrawn, so a dataset already "
                     "exported with it is refused.") == QMessageBox::Yes)
                 controls.discard(id);
+        });
+    connect(exportDataset, &QPushButton::clicked, this,
+        [this]
+        {
+            if (!controls.exportDataset)
+                return;
+            const auto folder = QFileDialog::getExistingDirectory(this, "Folder for training datasets", exportFolder);
+            if (folder.isEmpty())
+                return;
+            exportFolder = folder;
+            controls.exportDataset(folder.toStdString());
         });
     SetSnapshot({});
 }
@@ -353,6 +371,9 @@ void LearningStudioPanel::SetBusy(const bool value)
     correction->setReadOnly(busy);
     saveCorrection->setEnabled(!busy && !shownCapture.empty());
     deleteCapture->setEnabled(!busy && !shownCapture.empty());
+    // Only an accepted correction can become a training example.
+    exportDataset->setEnabled(!busy && std::any_of(snapshot.captures.begin(), snapshot.captures.end(), [](const auto& capture)
+                                           { return capture.decision == revia::learning::LearningDecision::Accept; }));
 }
 
 void LearningStudioPanel::SetOutcome(const bool success, const std::string& message)
@@ -370,5 +391,6 @@ void LearningStudioPanel::ResetForCompanion()
     // Another companion's private exchange and draft go with its selection.
     shownCapture.clear();
     correction->clear();
+    exportFolder.clear();
     SetSnapshot({});
 }

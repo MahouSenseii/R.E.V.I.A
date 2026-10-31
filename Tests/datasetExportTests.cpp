@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -354,6 +355,39 @@ void TestOfferedToolsTravelWithTheExample()
     Check(!ReadDatasetCandidates(file(entry), read, error), "Tools that are not an array were accepted.");
 }
 
+void TestConversationsGroupInsteadOfTheirSession()
+{
+    // Forty chats in one runtime session, as an owner judges replies in one run of the app.
+    std::vector<DatasetCandidate> chats;
+    for (int number = 0; number < 40; ++number)
+    {
+        auto value = Candidate("chat-" + std::to_string(number));
+        value.sourceIds = {"conversation:chat-" + std::to_string(number)};
+        chats.push_back(value);
+    }
+    auto sameChat = Candidate("chat-0-later");
+    sameChat.sourceIds = {"conversation:chat-0"};
+    chats.push_back(sameChat);
+    auto unnamedA = Candidate("unnamed-a");
+    auto unnamedB = Candidate("unnamed-b");
+    chats.push_back(unnamedA);
+    chats.push_back(unnamedB);
+    const auto exported = Build(chats);
+    std::set<std::string> groups;
+    std::set<DatasetPartition> partitions;
+    for (int number = 0; number < 40; ++number)
+    {
+        const auto decision = DecisionFor(exported, "chat-" + std::to_string(number));
+        groups.insert(decision.groupId);
+        partitions.insert(decision.partition);
+    }
+    Check(groups.size() == 40 && partitions.size() > 1, "Chats from one runtime session were kept in one partition.");
+    Check(DecisionFor(exported, "chat-0-later").groupId == DecisionFor(exported, "chat-0").groupId,
+        "Two turns of the same chat were split into different groups.");
+    Check(DecisionFor(exported, "unnamed-a").groupId == DecisionFor(exported, "unnamed-b").groupId,
+        "Candidates that name no conversation no longer group by their session.");
+}
+
 void TestExportsAreNeverReplaced()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -383,7 +417,8 @@ void RunDatasetExportTests()
     std::string errors;
     for (const auto test : {TestReviewedCorrectionIsTheOnlyTarget, TestUnreviewedStaleOrUnsafeMaterialIsRejected, TestExportIsDeterministic,
              TestRelatedExamplesShareAPartition, TestEarlierPartitionsAreKept, TestWithdrawalIsRecheckedBeforeUse,
-             TestCandidateFileIsReadStrictly, TestOfferedToolsTravelWithTheExample, TestExportsAreNeverReplaced})
+             TestCandidateFileIsReadStrictly, TestOfferedToolsTravelWithTheExample, TestConversationsGroupInsteadOfTheirSession,
+             TestExportsAreNeverReplaced})
         try
         {
             test();

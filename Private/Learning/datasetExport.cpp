@@ -286,8 +286,13 @@ bool BuildDatasetExport(const std::vector<DatasetCandidate>& input, const std::s
     for (std::size_t index = 0; index < candidates.size(); ++index)
     {
         const auto& value = candidates[index];
-        std::vector<std::string> keys = {"session:" + value.origin.companionId + '/' + value.origin.sessionId,
-            "prompt:" + PromptDigest(value)};
+        std::vector<std::string> keys = {"prompt:" + PromptDigest(value)};
+        // A candidate that names the conversation it came from is grouped by that conversation,
+        // which its sources already join, rather than by the whole runtime session: chats in one
+        // session share no conversation context.
+        if (std::none_of(value.sourceIds.begin(), value.sourceIds.end(),
+                [](const std::string& source) { return source.starts_with("conversation:"); }))
+            keys.push_back("session:" + value.origin.companionId + '/' + value.origin.sessionId);
         if (!value.origin.taskId.empty())
             keys.push_back("task:" + value.origin.companionId + '/' + value.origin.taskId);
         for (const auto& source : AllSources(value))

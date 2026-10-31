@@ -504,6 +504,9 @@ if(BUILD_TESTING)
     revia_add_studio_check(ReviaLiveCaptureTests Tests/liveCaptureTests.cpp RunLiveCaptureTests)
     # Reads Tests/Fixture/liveCapture.json, the record the Python capture tests also read.
     set_tests_properties(ReviaLiveCaptureTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    revia_add_studio_check(ReviaLiveDatasetExportTests Tests/liveDatasetExportTests.cpp RunLiveDatasetExportTests)
+    # Compares with Tests/Fixture/liveCandidates.json, which revia_dataset_capture.py writes.
+    set_tests_properties(ReviaLiveDatasetExportTests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     revia_add_studio_check(ReviaCapabilityGapTests Tests/capabilityGapTests.cpp RunCapabilityGapTests)
     revia_add_studio_check(ReviaAudiencePrivacyTests Tests/audiencePrivacyTests.cpp RunAudiencePrivacyTests)
     revia_add_studio_check(ReviaAudienceInputTests Tests/audienceInputTests.cpp RunAudienceInputTests)

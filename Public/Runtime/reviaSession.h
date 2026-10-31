@@ -14,6 +14,7 @@
 #include "Runtime/sessionIdentity.h"
 #include "Runtime/learningStudio.h"
 #include "Learning/liveCapture.h"
+#include "Learning/liveDatasetExport.h"
 #include "Learning/qualityFeedback.h"
 #include "Policy/companionAuthority.h"
 #include "Agents/agentWorkflow.h"
@@ -302,6 +303,10 @@ class ReviaSession
         std::uint64_t& outRevision, std::string& outError, std::stop_token stopToken = {});
     // Deletes one capture with its correction and lists it as withdrawn.
     bool DiscardLiveCapture(const std::string& captureId, std::string& outError);
+    // Exports the decided captures as the next numbered dataset of this companion's lineage
+    // (RuntimeData/Learning/Datasets) into a new folder under `parent`. Private audience only.
+    bool ExportLiveDataset(const std::filesystem::path& parent, learning::LiveDatasetExport& outExport, std::string& outError,
+        std::stop_token stopToken = {});
     bool ReviseMemoryOwnerRequested(const memory::MemoryRevisionRequest& request, memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::vector<memory::MemoryCorrectionProposal> PendingMemoryCorrections();

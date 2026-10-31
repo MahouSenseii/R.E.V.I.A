@@ -1,0 +1,95 @@
+{
+  "schema": "revia-dataset-candidates-v1",
+  "candidates": [
+    {
+      "exampleId": "live:3a0d7cab7d2fd788",
+      "origin": {
+        "attemptId": "",
+        "companionId": "revia",
+        "generation": 3,
+        "policyVersion": 2,
+        "sessionId": "session-1",
+        "taskId": ""
+      },
+      "sourceIds": [
+        "request:cb6df3bc0e2e9594e8ea2471c4170a8872121f4170c0d0989f28952da1f4e42a",
+        "conversation:conversation-1"
+      ],
+      "prompt": [
+        {
+          "content": "You are Revia.",
+          "role": "system"
+        },
+        {
+          "content": "Hi there.",
+          "role": "user"
+        },
+        {
+          "content": "Hello!",
+          "role": "assistant"
+        },
+        {
+          "content": "How did the poem make you feel?",
+          "role": "user"
+        }
+      ],
+      "tools": [
+        {
+          "function": {
+            "description": "Evaluate arithmetic.",
+            "name": "calculator",
+            "parameters": {
+              "properties": {
+                "expression": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        }
+      ],
+      "response": "Honestly, the last line about the lake made me smile.",
+      "targetOrigin": "reviewed-correction",
+      "rejectedResponse": "The image shows a lake at dusk.",
+      "judgment": {
+        "audienceRevision": 4,
+        "correctsRecordId": "",
+        "criterion": "Answers the personal question that was asked.",
+        "criterionSatisfied": false,
+        "dependencies": {
+          "answer-contract": "authored-answer-obligation-v1",
+          "displayed-result": "e21adbc28ca3906e55f247dfd1e81c6d2fc6592ce559647e52188ecd31b7f29a",
+          "effective-llm-config-sha256": "b7d64a9221007dfd5390f7df6cd5b8f3ea4f82faa1237141e35ebf161f5511a1",
+          "loaded-profile-sha256": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+          "native-answer-contract": "judged-quality-v1"
+        },
+        "evidence": "The owner judged the reply a repeated image description.",
+        "issue": "answer-coverage",
+        "judgmentId": "judgment-1",
+        "origin": {
+          "attemptId": "",
+          "companionId": "revia",
+          "generation": 3,
+          "policyVersion": 2,
+          "sessionId": "session-1",
+          "taskId": ""
+        },
+        "privateContextExcluded": false,
+        "source": "owner-judgment",
+        "sourceId": "owner-review:judgment-1",
+        "target": "conversation-turn",
+        "targetDigest": "e21adbc28ca3906e55f247dfd1e81c6d2fc6592ce559647e52188ecd31b7f29a",
+        "targetId": "displayed-reply:reply-1"
+      },
+      "review": "accept",
+      "modelId": "Qwen3.5-9B-Q4_K_M.gguf",
+      "templateId": "chat-template-sha256:f24189f08c85a1eb19a737306c3a13e85462ee33d964f28108d64a2485fa2171",
+      "transformationVersion": "live-capture-v1"
+    }
+  ]
+}

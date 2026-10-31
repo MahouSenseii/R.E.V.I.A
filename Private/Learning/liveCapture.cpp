@@ -250,11 +250,11 @@ bool Build(const DeliveredReply& reply, const QualityFeedback& judgment, LiveCap
             settings[std::string(key)] = *found;
     const std::string requestDigest = audit::ContentDigest(exchange.requestBody);
     outCapture.captureId = audit::ContentDigest(prompt.dump() + '\n' + reply.displayed).substr(0, 16);
+    // What the input came from. The speaker is recorded beside them, not among them: as a source
+    // it would join every capture of one person into one dataset group.
     outCapture.sources = {"request:" + requestDigest};
     if (!reply.conversationId.empty())
         outCapture.sources.push_back("conversation:" + reply.conversationId);
-    if (!reply.participantId.empty())
-        outCapture.sources.push_back("participant:" + reply.participantId);
 
     json record = {{"captureId", outCapture.captureId},
         {"source", {{"kind", "live"}, {"version", LiveCaptureVersion}, {"requestBodySha256", requestDigest},
@@ -382,6 +382,73 @@ std::vector<LiveCaptureSummary> LiveCaptureStore::List(std::string& outError) co
         outError = std::to_string(unreadable) + (unreadable == 1 ? " kept capture or its correction could not be read and is not shown."
                                                                   : " kept captures or their corrections could not be read and are not shown.");
     return summaries;
+}
+
+bool LiveCaptureStore::CandidateFile(
+    std::string& outJson, std::size_t& outCandidates, std::size_t& outWaiting, std::string& outError) const
+{
+    outJson.clear();
+    outCandidates = 0;
+    outWaiting = 0;
+    outError.clear();
+    std::error_code error;
+    std::vector<std::filesystem::path> files;
+    if (std::filesystem::is_directory(LiveDirectory(), error))
+        for (const auto& entry : std::filesystem::directory_iterator(LiveDirectory(), error))
+            if (entry.path().extension() == ".json")
+                files.push_back(entry.path());
+    // The capture tool reads them in name order.
+    std::sort(files.begin(), files.end());
+    json candidates = json::array();
+    try
+    {
+        for (const auto& path : files)
+        {
+            const auto capture = json::parse(ReadText(path));
+            const auto captureId = capture.at("captureId").get<std::string>();
+            if (!CaptureId(captureId) || path.stem().string() != captureId || capture.at("source").at("kind") != "live")
+                return Refuse(outError, path.filename().string() + " in the captures folder is not a live capture.");
+            const auto correctionPath = CorrectionsDirectory() / (captureId + ".json");
+            if (!std::filesystem::exists(correctionPath, error))
+            {
+                ++outWaiting;
+                continue;
+            }
+            const auto saved = json::parse(ReadText(correctionPath));
+            const auto& failedDigest = capture.at("failedOutputSha256");
+            if (saved.at("schema") != CorrectionSchema || saved.at("captureId") != captureId || saved.at("failedOutputSha256") != failedDigest)
+                return Refuse(outError, "The saved correction of capture " + captureId + " belongs to another reply.");
+            const auto decision = ParseDecision(saved.at("decision").get<std::string>());
+            if (!decision)
+                return Refuse(outError, "Capture " + captureId + " has an unknown decision.");
+            if (*decision == LearningDecision::Pending)
+            {
+                ++outWaiting;
+                continue;
+            }
+            const auto failed = capture.at("failedOutput").get<std::string>();
+            const auto& judgment = capture.at("judgment");
+            if (judgment.at("targetDigest") != failedDigest || failedDigest != audit::ContentDigest(failed))
+                return Refuse(outError, "Capture " + captureId + "'s recorded judgment is not bound to its reply.");
+            const auto correction = saved.at("correction").get<std::string>();
+            if (*decision == LearningDecision::Accept && (correction.find_first_not_of(" \t\r\n") == std::string::npos || correction == failed))
+                return Refuse(outError, "Capture " + captureId + ": an accepted capture needs a correction that differs from the failed reply.");
+            const auto& provenance = capture.at("provenance");
+            candidates.push_back({{"exampleId", "live:" + captureId}, {"origin", capture.at("origin")}, {"sourceIds", capture.at("sources")},
+                {"prompt", capture.at("prompt")}, {"tools", capture.value("tools", json::array())}, {"response", correction},
+                {"targetOrigin", "reviewed-correction"}, {"rejectedResponse", failed}, {"judgment", judgment},
+                {"review", DecisionName(*decision)}, {"modelId", provenance.at("model")},
+                {"templateId", "chat-template-sha256:" + provenance.at("templateSha256").get<std::string>()},
+                {"transformationVersion", LiveCaptureVersion}});
+        }
+    }
+    catch (const std::exception&)
+    {
+        return Refuse(outError, "A kept capture or its saved correction could not be read, so nothing was exported.");
+    }
+    outCandidates = candidates.size();
+    outJson = json{{"schema", "revia-dataset-candidates-v1"}, {"candidates", std::move(candidates)}}.dump();
+    return true;
 }
 
 bool LiveCaptureStore::Correct(const std::string& captureId, const LearningDecision decision, const std::string& correction,
@@ -545,7 +612,11 @@ bool LiveCaptureStore::WithdrawMatching(
                     continue;
                 const auto record = json::parse(ReadText(entry.path()));
                 const auto sources = record.at("sources").get<std::vector<std::string>>();
-                if (!onlyCapture && source && std::find(sources.begin(), sources.end(), *source) == sources.end())
+                // A forgotten speaker is matched against the speaker each capture recorded.
+                const bool named = source && (source->starts_with("participant:")
+                                                     ? "participant:" + record.at("source").value("participantId", "") == *source
+                                                     : std::find(sources.begin(), sources.end(), *source) != sources.end());
+                if (!onlyCapture && source && !named)
                     continue;
                 // Each capture's own judged reply, which no other capture shares, and for a withdrawal
                 // of everything its conversation too. Neither its request, which a regenerated reply

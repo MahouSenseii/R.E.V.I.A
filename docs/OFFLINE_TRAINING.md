@@ -9,7 +9,8 @@ Status on 2026-10-31:
 
 - The dataset exporter, the training worker, the pinned asset installer, the llama.cpp
   conversion and check tool, the evaluation runner, the recorded-failure capture and the
-  live capture from the running companion exist.
+  live capture from the running companion, with its correction screen and in-app export,
+  exist.
 - Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
   build.
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
@@ -51,7 +52,12 @@ any later preference training.
 
 Grouping comes before splitting. Examples that share a session, a task, any source or an
 identical prompt form one group, and a salted hash of the group places it in train,
-validation or test. Given the previous manifest, an example keeps the partition it had.
+validation or test.
+
+A candidate that names the conversation it came from (a `conversation:` source) is grouped by
+that conversation instead of its session. Turns of one chat still stay together, but chats in
+one app run share no conversation context. Grouping by the run would keep everything judged
+in it in one partition. Given the previous manifest, an example keeps the partition it had.
 If a new example would join groups that earlier exports kept apart, the group follows its
 most protected member (test, then validation), and any member that would otherwise move
 is excluded instead. So nothing a model trained on can later appear as a held-out test
@@ -178,8 +184,9 @@ A live capture keeps:
 - the owner's recorded judgment, unchanged;
 - the request's sampling settings, the finish reason, the model, the template digest and
   the fingerprints;
-- its sources: `request:<digest>`, `conversation:<archived chat>` and
-  `participant:<speaker>`.
+- its sources: `request:<digest>` and `conversation:<archived chat>`;
+- its speaker, recorded beside the sources as `source.participantId`. As a source, it would
+  join every capture of one person into one dataset group, so no export could hold any out.
 
 It refuses, and the dialog shows why:
 
@@ -197,7 +204,7 @@ Withdrawal follows the companion's own deletes:
 
 - deleting a chat withdraws its captures;
 - forgetting every chat withdraws them all;
-- forgetting a speaker withdraws the captures of conversations with them.
+- forgetting a speaker withdraws the captures whose recorded speaker they are.
 
 In each case the capture file and its correction are deleted. The source is added to
 `RuntimeData/Learning/Captures/withdrawn.json`, together with each deleted capture's judged
@@ -242,9 +249,10 @@ capture and the draft.
 **Delete capture…** asks first. It then deletes the capture and its correction, and lists
 its judged reply as withdrawn.
 
-Exporting stays a separate step. Without `--corrections`, `candidates` reads the saved
-corrections beside live captures. It refuses one bound to another reply, and treats a
-capture without one as pending.
+Exporting stays a separate, deliberate step: **Export dataset…** (below), or the commands
+here. Without `--corrections`, `candidates` reads the saved corrections beside live
+captures. It refuses one bound to another reply, and treats a capture without one as
+pending.
 
 ```powershell
 python -I -B Tools\revia_dataset_capture.py candidates --captures <companion>\RuntimeData\Learning\Captures\live --output candidates.json --prefix live
@@ -256,6 +264,56 @@ shows the recorded issue, criterion and evidence as context, and asks only for a
 and a correction. In both ways, `candidates` uses the recorded judgment verbatim, and refuses
 a corrections entry that tries to change it. Recorded captures still need a corrections
 file.
+
+### Exporting from the companion
+
+**Export dataset…** in Training corrections is enabled once a capture is accepted. It asks
+for a parent folder and writes the next numbered dataset there, such as `revia-live-3`. It
+never replaces a folder.
+
+Because an export holds private prompts, the parent must be a plain local folder. These are
+refused, as the model installer refuses them:
+
+- OneDrive, which would upload it;
+- network folders;
+- links and reparse points anywhere on the path.
+
+Each companion keeps one lineage in `RuntimeData/Learning/Datasets`:
+
+- `lineage.json` holds the dataset name, a fixed salt, and each export's number, folder,
+  manifest digest and partition counts;
+- `manifests/` holds a copy of every export's manifest.
+
+Every export keeps the partition that any earlier export gave an example. That holds even
+when the example was deleted and judged again, or when a new turn of its chat joins it and
+changes its group. So nothing once held out can move into training.
+
+- The lineage is recorded before the export is written, so a failed write still reserves
+  those partitions.
+- A missing or changed manifest copy, or an unreadable lineage, refuses the export instead
+  of starting over.
+
+Validation and test are fixed at 10% each. The summary warns when the test partition has
+fewer than the evaluation plan's 5 cases.
+
+The export applies the companion's withdrawal list, and creates `withdrawn.json` if nothing
+has been withdrawn yet. The summary names that file, for a training job's
+`withdrawnSourcesPath`.
+
+The candidates are the same ones `revia_dataset_capture.py candidates --prefix live` makes
+from the saved corrections. `Tests/Fixture/liveCandidates.json`, written by that tool from the
+shared capture and correction fixtures, pins both.
+
+Nothing is written in either of these cases:
+
+- no accepted correction is eligible;
+- every eligible example falls in a held-out partition, so there would be nothing to train
+  on.
+
+The captures, corrections and lineage live in the companion's `RuntimeData`. If that folder is
+inside OneDrive, for example a checkout under `OneDrive\Documents`, they sync like the
+companion's memory and chats already do. Exports are kept out of OneDrive whatever the
+setting.
 
 Evidence:
 
@@ -295,12 +353,36 @@ Evidence:
   - a deleted capture's draft does not move to another capture;
   - a hidden list and a companion switch show nothing private.
 - The changed window sources and the desktop test also compiled against those headers.
+- `Tests/liveDatasetExportTests.cpp` (`ReviaLiveDatasetExportTests`, 4 tests) passed on
+  Linux, and as a Windows build (MinGW-w64 GCC 13.2 and LLD 18.1.3) under Wine 9. It covers:
+  - parity with the capture tool's candidates;
+  - numbered exports;
+  - partitions kept from any earlier export, through deletion, return and regrouping;
+  - the withdrawal list;
+  - each refusal, writing nothing: the folder rules (OneDrive, network, link, missing or
+    relative), a missing or changed manifest copy, an unreadable lineage, and an existing
+    folder.
+- Removing each of 8 export protections made it fail:
+  - keeping earlier partitions at all;
+  - keeping them from every earlier export, not just the last;
+  - the OneDrive, link and network refusals;
+  - refusing an existing folder;
+  - applying the withdrawal list;
+  - checking the manifest copies.
+- So did grouping live captures by session again, or listing the speaker among sources.
+- These tests found two faults before any commit:
+  - a loop over a member of a destroyed temporary, which would have silently dropped every
+    earlier partition;
+  - under Wine, a network path refused as "not a full path", because libstdc++ on Windows
+    does not count UNC paths as absolute.
 - The test was also built for Windows with MinGW-w64 GCC 13.2 and LLD 18.1.3, using CI's
   flags. That build passed all 5 tests under Wine 9, including Windows file replacement for
   correction revisions.
 - Windows CI run 41199765499 (commit `3181af9`) stopped at a link of
-  `ReviaLiveCaptureTests.exe` that printed nothing, so no test ran there; the retry is
-  recorded in the progress notes.
+  `ReviaLiveCaptureTests.exe` that printed nothing, so no test ran there. On the retry (run
+  41203033290, commit `ea226c6`) the same code built. These passed with the correction checks:
+  `ReviaLiveCaptureTests`, `ReviaQualityFeedbackRuntimeTests`, `Revia.DatasetCapturePolicy`
+  and `Revia.DesktopStopPolicy`.
 - `Tests/qualityFeedbackRuntimeTests.cpp` adds the session path. It covers:
   - holding, admissions and fingerprints;
   - refusing a second keep;
@@ -613,7 +695,8 @@ The `score` exit code is 0 for accept, 1 for reject and 2 for incomplete.
   3. Export them, aiming for enough distinct cases that the held-out partition reaches the
      evaluation plan's minimum of five.
 
-  Replies the owner judges in ordinary use can now add live captures to the same export.
+  Replies the owner judges in ordinary use can also be kept, corrected in the companion and
+  exported from it with **Export dataset…**, as numbered datasets of the companion's lineage.
 - **Evaluation runner on the host.** The runner exists, but on this branch it has only driven
   stand-ins for the C++ quality tools. Its first host run is also the first check that
   `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` work against an owned llama-server.

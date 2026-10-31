@@ -86,8 +86,9 @@ public:
     // Writes a new capture and never replaces one.
     bool Keep(const LiveCapture& capture, std::string& outError) const;
     // Deletes every kept capture that names `source`, with its correction, then records `source`
-    // and each deleted capture's judged reply (displayed-reply:...) as withdrawn. Nothing
-    // happens before the first capture is kept.
+    // and each deleted capture's judged reply (displayed-reply:...) as withdrawn. A
+    // participant:<id> source matches the speaker a capture recorded. Nothing happens before
+    // the first capture is kept.
     bool Withdraw(const std::string& source, std::size_t& outRemoved, std::string& outError) const;
     // The same for every kept capture, recording each one's conversation and judged reply.
     bool WithdrawAll(std::size_t& outRemoved, std::string& outError) const;
@@ -106,6 +107,11 @@ public:
     // Changes when a capture or correction is added, replaced or removed, so a caller can
     // keep List's result until then.
     [[nodiscard]] std::string Revision() const;
+    // The decided captures as the candidate interchange (revia-dataset-candidates-v1), exactly
+    // as revia_dataset_capture.py candidates --prefix live writes it from the saved
+    // corrections. Captures without a decision are counted in outWaiting. Any unreadable or
+    // inconsistent capture or correction refuses the whole file.
+    bool CandidateFile(std::string& outJson, std::size_t& outCandidates, std::size_t& outWaiting, std::string& outError) const;
 
     [[nodiscard]] std::filesystem::path LiveDirectory() const;
     [[nodiscard]] std::filesystem::path CorrectionsDirectory() const;

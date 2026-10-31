@@ -95,7 +95,8 @@ struct DatasetExport
 };
 
 // Groups related sessions, tasks, sources and identical prompts before splitting, so no
-// group straddles partitions. An example a previous export placed keeps that partition,
+// group straddles partitions. A candidate naming its conversation (a conversation:<id>
+// source) is grouped by that conversation instead of its session. An example a previous export placed keeps that partition,
 // and one whose group would move it is excluded instead. The same inputs give the same
 // bytes in any order.
 bool BuildDatasetExport(const std::vector<DatasetCandidate>& candidates, const std::set<std::string>& withdrawnSources,

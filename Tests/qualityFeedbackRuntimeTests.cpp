@@ -188,7 +188,8 @@ void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
     const auto sources = record["sources"].get<std::vector<std::string>>();
     Check(record["judgment"]["judgmentId"] == feedback.judgmentId && record["judgment"]["targetDigest"] == feedback.targetDigest &&
               record["judgment"]["dependencies"].contains("loaded-profile-sha256") && record["origin"]["sessionId"] == session.Stamp().sessionId &&
-              std::find(sources.begin(), sources.end(), "participant:owner") != sources.end(),
+              record["source"]["participantId"] == "owner" &&
+              std::none_of(sources.begin(), sources.end(), [](const std::string& source) { return source.starts_with("participant:"); }),
         "The kept capture lost the owner's judgment, the captured fingerprints, its origin or its speaker.");
     std::string again;
     Check(!session.CaptureJudgedTurn(feedback, again, error) && error.find("already kept") != std::string::npos,
@@ -250,10 +251,21 @@ void TestOwnerCorrectsKeptExchangesOnlyInPrivate()
               studio.captures[0].correction == correct && studio.captures[0].revision == 1,
         "A saved correction was not shown on the next refresh.");
 
+    // This one example falls in the test partition of this companion's lineage, so there is
+    // nothing to train on, and nothing is written.
+    const auto exports = fixture.root / "exports";
+    std::filesystem::create_directories(exports);
+    revia::learning::LiveDatasetExport exported;
+    Check(!session.ExportLiveDataset(exports, exported, error) && error.find("held-out partition") != std::string::npos &&
+              std::filesystem::is_empty(exports) && !std::filesystem::exists(paths.Resolve("RuntimeData/Learning/Datasets/lineage.json")),
+        "An export with nothing to train on was written: " + error);
+
     Check(session.SetAudience({revia::identity::AudienceKind::Public, "fixture-public", 0, {}}, error), error);
     studio = session.LearningStudio();
     Check(studio.captures.empty() && studio.captureStatus.find("not private") != std::string::npos,
         "Kept exchanges were listed for a public audience.");
+    Check(!session.ExportLiveDataset(exports, exported, error) && error.find("private") != std::string::npos,
+        "A public audience exported private training data.");
     Check(!session.CorrectLiveCapture(captureId, revia::learning::LearningDecision::Reject, "", revision, error) &&
               !session.DiscardLiveCapture(captureId, error),
         "A public audience changed a kept exchange.");
@@ -266,6 +278,34 @@ void TestOwnerCorrectsKeptExchangesOnlyInPrivate()
         "Deleting a kept exchange left it, its correction or its listing behind.");
     const auto withdrawn = nlohmann::json::parse(ReadFile(captures / "withdrawn.json")).get<std::vector<std::string>>();
     Check(withdrawn == std::vector<std::string>{feedback.targetId}, "The deleted exchange was not listed as withdrawn by its judged reply.");
+}
+
+void TestOwnerExportsCorrectionsAsNumberedDatasets()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    // In this companion's lineage the one example below falls in the training partition.
+    const CompanionPaths paths(fixture.root, {"dataset-bridge", "Synthetic dataset bridge", "assistant", false});
+    ReviaSession session(paths);
+    Prepare(session, fixture.root);
+    const auto feedback = Feedback(session);
+    std::string captureId, taskId, recordId, error;
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
+    Check(session.RecordQualityFeedback(feedback, taskId, recordId, error) && session.CaptureJudgedTurn(feedback, captureId, error), error);
+    std::uint64_t revision = 0;
+    Check(session.CorrectLiveCapture(captureId, revia::learning::LearningDecision::Accept,
+              "The linker needs the object file the build produced for that unit.", revision, error),
+        error);
+    const auto exports = fixture.root / "exports";
+    std::filesystem::create_directories(exports);
+    revia::learning::LiveDatasetExport exported;
+    Check(session.ExportLiveDataset(exports, exported, error), "The owner's corrections were not exported: " + error);
+    Check(exported.name == "dataset-bridge-live-1" && exported.train == 1 && std::filesystem::exists(exported.directory / "train.jsonl") &&
+              std::filesystem::exists(paths.Resolve("RuntimeData/Learning/Datasets/lineage.json")) &&
+              std::filesystem::exists(exported.withdrawnList),
+        "The export is not the companion's first numbered dataset with its lineage and withdrawal list.");
+    revia::learning::LiveDatasetExport second;
+    Check(session.ExportLiveDataset(exports, second, error) && second.name == "dataset-bridge-live-2",
+        "A second export did not take the next number: " + error);
 }
 
 void TestRuntimeMemorySelectionAndAudienceEpoch()
@@ -421,9 +461,10 @@ void RunQualityFeedbackRuntimeTests()
     TestPrivateCandidateCapturedConfigurationAndOrdinaryReview();
     TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn();
     TestOwnerCorrectsKeptExchangesOnlyInPrivate();
+    TestOwnerExportsCorrectionsAsNumberedDatasets();
     TestRuntimeMemorySelectionAndAudienceEpoch();
     TestCanceledQualityMutationsDoNotWriteAfterForegroundWait();
     TestCanceledQualityRetestPreservesAttemptHistory();
     std::cout << "Runtime quality feedback checks passed: owner authority, audience epochs, captured dependencies, ordinary reviewed "
-                 "receipts, judged exchanges kept only on request and withdrawn with their chats, and private owner corrections.\n";
+                 "receipts, judged exchanges kept only on request and withdrawn with their chats, private owner corrections and numbered dataset exports.\n";
 }

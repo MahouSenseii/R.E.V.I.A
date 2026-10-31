@@ -4,6 +4,7 @@
 #include "Memory/sensitiveContent.h"
 
 #include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <tuple>
 #include <utility>
@@ -307,6 +308,31 @@ bool ReviaSession::DiscardLiveCapture(const std::string& captureId, std::string&
     }
     InvalidateLiveCaptureIndex();
     appLogger.Log("Deleted kept dataset capture " + captureId + " at the owner's request.");
+    return true;
+}
+
+bool ReviaSession::ExportLiveDataset(
+    const std::filesystem::path& parent, learning::LiveDatasetExport& exported, std::string& error, const std::stop_token stopToken)
+{
+    exported = {};
+    if (OwnerMutationCanceled(stopToken, error))
+        return false;
+    if (Audience().kind != identity::AudienceKind::Private)
+    {
+        error = "Training datasets are exported only while the audience is private.";
+        return false;
+    }
+    // The lineage is named after the companion, in characters any folder name allows.
+    std::string lineage;
+    for (const char character : companionPaths.Descriptor().id)
+        lineage += std::isalnum(static_cast<unsigned char>(character)) ? static_cast<char>(std::tolower(static_cast<unsigned char>(character)))
+                                                                       : '-';
+    lineage = (lineage.empty() ? std::string("companion") : lineage) + "-live";
+    // The capture store's lock: a withdrawal or correction cannot land halfway through.
+    std::lock_guard heldLock(deliveredRepliesMutex);
+    if (!learning::ExportLiveDataset(CaptureStore(), companionPaths.Resolve("RuntimeData/Learning/Datasets"), lineage, parent, exported, error))
+        return false;
+    appLogger.Log("Exported training dataset " + exported.name + " at the owner's request.");
     return true;
 }
 

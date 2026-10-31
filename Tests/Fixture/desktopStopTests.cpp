@@ -235,8 +235,10 @@ struct ReviaWindowStopTests
         window.learningStudioPanel->SetSnapshot(learning);
         expect(window.findChild<QPlainTextEdit*>("learningCaptureCorrection")->toPlainText() == "Private correction draft sentinel A" &&
                    window.findChild<QPlainTextEdit*>("learningCaptureDetails")->toPlainText().contains("Private capture reply sentinel A") &&
-                   window.findChild<QPushButton*>("learningSaveCorrection")->isEnabled(),
-            "a refresh discarded the owner's correction draft, or the kept exchange was not shown for correction");
+                   window.findChild<QPushButton*>("learningSaveCorrection")->isEnabled() &&
+                   !window.findChild<QPushButton*>("learningExportDataset")->isEnabled(),
+            "a refresh discarded the owner's correction draft, the kept exchange was not shown for correction, or an undecided "
+            "capture could be exported");
         window.findChild<QLineEdit*>("learningInventoryDirectory")->setText("private-inventory-draft-A");
         window.findChild<QPlainTextEdit*>("learningReviewFeedback")->setPlainText("Private learning feedback sentinel A");
         window.learningStudioPanel->SetOutcome(false, "Private learning outcome sentinel A");
