@@ -10,6 +10,19 @@ deployment. Evidence is labeled by where it ran: **Linux fixture** (production s
 compiled with g++ 13.3 on Linux), **Windows CI** (GitHub's runner, not the owner's host),
 or **host** (not run).
 
+**Commit IDs.** On 2026-10-31 these commits were re-authored under the owner's identity, and
+the Claude co-author and session trailers were removed. Nothing else changed: each commit keeps
+its tree, dates and message text. The IDs cited in this file and in commit messages are the
+originals, which the recorded CI runs tested. Each maps to the re-authored commit with the
+identical tree, oldest first: `3ce3cd3` → `e82656d`, `9ec99e0` → `ef82bb2`, `fecf8ed` →
+`dbe13e4`, `d7fa1c9` → `fee3bcd`, `20f5237` → `21be855`, `58335fd` → `6401164`, `1e00faa` →
+`d6804bf`, `c02661d` → `5cff272`, `d35548c` → `63e28a8`, `db6114e` → `2f73b8c`, `7359817` →
+`ec63033`, `4df13d5` → `86c523a`, `64da0c5` → `644e379`, `e8d8f1c` → `ef81dd0`, `d5973d9` →
+`66de6a3`, `3181af9` → `acfdec5`, `ea226c6` → `d7aff7a`, `374fc20` → `1c9320d`, `3d35b15` →
+`8ae7567`, `c2959cf` → `c6f7964`, `cac4549` → `8a12c7e`, `89cf5da` → `a612256`, `0003651` →
+`3a9639a`, `0c12b49` → `8fb0dc9`, `c97d1fd` → `89b593f`, `8f1b940` → `6f97cf9`, `5215b47` →
+`ccf085d`, `782324b` → `1141d3f`.
+
 Inventory at `8aa4ca5`, from tracked code only:
 
 - Main's chat launch passes no `--batch-size`/`--ubatch-size` (only the embedding server
