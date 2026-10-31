@@ -39,13 +39,13 @@ class ObservedLocalModel
         {
             // An authenticated upstream must never become an unauthenticated local
             // bridge. No caller-provided header is forwarded to a different endpoint.
-            if (!apiKey.empty() && request.get_header_value("Authorization") != "Bearer " + apiKey)
-            {
-                response.status = 401;
-                response.set_content(R"({"error":"Evaluation proxy authentication required."})", "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-            return httplib::Server::HandlerResponse::Unhandled;
+            // A POST is refused by its handler instead, once the server has read its body:
+            // answering here closes the socket over unread bytes, and Windows then resets
+            // the connection, often before the client has read the 401.
+            if (Authorized(request) || request.method == "POST")
+                return httplib::Server::HandlerResponse::Unhandled;
+            Refuse(response);
+            return httplib::Server::HandlerResponse::Handled;
         });
         server.Get(".*",
             [this, upstreamPort](const auto& request, auto& response)
@@ -70,6 +70,8 @@ class ObservedLocalModel
             server.Post(path,
                 [this, upstreamPort](const auto& request, auto& response)
                 {
+                    if (!Authorized(request))
+                        return Refuse(response);
                     // Token accounting must not change the completion indices used by quality reviewers.
                     const auto upstream = Client(upstreamPort);
                     const auto received = upstream ? upstream->Post(request.path, request.body, "application/json") : httplib::Result{};
@@ -85,6 +87,8 @@ class ObservedLocalModel
         server.Post("/v1/chat/completions",
             [this, upstreamPort](const auto& request, auto& response)
             {
+                if (!Authorized(request))
+                    return Refuse(response);
                 std::size_t index;
                 std::string forwardedBody = request.body;
                 {
@@ -125,6 +129,15 @@ class ObservedLocalModel
                 }
                 response.status = received->status;
                 response.set_content(SanitizedBody(received->body), received->get_header_value("Content-Type"));
+            });
+        // Registered last, so it sees only a POST no route above took: refused unless
+        // authenticated, and otherwise not found.
+        server.Post(".*",
+            [this](const auto& request, auto& response)
+            {
+                if (!Authorized(request))
+                    return Refuse(response);
+                response.status = 404;
             });
         server.set_read_timeout(5, 0);
         server.set_write_timeout(5, 0);
@@ -419,6 +432,18 @@ class ObservedLocalModel
     }
 
     mutable std::mutex mutex;
+    // Every POST handler checks this first; see the pre-routing handler.
+    [[nodiscard]] bool Authorized(const httplib::Request& request) const
+    {
+        return apiKey.empty() || request.get_header_value("Authorization") == "Bearer " + apiKey;
+    }
+
+    static void Refuse(httplib::Response& response)
+    {
+        response.status = 401;
+        response.set_content(R"({"error":"Evaluation proxy authentication required."})", "application/json");
+    }
+
     const std::string apiKey;
     std::atomic<bool> closing{false};
     std::optional<std::uint64_t> completionSeed;

@@ -13,6 +13,11 @@ void Check(const bool condition, const char* message)
     }
 }
 
+void Check(const bool condition, const std::string& message)
+{
+    Check(condition, message.c_str());
+}
+
 class Upstream
 {
   public:
@@ -137,8 +142,23 @@ int main()
             }
             unauthenticated.set_default_headers({{"Authorization", "Bearer incorrect"}});
             const auto wrongKey = unauthenticated.Post("/v1/chat/completions", "{}", "application/json");
-            Check(wrongKey && wrongKey->status == 401 && protectedObserver.Requests().empty(),
-                "Wrong credentials must be refused before forwarding or observation.");
+            // Checked apart: this failed in Windows CI without saying which part did.
+            Check(static_cast<bool>(wrongKey), "A wrong-credential request got no response at all: " +
+                                                   std::string(wrongKey ? "" : httplib::to_string(wrongKey.error())) + ".");
+            Check(wrongKey->status == 401, "Wrong credentials got status " + std::to_string(wrongKey->status) + " instead of 401.");
+            Check(protectedObserver.Requests().empty(), "Wrong credentials must be refused before forwarding or observation.");
+            // A refusal that closed the socket over the unread body reset the connection on
+            // Windows, so the client often never read its 401. Each of these must read it.
+            for (int attempt = 0; attempt < 100; ++attempt)
+            {
+                httplib::Client wrong("127.0.0.1", protectedObserver.port);
+                wrong.set_default_headers({{"Authorization", "Bearer incorrect"}});
+                const auto refused = wrong.Post("/v1/chat/completions", std::string(4096, ' ') + "{}", "application/json");
+                Check(refused && refused->status == 401,
+                    "A refused request with a body did not reliably return its 401: " +
+                        (refused ? "status " + std::to_string(refused->status) : httplib::to_string(refused.error())) + ".");
+            }
+            Check(protectedObserver.Requests().empty(), "A refused request with a body reached the upstream.");
             httplib::Client authorized("127.0.0.1", protectedObserver.port);
             authorized.set_default_headers({{"Authorization", "Bearer " + key}});
             const auto models = authorized.Get("/v1/models");

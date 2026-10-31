@@ -339,6 +339,66 @@ Inventory at `8aa4ca5`, from tracked code only:
       video prerequisite skip rather than a pass. Both sources compile against Qt 6.4 here.
       The desktop binary itself only builds on Windows, so CI is the run check.
 
+    Windows CI: run 41226112183 (commit `8f1b940`) passed `Revia.NliDedupBenchmarkContract`.
+    It recorded `Revia.VideoPreview` as an approved optional video prerequisite skip, beside
+    `ReviaVideoDecoderTests`. Of 150 tests, 148 ran. Only `ReviaAudiencePrivacyTests` and
+    `Revia.ObservedLocalModel` (item 19) failed.
+18. **Delegated workers gave up when the person kept talking (2026-10-31).** This was a product
+    bug, and the intermittent `ReviaDelegationTests` failure at
+    `TestWorkersYieldToTheConversation`.
+    - By design, a worker's provider call may yield to the conversation three times and gives
+      up on the fourth. The code said the next try "waits for her turn to finish", but it only
+      waited for the inference slot.
+    - The scheduler frees that slot between a turn's own requests, such as a tool call and then
+      the reply. A retry could take it in that gap and lose again to the same turn's next
+      request. Two conversational turns could therefore use up a worker's yields, and the task
+      ended "Not established".
+    - Fix: after yielding, a worker waits until the session is no longer busy, which means
+      the foreground turn has ended. It still stops at once when cancelled or no longer
+      admitted, and holds no lock while it waits. Shutdown cancels the workflow and invalidates
+      the session before joining it, so a waiting worker exits.
+    - The test's failure text now includes each workflow node's last-attempt diagnostic and
+      provider-call count. That is how the cause showed: "4 calls: Provider execution did not
+      complete".
+    - A second, rarer race in the same suite: `TestChatDelegationReportsThroughHerReply` read
+      the event list as soon as the task showed as reported. Workflow notifications are drained
+      by whichever thread is already draining, so the "Accepted" event can follow a moment
+      later, and the check failed with "The work was accepted before she reported it". The
+      test now waits for that event before checking the order, and it still requires the
+      report to come first.
+
+    Evidence, as a Windows build under Wine 9, with the yield test looped in three processes
+    at once:
+    - Before the fix, the three processes failed after 4, 49 and 127 iterations, each time
+      with a worker at 4 provider calls.
+    - After the fix, 450 of 450 iterations passed.
+    - Full suite: the unfixed build failed 2 of 15 runs, both on yields. The fixed build hit
+      the ordering race once in 15 runs, and with the ordering fix as well it passed
+      30 of 30 runs.
+19. **The evaluation proxy's refusals reset on Windows (2026-10-31).** This was the
+    intermittent `Revia.ObservedLocalModel` failure, "Wrong credentials must be refused before
+    forwarding or observation", seen in runs 41156920820 and 41226112183.
+    - Cause: the observation proxy refused a wrong credential in httplib's pre-routing handler,
+      which runs before the request body is read. The client sends `Connection: close`, so the
+      proxy then closed the socket over the unread body.
+    - Windows answers that close with a connection reset, which can reach the client before it
+      reads the 401. The client then saw "Failed to read connection" instead. Nothing was ever
+      forwarded, so the refusal itself always held.
+    - Fix: a POST now continues to its handler, which refuses it after the body has been read.
+      Every POST handler checks the credential first, and a final catch-all refuses any other
+      POST path. All other methods are still refused before routing.
+    - A probe of every route and method gave the same results before and after: 401 for every
+      unauthenticated request, nothing forwarded, and authenticated traffic unchanged.
+    - The test now checks the three conditions separately, and refuses 100 wrong-credential
+      requests that each carry a 4 KiB body. Each one must read its 401.
+
+    Evidence, as Windows builds under Wine 9, whose sockets reproduce the reset:
+    - With the old proxy, 340 of 1,200 wrong-credential POSTs failed to read the 401. The
+      split check first named "Failed to read connection", and the new check failed in 3 of
+      3 runs.
+    - With the fix, 1,200 of 1,200 POSTs read their 401, and the test passed 20 of 20 runs.
+    - On Linux natively, the old proxy never reset in 4,000 tries.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
@@ -359,7 +419,8 @@ Failing in both runs:
 Intermittent:
 
 - `Revia.ObservedLocalModel`: its credential-refusal check failed in run 41156920820 and
-  passed in run 41159287582, on identical C++ sources (commits `58335fd` and `1e00faa`).
+  passed in run 41159287582, on identical C++ sources (commits `58335fd` and `1e00faa`). It
+  failed again in run 41226112183. Cause found and fixed in item 19.
 - `ReviaProactiveStateTests`: passed once, then failed in runs 41159287582 and 41164612553.
   A request after a prior native source finding lacked the profile's 0.75 temperature. It
   passed in runs 41175961328 and 41178797203, and failed again in run 41208914554. In run
@@ -372,11 +433,16 @@ Intermittent:
 - `ReviaDelegationTests`: failed in run 41175961328 (commit `4df13d5`) and again in run
   41221718153 (commit `0003651`), at `TestWorkersYieldToTheConversation`. An analysis worker
   preempted by the conversation failed instead of retrying. Neither commit changed delegation
-  code, and the test passed in the runs between.
+  code, and the test passed in the runs between. Cause found and fixed in item 18: a product
+  bug in how workers wait after yielding.
 
-Of these, `Revia.ObservedLocalModel`, `ReviaDelegationTests` and the three tests failing in
-both runs remain open as a separate queued task. The proactive-state failures, which also
-reached `Revia.Foundation`, are fixed on this branch (item 16).
+Fixed on this branch:
+- the proactive-state failures, which also reached `Revia.Foundation` (item 16);
+- `Revia.NliDedupBenchmarkContract` and `Revia.VideoPreview` (item 17);
+- `ReviaDelegationTests` (item 18);
+- `Revia.ObservedLocalModel` (item 19).
+
+Still open: `ReviaAudiencePrivacyTests`, which waits on the owner's host candidate patch.
 
 ## Wrap checkpoint, 2026-10-30, D5
 
