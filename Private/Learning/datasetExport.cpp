@@ -414,4 +414,88 @@ bool WriteDatasetExport(const DatasetExport& value, const std::filesystem::path&
     return true;
 }
 
+namespace
+{
+template <typename Enum>
+Enum Named(const json& value, const std::vector<std::pair<const char*, Enum>>& names)
+{
+    const auto text = value.get<std::string>();
+    for (const auto& [name, item] : names)
+        if (text == name)
+            return item;
+    throw std::runtime_error("unknown value '" + text + "'");
+}
+
+runtime::RuntimeStamp ReadStamp(const json& value)
+{
+    return {value.at("companionId").get<std::string>(), value.at("sessionId").get<std::string>(),
+        value.at("generation").get<std::uint64_t>(), value.value("taskId", std::string{}), value.value("attemptId", std::string{}),
+        value.at("policyVersion").get<std::uint64_t>()};
+}
+}
+
+bool ReadDatasetCandidates(const std::string& text, std::vector<DatasetCandidate>& outCandidates, std::string& outError)
+{
+    outCandidates.clear();
+    outError.clear();
+    try
+    {
+        const auto data = json::parse(text);
+        if (data.at("schema").get<std::string>() != "revia-dataset-candidates-v1")
+            throw std::runtime_error("unsupported schema");
+        const auto& items = data.at("candidates");
+        if (!items.is_array() || items.size() > MaximumCandidates)
+            throw std::runtime_error("candidates must be a bounded array");
+        for (const auto& item : items)
+        {
+            DatasetCandidate value;
+            value.exampleId = item.at("exampleId").get<std::string>();
+            value.origin = ReadStamp(item.at("origin"));
+            value.sourceIds = item.at("sourceIds").get<std::vector<std::string>>();
+            for (const auto& message : item.at("prompt"))
+                value.prompt.push_back({message.at("role").get<std::string>(), message.at("content").get<std::string>()});
+            value.response = item.at("response").get<std::string>();
+            value.rejectedResponse = item.value("rejectedResponse", std::string{});
+            value.targetOrigin = Named<DatasetTargetOrigin>(item.at("targetOrigin"),
+                {{"reviewed-correction", DatasetTargetOrigin::ReviewedCorrection}, {"verified-output", DatasetTargetOrigin::VerifiedOutput}});
+            const auto& judgment = item.at("judgment");
+            auto& feedback = value.judgment;
+            feedback.source = Named<QualityEvidenceSource>(judgment.at("source"),
+                {{"owner-judgment", QualityEvidenceSource::OwnerJudgment}, {"deterministic-acceptance", QualityEvidenceSource::DeterministicAcceptance}});
+            feedback.target = Named<QualityTarget>(judgment.at("target"),
+                {{"conversation-turn", QualityTarget::ConversationTurn}, {"agent-attempt", QualityTarget::AgentAttempt}});
+            feedback.issue = Named<QualityIssue>(judgment.at("issue"),
+                {{"answer-coverage", QualityIssue::AnswerCoverage}, {"unsupported-claim", QualityIssue::UnsupportedClaim},
+                    {"memory-continuity", QualityIssue::MemoryContinuity},
+                    {"missing-acceptance-evidence", QualityIssue::MissingAcceptanceEvidence}});
+            feedback.origin = ReadStamp(judgment.at("origin"));
+            feedback.audienceRevision = judgment.at("audienceRevision").get<std::uint64_t>();
+            feedback.judgmentId = judgment.at("judgmentId").get<std::string>();
+            feedback.sourceId = judgment.at("sourceId").get<std::string>();
+            feedback.targetId = judgment.at("targetId").get<std::string>();
+            feedback.targetDigest = judgment.at("targetDigest").get<std::string>();
+            feedback.criterion = judgment.at("criterion").get<std::string>();
+            feedback.evidence = judgment.at("evidence").get<std::string>();
+            feedback.dependencies = judgment.at("dependencies").get<std::map<std::string, std::string>>();
+            feedback.correctsRecordId = judgment.value("correctsRecordId", std::string{});
+            feedback.criterionSatisfied = judgment.at("criterionSatisfied").get<bool>();
+            feedback.privateContextExcluded = judgment.at("privateContextExcluded").get<bool>();
+            value.review = Named<LearningDecision>(item.at("review"),
+                {{"pending", LearningDecision::Pending}, {"accept", LearningDecision::Accept}, {"rework", LearningDecision::Rework},
+                    {"reject", LearningDecision::Reject}, {"need-evidence", LearningDecision::NeedEvidence}});
+            value.modelId = item.at("modelId").get<std::string>();
+            value.templateId = item.at("templateId").get<std::string>();
+            value.transformationVersion = item.at("transformationVersion").get<std::string>();
+            outCandidates.push_back(std::move(value));
+        }
+        return true;
+    }
+    catch (const std::exception& error)
+    {
+        outCandidates.clear();
+        outError = std::string("The dataset candidate file was refused: ") + error.what();
+        return false;
+    }
+}
+
 } // namespace revia::learning

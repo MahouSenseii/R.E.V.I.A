@@ -8,7 +8,7 @@ itself.
 Status on 2026-10-31:
 
 - The dataset exporter, the training worker, the pinned asset installer, the llama.cpp
-  conversion and check tool, and the evaluation runner exist.
+  conversion and check tool, the evaluation runner and the recorded-failure capture exist.
 - Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
   build.
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
@@ -66,12 +66,76 @@ ordering each made it fail. It is registered as `ReviaDatasetExportTests`.
 
 Still needed before a real export:
 
-1. The runtime must capture the exact serialized provider request from the correlated
-   Stage E turn trace. A transcript reconstruction is not the model's input.
+1. Live runtime capture. Recorded failures can now be captured exactly (see Capture from
+   recorded failures below). Turns from the running companion still have no capture path.
 2. A source list must be complete for derived data, such as frame extracts and captions.
-3. An owner review step must accept a correction.
-4. The withdrawal set must come from the attachment library's and memory's own Forget
-   receipts.
+3. The withdrawal set must come from the attachment library's and memory's own Forget
+   receipts. For now the host writes `withdrawn.json` by hand.
+
+## Capture from recorded failures
+
+`Tools/revia_dataset_capture.py` turns recorded failures into reviewed candidates without
+reconstructing anything.
+
+- `capture --report <report> --select case:turn` reads a quality report together with the
+  traffic its observation proxy saved beside it: `.requests.json`, `.responses.json`,
+  `.metadata.json` and `.provider.json`. It binds each selected turn to the single completion
+  request whose raw output, streamed or not, is that turn's model reply. When more than one
+  request matches, choose with `case:turn@requestIndex`; the tool never guesses.
+- `capture --request <file> --response <file>` takes one exact serialized request and raw
+  response from any other harness. It also needs `--profile-digest` and `--template-sha256`,
+  because an exact capture needs its model, profile and template.
+
+A capture keeps the messages the model received, byte for byte, together with the failed
+output and its digest, the request's sampling settings and their digest, and the source file
+digests. It refuses, with a reason, anything a text dataset cannot hold exactly: image or
+other non-text parts, tool-call history, and replies that are tool calls. Each capture also
+writes `corrections.template.json`.
+
+For each capture, the owner fills in:
+
+- a decision: accept, reject, rework or need-evidence;
+- the issue;
+- the criterion the reply failed;
+- the evidence for that judgment;
+- and, for an accepted capture, the correct reply.
+
+`candidates` turns the decided captures into the interchange file
+(`revia-dataset-candidates-v1`). Pending captures are left out and reported. The owner's
+decision becomes an owner-judgment quality receipt bound to the failed output's digest.
+
+`ReviaDatasetExport` passes that file to the existing exporter, which applies eligibility,
+grouping, partitions and withdrawal as before. Each capture's source is its own request, so
+independent cases split independently, and turns of one case share a group.
+
+```powershell
+python -I -B Tools\revia_dataset_capture.py capture --report <report.jsonl> --select <case>:<turn> --output D:\ReviaTraining\captures\stage-e-1
+# Fill corrections.template.json and save it as corrections.json.
+python -I -B Tools\revia_dataset_capture.py candidates --captures D:\ReviaTraining\captures\stage-e-1 --corrections corrections.json --output candidates.json
+<build>\ReviaDatasetExport.exe --candidates candidates.json --name stage-e --salt stage-e-1 --withdrawn withdrawn.json --output D:\ReviaTraining\datasets\stage-e-1
+```
+
+Of the Stage E failures:
+
+- the malformed-code replies and the stale-topic resume are text turns, so they can be
+  captured;
+- the image-feeling reply cannot, because its prompt carries the image and the training
+  path is text-only.
+
+Which files hold each failure depends on the harness that recorded it. Point the tool at the
+saved traffic, or at the exact request and response pair.
+
+Evidence, all on Linux:
+
+- `Tests/datasetCapture.test.py` passed its 5 tests against fixtures in the proxy's exact
+  format.
+- In the end-to-end test, the real C++ `ReviaDatasetExport` exported 8 accepted captures
+  (one rejection excluded with its reason). The training worker's own `verify_dataset` read
+  the result, then refused it once a source was withdrawn.
+- Each of these removals made a test fail: the single-request binding, the text-only rule,
+  and per-request sources.
+- `Tests/datasetExportTests.cpp` now also checks that `ReadDatasetCandidates` round-trips a
+  candidate and refuses unknown values, missing fields and non-text content.
 
 ## Training worker
 
@@ -344,10 +408,11 @@ The `score` exit code is 0 for accept, 1 for reject and 2 for incomplete.
 
 ## Remaining blockers
 
-- **Reviewed data.** No reviewed export exists yet. The capture steps under Dataset export
-  come first. The Stage E failures in `build/stage-e-20261030` retain their exact serialized
-  requests and raw responses, which makes them the natural first examples once the owner
-  writes corrections.
+- **Reviewed data.** The capture exists, but no reviewed export does yet. On the host:
+  1. Capture the Stage E text failures from `build/stage-e-20261030`.
+  2. Write their corrections.
+  3. Export them, aiming for enough distinct cases that the held-out partition reaches the
+     evaluation plan's minimum of five.
 - **Evaluation runner on the host.** The runner exists, but on this branch it has only driven
   stand-ins for the C++ quality tools. Its first host run is also the first check that
   `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` work against an owned llama-server.

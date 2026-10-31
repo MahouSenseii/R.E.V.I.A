@@ -1,0 +1,221 @@
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CAPTURE = load("revia_dataset_capture", ROOT / "Tools" / "revia_dataset_capture.py")
+WORKER = load("revia_training_worker", ROOT / "Tools" / "revia_training_worker.py")
+EXPORT_TOOL = os.environ.get("REVIA_DATASET_EXPORT", "")
+
+
+def sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def stream(text):
+    """A streamed llama.cpp reply, split across server-sent events."""
+    events = [{"choices": [{"delta": {"role": "assistant"}}]}]
+    events += [{"choices": [{"delta": {"content": text[index:index + 7]}}]} for index in range(0, len(text), 7)]
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+
+class Evidence:
+    """A quality report with the traffic its observation proxy saves beside it."""
+
+    def __init__(self, root, failing=8):
+        self.root = Path(root)
+        self.requests, self.responses, cases = [], [], []
+
+        def chat(messages, reply, streamed=True, path="/v1/chat/completions"):
+            index = len(self.requests)
+            body = {"model": "revia", "messages": messages, "temperature": 0.8, "dry_multiplier": 0.8, "stream": streamed,
+                    "chat_template_kwargs": {"enable_thinking": False}}
+            self.requests.append({"requestIndex": index, "method": "POST", "path": path, "body": json.dumps(body)})
+            payload = stream(reply) if streamed else json.dumps({"choices": [{"message": {"role": "assistant", "content": reply}}]})
+            self.responses.append({"requestIndex": index, "status": 200, "body": payload})
+            return index
+
+        system = {"role": "system", "content": "You are Revia."}
+        greeting = [system, {"role": "user", "content": "Hi there."}]
+        chat(greeting, "Hello!", streamed=False)
+        chat([{"role": "user", "content": "Classify: Hi there."}], '{"category":"greeting"}', streamed=False)
+        question = greeting + [{"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "How did the poem make you feel?"}]
+        self.feeling_request = chat(question, "The image shows a lake at dusk.")
+        self.requests.append({"requestIndex": len(self.requests), "method": "POST", "path": "/v1/embeddings", "body": "{}"})
+        self.responses.append({"requestIndex": len(self.requests) - 1, "status": 200, "body": "{}"})
+        cases.append({"record": "case", "id": "feeling", "verdict": "fail", "turns": [
+            {"input": "Hi there.", "reply": "Hello!", "model_reply": "Hello!", "failures": []},
+            {"input": "How did the poem make you feel?", "reply": "The image shows a lake at dusk.",
+             "model_reply": "The image shows a lake at dusk.", "failures": ["The personal question was not answered."]}]})
+        for number in range(failing):
+            code = f"def add{number}(a, b):\n    return a +"
+            chat([system, {"role": "user", "content": f"Write add{number}(a, b) in Python."}], code)
+            cases.append({"record": "case", "id": f"code-{number}", "verdict": "fail",
+                          "turns": [{"input": f"Write add{number}(a, b).", "reply": code, "model_reply": code, "failures": ["Incomplete code."]}]})
+        image = [system, {"role": "user", "content": [{"type": "text", "text": "Look."}, {"type": "image_url", "image_url": {"url": "data:"}}]}]
+        chat(image, "A cat.")
+        cases.append({"record": "case", "id": "image", "verdict": "fail", "turns": [{"input": "Look.", "reply": "A cat.", "model_reply": "A cat."}]})
+        self.duplicates = [chat([system, {"role": "user", "content": f"Say same {index}."}], "Same.") for index in range(2)]
+        cases.append({"record": "case", "id": "same", "verdict": "fail", "turns": [{"input": "Say same 1.", "reply": "Same.", "model_reply": "Same."}]})
+        self.report = self.root / "native-e1.jsonl"
+        self.report.write_bytes(("\n".join(json.dumps(item) for item in [{"record": "run"}] + cases) + "\n").encode())
+        for name, value in (("requests", self.requests), ("responses", self.responses),
+                            ("metadata", {"provider": "Qwen3.5-9B-Q4_K_M.gguf", "profileDigest": sha("profile")}),
+                            ("provider", {"inventory": {}, "properties": {"chat_template": "{{ messages }}"}})):
+            Path(f"{self.report}.{name}.json").write_text(json.dumps(value))
+
+    def capture(self, output, *selections):
+        arguments = ["capture", "--output", str(self.root / output), "--report", str(self.report)]
+        for selection in selections:
+            arguments += ["--select", selection]
+        return run(arguments)
+
+
+def run(arguments):
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = CAPTURE.main(arguments)
+    return code, json.loads(out.getvalue() or err.getvalue())
+
+
+def captures(directory):
+    return [json.loads(line) for line in (Path(directory) / "captures.jsonl").read_text().splitlines()]
+
+
+class DatasetCaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.evidence = Evidence(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_failing_turn_binds_to_its_exact_request(self):
+        code, result = self.evidence.capture("first", "feeling:2")
+        self.assertEqual((code, result["captured"], result["refused"]), (0, 1, []))
+        [item] = captures(self.evidence.root / "first")
+        request = json.loads(self.evidence.requests[self.evidence.feeling_request]["body"])
+        self.assertEqual(item["prompt"], request["messages"], "The capture did not keep the exact messages the model received.")
+        self.assertEqual((item["failedOutput"], item["source"]["requestIndex"]), ("The image shows a lake at dusk.", self.evidence.feeling_request))
+        self.assertEqual(item["failedOutputSha256"], sha(item["failedOutput"]))
+        self.assertEqual((item["provenance"]["model"], item["provenance"]["templateSha256"]),
+                         ("Qwen3.5-9B-Q4_K_M.gguf", sha("{{ messages }}")))
+        self.assertEqual(item["requestSettings"]["dry_multiplier"], 0.8)
+        template = json.loads((self.evidence.root / "first" / "corrections.template.json").read_text())
+        self.assertEqual(template[item["captureId"]]["decision"], "pending")
+        self.assertEqual(self.evidence.capture("again", "feeling:2")[1]["captured"], 1)
+        self.assertEqual(captures(self.evidence.root / "again")[0]["captureId"], item["captureId"], "A capture's identity is not stable.")
+        self.assertEqual(self.evidence.capture("first", "feeling:2")[0], 1, "An existing capture directory was replaced.")
+
+    def test_unbindable_or_inexact_turns_are_refused(self):
+        code, result = self.evidence.capture("mixed", "image:1", "same:1", "missing:1", "code-0:1")
+        self.assertEqual((code, result["captured"]), (0, 1))
+        reasons = {item["selection"]: item["reason"] for item in result["refused"]}
+        self.assertIn("non-text parts", reasons["image:1"])
+        self.assertIn("matches 2 recorded requests", reasons["same:1"])
+        self.assertIn("not in the report", reasons["missing:1"])
+        code, result = self.evidence.capture("chosen", f"same:1@{self.evidence.duplicates[1]}")
+        self.assertEqual((code, captures(self.evidence.root / "chosen")[0]["source"]["requestIndex"]), (0, self.evidence.duplicates[1]))
+        code, result = self.evidence.capture("none", "image:1")
+        self.assertEqual(code, 1)
+        self.assertIn("Nothing was captured", result["error"])
+
+    def test_pair_mode_needs_full_provenance(self):
+        request = self.evidence.root / "request.json"
+        request.write_text(json.dumps(self.evidence.requests[self.evidence.feeling_request]))
+        response = self.evidence.root / "response.txt"
+        response.write_text(stream("The image shows a lake at dusk."))
+        base = ["capture", "--request", str(request), "--response", str(response)]
+        code, result = run(base + ["--output", str(self.evidence.root / "pair-a")])
+        self.assertEqual(code, 1)
+        self.assertIn("must all be known", result["error"])
+        code, _ = run(base + ["--output", str(self.evidence.root / "pair-b"), "--profile-digest", sha("profile"), "--template-sha256", sha("t")])
+        self.assertEqual(code, 0)
+        self.assertEqual(captures(self.evidence.root / "pair-b")[0]["source"]["kind"], "pair")
+
+    def corrections(self, directory, decisions):
+        template = json.loads((Path(directory) / "corrections.template.json").read_text())
+        for capture, (decision, correction) in zip(captures(directory), decisions):
+            template[capture["captureId"]].update(decision=decision, correction=correction,
+                                                  criterion="Answers the question that was asked.", evidence="Owner review of Stage E.")
+        path = Path(directory) / "corrections.json"
+        path.write_text(json.dumps(template))
+        return path
+
+    def test_candidates_follow_the_owner_decisions(self):
+        self.evidence.capture("decided", "feeling:2", "code-0:1", "code-1:1")
+        directory = self.evidence.root / "decided"
+        corrections = self.corrections(directory, [("accept", "It made me smile."), ("reject", ""), ("pending", "")])
+        code, result = run(["candidates", "--captures", str(directory), "--corrections", str(corrections),
+                            "--output", str(directory / "candidates.json")])
+        self.assertEqual((code, result["candidates"], len(result["waiting"])), (0, 2, 1))
+        document = json.loads((directory / "candidates.json").read_text())
+        self.assertEqual(document["schema"], "revia-dataset-candidates-v1")
+        accepted, rejected = document["candidates"]
+        self.assertEqual((accepted["review"], rejected["review"]), ("accept", "reject"))
+        self.assertEqual(accepted["judgment"]["targetDigest"], sha(accepted["rejectedResponse"]))
+        self.assertEqual(accepted["judgment"]["origin"], accepted["origin"])
+        self.assertEqual(set(accepted["judgment"]["dependencies"]),
+                         {"loaded-profile-sha256", "effective-llm-config-sha256", "capture-transformation"})
+        for decisions, message in (([("accept", "The image shows a lake at dusk.")], "differs from the failed reply"),
+                                   ([("maybe", "x")], "unknown decision")):
+            path = self.corrections(directory, decisions)
+            code, result = run(["candidates", "--captures", str(directory), "--corrections", str(path),
+                                "--output", str(directory / f"other-{len(message)}.json")])
+            self.assertEqual(code, 1)
+            self.assertIn(message, result["error"])
+
+    @unittest.skipUnless(EXPORT_TOOL and Path(EXPORT_TOOL).is_file(), "Set REVIA_DATASET_EXPORT to the built ReviaDatasetExport")
+    def test_export_tool_makes_a_dataset_the_worker_reads(self):
+        selections = ["feeling:2"] + [f"code-{number}:1" for number in range(8)]
+        self.evidence.capture("all", *selections)
+        directory = self.evidence.root / "all"
+        decisions = [("reject", "")] + [("accept", f"def add{number}(a, b):\n    return a + b") for number in range(8)]
+        corrections = self.corrections(directory, decisions)
+        run(["candidates", "--captures", str(directory), "--corrections", str(corrections), "--output", str(directory / "candidates.json")])
+        withdrawn = self.evidence.root / "withdrawn.json"
+        withdrawn.write_text("[]")
+        export = self.evidence.root / "export"
+        completed = subprocess.run([EXPORT_TOOL, "--candidates", str(directory / "candidates.json"), "--name", "stage-e",
+                                    "--salt", "stage-e-1", "--output", str(export), "--withdrawn", str(withdrawn)],
+                                   capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["eligible"], 8)
+        self.assertEqual([item["reason"] for item in summary["excluded"]], ["its review has not accepted it"])
+        manifest = (export / "manifest.json").read_bytes()
+        groups = {example["group"] for example in json.loads(manifest)["examples"] if example["eligible"]}
+        self.assertEqual(len(groups), 8, "Independent cases from one campaign were merged into one group, so none can be held out.")
+        job = {"dataset": {"directory": str(export), "manifestSha256": hashlib.sha256(manifest).hexdigest()},
+               "withdrawnSourcesPath": str(withdrawn)}
+        if summary["partitions"]["train"]:
+            train, validation, identity = WORKER.verify_dataset(job)
+            self.assertEqual(identity["trainExamples"], summary["partitions"]["train"])
+            for record in train:
+                self.assertEqual(record["messages"][-1]["role"], "assistant")
+                self.assertNotEqual(record["messages"][-1]["content"], record["rejected"])
+        source = json.loads(manifest)["examples"][0]["sources"][0]
+        withdrawn.write_text(json.dumps([source]))
+        with self.assertRaisesRegex(ValueError, "withdrawn since the export"):
+            WORKER.verify_dataset(job)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

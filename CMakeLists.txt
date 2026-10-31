@@ -785,6 +785,13 @@ if(BUILD_TESTING)
         target_compile_options(ReviaAnswerGateLive PRIVATE -Wa,-mbig-obj)
         target_link_options(ReviaAnswerGateLive PRIVATE -static-libgcc -static-libstdc++)
     endif()
+    # Writes a reviewed training dataset export from a capture's candidate file through the
+    # Learning/datasetExport owner. docs/OFFLINE_TRAINING.md describes the capture.
+    add_executable(ReviaDatasetExport Tools/Quality/datasetExportTool.cpp)
+    revia_link_foundation(ReviaDatasetExport)
+    if(MINGW)
+        target_link_options(ReviaDatasetExport PRIVATE -static-libgcc -static-libstdc++)
+    endif()
     target_include_directories(ReviaStudioLive PRIVATE Tests)
     revia_link_foundation(ReviaStudioLive)
     if(MINGW)
@@ -992,6 +999,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaAdapterExport.test.py")
         add_test(NAME Revia.AdapterEvaluationPolicy COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaAdapterEvaluation.test.py")
+        add_test(NAME Revia.DatasetCapturePolicy COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/datasetCapture.test.py")
+        # Runs the real exporter, so the capture is checked against the owner that consumes it.
+        set_tests_properties(Revia.DatasetCapturePolicy PROPERTIES ENVIRONMENT "REVIA_DATASET_EXPORT=$<TARGET_FILE:ReviaDatasetExport>")
     endif()
     if(TARGET ReviaDesktop)
         add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp

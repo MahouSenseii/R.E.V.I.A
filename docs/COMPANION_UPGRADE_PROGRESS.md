@@ -108,6 +108,19 @@ Inventory at `8aa4ca5`, from tracked code only:
    and asserted. The C++ quality tools have only been driven through stand-ins here. Windows
    CI passed it with the other branch checks (run 41164612553, commit `db6114e`).
 
+9. **Capture from recorded failures (2026-10-31).** `Tools/revia_dataset_capture.py` takes
+   either a quality report with its saved observation-proxy traffic, or one exact request and
+   response pair. It binds each selected failing turn to the single request whose raw output
+   is that reply, keeps the exact messages, refuses image, tool-call and ambiguous turns, and
+   writes a corrections template for the owner. `candidates` produces
+   `revia-dataset-candidates-v1`. The new `ReviaDatasetExport` reads that file with the
+   strict `ReadDatasetCandidates` and exports through the existing `Learning/datasetExport`.
+   Linux: 5 tests passed; the end-to-end test ran the real C++ exporter, and the training
+   worker read and later refused the result. Three deliberate removals each failed a test, and
+   the C++ reader's round-trip test passed. Windows CI is set to run the same end-to-end test
+   with the built exporter. The Stage E text failures can be captured on the host; the
+   image-feeling failure cannot, because the training path is text-only.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins

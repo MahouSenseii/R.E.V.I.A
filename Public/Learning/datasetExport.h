@@ -106,4 +106,9 @@ bool StaleDatasetExamples(const std::string& manifestBytes, const std::set<std::
 // Writes a new directory and never replaces one, so an export stays immutable.
 bool WriteDatasetExport(const DatasetExport& value, const std::filesystem::path& directory, std::string& outError);
 
+// Reads the candidate file a capture tool writes (schema "revia-dataset-candidates-v1").
+// Strict: an unknown enumeration value, a missing field or non-text message content refuses
+// the whole file. Eligibility stays with BuildDatasetExport.
+bool ReadDatasetCandidates(const std::string& json, std::vector<DatasetCandidate>& outCandidates, std::string& outError);
+
 } // namespace revia::learning

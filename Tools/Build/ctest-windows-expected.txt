@@ -143,5 +143,6 @@ Revia.TrainingWorkerPolicy
 Revia.TrainingAssetInstaller
 Revia.AdapterExportPolicy
 Revia.AdapterEvaluationPolicy
+Revia.DatasetCapturePolicy
 ReviaReminderIntentTests
 Revia.VideoPublicationLane

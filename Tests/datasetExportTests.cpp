@@ -249,6 +249,61 @@ void TestWithdrawalIsRecheckedBeforeUse()
     Check(!StaleDatasetExamples("[]", {}, stale, error), "A manifest without the dataset schema was accepted.");
 }
 
+// The interchange shape a capture tool writes.
+json CandidateFileEntry(const DatasetCandidate& value)
+{
+    const auto stamp = [](const revia::runtime::RuntimeStamp& origin)
+    {
+        return json{{"companionId", origin.companionId}, {"sessionId", origin.sessionId}, {"generation", origin.generation},
+            {"taskId", origin.taskId}, {"attemptId", origin.attemptId}, {"policyVersion", origin.policyVersion}};
+    };
+    json prompt = json::array();
+    for (const auto& message : value.prompt)
+        prompt.push_back({{"role", message.role}, {"content", message.content}});
+    const auto& feedback = value.judgment;
+    return {{"exampleId", value.exampleId}, {"origin", stamp(value.origin)}, {"sourceIds", value.sourceIds}, {"prompt", prompt},
+        {"response", value.response}, {"targetOrigin", "reviewed-correction"}, {"rejectedResponse", value.rejectedResponse},
+        {"judgment", {{"source", "owner-judgment"}, {"target", "conversation-turn"}, {"issue", "answer-coverage"},
+                         {"judgmentId", feedback.judgmentId}, {"sourceId", feedback.sourceId}, {"targetId", feedback.targetId},
+                         {"targetDigest", feedback.targetDigest}, {"criterion", feedback.criterion}, {"evidence", feedback.evidence},
+                         {"dependencies", feedback.dependencies}, {"criterionSatisfied", false}, {"privateContextExcluded", false},
+                         {"audienceRevision", feedback.audienceRevision}, {"origin", stamp(feedback.origin)}}},
+        {"review", "accept"}, {"modelId", value.modelId}, {"templateId", value.templateId},
+        {"transformationVersion", value.transformationVersion}};
+}
+
+void TestCandidateFileIsReadStrictly()
+{
+    const auto entry = CandidateFileEntry(Candidate("a"));
+    const auto file = [](const json& item) { return json{{"schema", "revia-dataset-candidates-v1"}, {"candidates", {item}}}.dump(); };
+    std::vector<DatasetCandidate> read;
+    std::string error;
+    Check(ReadDatasetCandidates(file(entry), read, error) && read.size() == 1, "A well-formed candidate file was refused: " + error);
+    Check(read[0].prompt.size() == 2 && read[0].response == Candidate("a").response &&
+              read[0].judgment.targetDigest == Candidate("a").judgment.targetDigest && read[0].review == LearningDecision::Accept &&
+              read[0].targetOrigin == DatasetTargetOrigin::ReviewedCorrection,
+        "The candidate file did not round-trip its fields.");
+    Check(DecisionFor(Build(read), "a").eligible, "A candidate read from the interchange file was not eligible.");
+
+    std::vector<json> broken;
+    auto unknownReview = entry;
+    unknownReview["review"] = "maybe";
+    broken.push_back(unknownReview);
+    auto noCriterion = entry;
+    noCriterion["judgment"].erase("criterion");
+    broken.push_back(noCriterion);
+    auto image = entry;
+    image["prompt"][1]["content"] = json::array({json{{"type", "image_url"}}});
+    broken.push_back(image);
+    auto unknownIssue = entry;
+    unknownIssue["judgment"]["issue"] = "vibes";
+    broken.push_back(unknownIssue);
+    for (const auto& item : broken)
+        Check(!ReadDatasetCandidates(file(item), read, error) && read.empty(), "A malformed candidate was accepted: " + item.dump());
+    Check(!ReadDatasetCandidates(json{{"schema", "other"}, {"candidates", json::array()}}.dump(), read, error),
+        "A candidate file with another schema was accepted.");
+}
+
 void TestExportsAreNeverReplaced()
 {
     revia::tests::ScopedTestDirectory directory;
@@ -278,7 +333,7 @@ void RunDatasetExportTests()
     std::string errors;
     for (const auto test : {TestReviewedCorrectionIsTheOnlyTarget, TestUnreviewedStaleOrUnsafeMaterialIsRejected, TestExportIsDeterministic,
              TestRelatedExamplesShareAPartition, TestEarlierPartitionsAreKept, TestWithdrawalIsRecheckedBeforeUse,
-             TestExportsAreNeverReplaced})
+             TestCandidateFileIsReadStrictly, TestExportsAreNeverReplaced})
         try
         {
             test();
