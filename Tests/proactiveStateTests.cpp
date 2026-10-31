@@ -67,6 +67,20 @@ bool IsSourceAssessment(const json& request)
            properties.contains("consequence");
 }
 
+// The memory agent classifies each finished private turn on its own background thread: a
+// JSON-mode request whose one user message is an envelope carrying the user's message.
+bool IsMemoryClassification(const json& request)
+{
+    if (request.contains("stop") || request.value("response_format", json::object()).value("type", "") != "json_object")
+        return false;
+    const auto messages = request.value("messages", json::array());
+    if (messages.size() != 2 || messages[1].value("role", "") != "user" || !messages[1].contains("content") ||
+        !messages[1]["content"].is_string())
+        return false;
+    const auto envelope = json::parse(messages[1]["content"].get<std::string>(), nullptr, false);
+    return envelope.is_object() && envelope.contains("user_message");
+}
+
 class WorkingDirectory
 {
 public:
@@ -91,6 +105,18 @@ public:
         server.Post("/v1/chat/completions", [this](const auto& request, auto& response)
         {
             const auto body = json::parse(request.body);
+            if (IsMemoryClassification(body))
+            {
+                // It can land after the reply at any moment. It is kept apart from the requests
+                // checks read as the turn's own, and never takes a reaction meant for that turn,
+                // such as rejectNext or the background-vision hold.
+                {
+                    std::lock_guard lock(mutex);
+                    memoryClassifications.push_back(body);
+                }
+                response.set_content(R"({"choices":[{"message":{"content":"A metadata fixture response."},"finish_reason":"stop"}]})", "application/json");
+                return;
+            }
             {
                 std::lock_guard lock(mutex);
                 requests.push_back(body);
@@ -177,6 +203,7 @@ public:
         return requests.back();
     }
     std::size_t Count() { std::lock_guard lock(mutex); return requests.size(); }
+    std::size_t MemoryClassifications() { std::lock_guard lock(mutex); return memoryClassifications.size(); }
     std::string RawRequest(std::size_t index)
     {
         std::lock_guard lock(mutex);
@@ -207,6 +234,7 @@ public:
     std::mutex mutex;
     std::vector<json> requests;
     std::vector<std::string> rawRequests;
+    std::vector<json> memoryClassifications;
     std::string conversationReply = "That leaf pattern has a surprisingly orderly structure.";
     std::string conversationFinishReason = "stop";
     std::string assessmentReply = SourceFinding().dump();
@@ -2215,6 +2243,32 @@ void TestRepeatedEmbeddingsAreCached()
     Check(backend.embeddingRequests == afterFill + 2, "Cached embeddings survived a settings change.");
 }
 
+void TestBackgroundMemoryClassificationNeverStandsInForTheReply()
+{
+    // The memory agent classifies a finished private turn on its own thread, so its request
+    // can reach the backend after the reply at any moment. Checks that read it in place of the
+    // reply failed at random on its fixed 0.1 temperature. Waiting for it makes that order
+    // certain here.
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Fixture fixture(backend.port);
+    fixture.profile.bHasTemperatureOverride = true;
+    fixture.profile.temperature = 0.75F;
+    fixture.router.ApplyProfile(fixture.profile);
+    const auto reply = fixture.runtime.Reply("My favourite leaf is the maple.", fixture.profile, true, false);
+    const auto afterReply = backend.Count();
+    Check(reply.succeeded && afterReply > 0, "The private memory fixture turn did not reach generation.");
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (backend.MemoryClassifications() == 0 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+    Check(backend.MemoryClassifications() > 0,
+        "The fixture no longer recognises the memory agent's classification request, so it could stand in for a reply again.");
+    Check(backend.Count() == afterReply && backend.Last().contains("stop"),
+        "A background memory classification was recorded as the turn's own request.");
+    CheckRequestTemperature(backend.Last(), 0.75, "A background memory classification stood in for the conversation reply.");
+}
+
 void RunProactiveStateTests()
 {
     TestNativeSavedSourceUsesHeldConversationDeliveryWithoutModelRewrite();
@@ -2242,6 +2296,7 @@ void RunProactiveStateTests()
     TestEditorCommentAndCurrentFollowupKeepTheConversationPipeline();
     TestEditorFollowupPreservesUnavailableSavedSourceLimits();
     TestVerifiedSavedSourceTemperatureIsPrivateAndTurnLocal();
+    TestBackgroundMemoryClassificationNeverStandsInForTheReply();
     TestAvailableSavedSourceCapsOnlyActualCodeExplanations();
     TestLegacySavedSourceTextDoesNotGrantVerifiedAvailability();
     TestSourceExplanationFlagReachesEachTierAndResetsWithPosture();

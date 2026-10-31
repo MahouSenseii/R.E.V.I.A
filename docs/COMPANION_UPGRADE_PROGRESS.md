@@ -283,6 +283,12 @@ Inventory at `8aa4ca5`, from tracked code only:
     cross-built with MinGW-w64 GCC 13.2 against a stub XML library, because this container's
     network policy refused the expat download. Neither tool parses XML, and Windows CI builds
     them with the real library.
+
+    Windows CI: run 41221718153 (commit `0003651`, which carries this fix) built both tools
+    with MinGW 13.1 and the real expat. It ran 149 of 150 tests, the other being the approved
+    optional video skip. `Revia.AdapterEvaluationPolicy` passed with the new identity test, as
+    did every other branch check. Besides the three failures `main` shares, two intermittent
+    tests failed: `ReviaProactiveStateTests` (item 16) and `ReviaDelegationTests`.
 15. **Adapter promotion deferred (owner's decision, 2026-10-31).** Adapters stay
     evaluation-only, and nothing was built to serve one. No C++ or PowerShell source passes
     `--lora`; only the evaluation runner's own llama-server does. How an accepted adapter
@@ -290,6 +296,27 @@ Inventory at `8aa4ca5`, from tracked code only:
     adapter that is also the separate decision to run a 4B model in Revia at all. Rejected
     alternatives: a gated 4B Main profile with receipts and rollback, and a separate 4B tier
     beside the 9B Main.
+16. **Intermittent proactive-state failures (2026-10-31).** `ReviaProactiveStateTests`, and
+    `Revia.Foundation`, which compiles the same `Tests/proactiveStateTests.cpp`, failed at
+    random on three different reply-temperature checks. Product sampling was never wrong.
+    - Cause: after a private turn, the memory agent classifies it on its own background
+      thread. That classification is a JSON-mode request at temperature 0.1. The test backend
+      recorded it like any other request, so when it landed after the reply, `Last()` returned
+      it in place of the reply. A diagnostic Windows build under Wine showed it arriving between
+      turns.
+    - The same race could take the backend's one-shot `rejectNext`, end its background-vision
+      hold early, or shift `Count()`. Worse, a privacy check reading `Last()` could examine the
+      classification instead of the reply and pass wrongly.
+    - Fix: the backend recognises the classification by its envelope: JSON mode, no stop
+      markers, and one user message carrying `user_message`. It answers it as before and keeps
+      it apart from the requests every check reads. All 64 `Last()` checks keep their wording.
+    - A new test waits until the real agent's classification has arrived after a private
+      turn, which makes the losing order certain. It then checks that the reply is still
+      `Last()`. Recording classifications as before failed it in 3 of 3 runs. It also fails if
+      the classifier's envelope changes and the backend stops recognising it.
+
+    Evidence, as a Windows build under Wine 9: the unfixed suite passed 60 of 60 runs, three at
+    a time, so the race needs CI's timing. The fixed suite also passed 60 of 60.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
@@ -314,21 +341,21 @@ Intermittent:
   passed in run 41159287582, on identical C++ sources (commits `58335fd` and `1e00faa`).
 - `ReviaProactiveStateTests`: passed once, then failed in runs 41159287582 and 41164612553.
   A request after a prior native source finding lacked the profile's 0.75 temperature. It
-  passed in runs 41175961328 and 41178797203, and failed again in run 41208914554.
+  passed in runs 41175961328 and 41178797203, and failed again in run 41208914554. In run
+  41221718153 it failed at a third check of the same kind, "An unavailable saved reference
+  changed ordinary conversation sampling". Cause found and fixed: item 16.
 - `Revia.Foundation`: failed once, in run 41208914554, at "A verified private saved reference
   changed a public reply's sampling". That check is in `Tests/proactiveStateTests.cpp`, which
-  `ReviaTests` also compiles, and is the same kind as the `ReviaProactiveStateTests` failure:
-  the fixture's last recorded request did not carry the expected temperature. The C++ sources
-  were identical to run 41205772282, where it passed.
-- `ReviaDelegationTests`: failed once, in run 41175961328 (commit `4df13d5`), at
-  `TestWorkersYieldToTheConversation`. An analysis worker preempted by the conversation
-  failed instead of retrying. That commit's only production change was an uncalled reader,
-  and the test passed in the three runs before it and in run 41178797203.
+  `ReviaTests` also compiles. It had the same cause, fixed in item 16. The C++ sources were
+  identical to run 41205772282, where it passed.
+- `ReviaDelegationTests`: failed in run 41175961328 (commit `4df13d5`) and again in run
+  41221718153 (commit `0003651`), at `TestWorkersYieldToTheConversation`. An analysis worker
+  preempted by the conversation failed instead of retrying. Neither commit changed delegation
+  code, and the test passed in the runs between.
 
-Of these, `Revia.ObservedLocalModel`, `ReviaProactiveStateTests` and the three tests failing
-in both runs are queued as a separate task. `ReviaDelegationTests` and `Revia.Foundation` were
-found after that task was queued; the latter's failing check is in the same source file as
-`ReviaProactiveStateTests`.
+Of these, `Revia.ObservedLocalModel`, `ReviaDelegationTests` and the three tests failing in
+both runs remain open as a separate queued task. The proactive-state failures, which also
+reached `Revia.Foundation`, are fixed on this branch (item 16).
 
 ## Wrap checkpoint, 2026-10-30, D5
 
