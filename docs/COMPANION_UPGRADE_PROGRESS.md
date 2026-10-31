@@ -158,9 +158,10 @@ Inventory at `8aa4ca5`, from tracked code only:
       The test switched the audience to public and back, then reused the judgment made
       before the switch. The session correctly refused it as stale, at admission, so the
       held-reply check the assertion named was never reached.
-    - The next commit fixes the test. It now holds a fresh reply under the current audience
-      before forgetting, and checks the reason for each refusal. That fix has not run in CI
-      yet.
+    - Commit `e8d8f1c` fixes the test. It now holds a fresh reply under the current audience
+      before forgetting, and checks the reason for each refusal. In run 41181811601 the suite
+      passed with its new checks. The only failures were the three that fail on `main`, and
+      the intermittent tests passed.
 
     None of this has run against the companion on the host.
 

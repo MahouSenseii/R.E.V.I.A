@@ -251,8 +251,9 @@ Evidence:
   - `ReviaQualityFeedbackRuntimeTests` failed on its last assertion, through a test bug. It
     reused a judgment from before an audience change, which the session correctly refused
     as stale.
-  - The fix holds a fresh reply under the current audience before forgetting, and checks
-    the reason for each refusal. It has not run in CI yet.
+  - The fix (commit `e8d8f1c`) holds a fresh reply under the current audience before
+    forgetting, and checks the reason for each refusal. In run 41181811601 the suite passed,
+    along with every other branch check.
 - Not yet run: the Qt dialog, a real server's `/props` template, and a real judged turn on
   the host.
 
