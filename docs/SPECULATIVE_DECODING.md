@@ -53,8 +53,8 @@ host before relying on the header result above.
 ## Approved downloads (2026-10-31)
 
 The owner approved the official checkpoint and the DFlash draft. The MTP and DFlash routes
-both need the checkpoint, which is also a training base. The owner also chose the separately
-evaluated 4B training experiment, whose base is listed with the others (see
+both need the checkpoint, which is also a training base. The owner also approved the 4B base
+for the separately evaluated 4B training experiment (see
 [OFFLINE_TRAINING.md](OFFLINE_TRAINING.md)). All three are Apache-2.0 and ungated.
 
 `Config/training_assets.json` pins every file's size and SHA-256 at each revision, and

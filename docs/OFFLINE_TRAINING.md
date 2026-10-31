@@ -12,7 +12,8 @@ Status on 2026-10-31:
 - Their checks pass on Linux. The exporter and worker checks also passed in the Windows CI
   build.
 - A tiny Qwen3.5 has been trained on CPU and taken through llama.cpp end to end.
-- The owner approved the base downloads and chose the separately evaluated 4B experiment.
+- The owner approved the downloads, including the 4B base for the separately evaluated 4B
+  experiment.
 - No runtime capture, owner review screen, real export or real training job exists yet.
 
 ## Dataset export

@@ -70,8 +70,8 @@ Inventory at `8aa4ca5`, from tracked code only:
    rented-GPU alternatives are owner decisions.
 
 5. **Approved downloads and installer (2026-10-31).** The owner approved the official
-   `Qwen/Qwen3.5-9B` checkpoint and `z-lab/Qwen3.5-9B-DFlash`, and chose the separately
-   evaluated 4B experiment, whose base `Qwen/Qwen3.5-4B` (`851bf6e8`) is pinned with them.
+   `Qwen/Qwen3.5-9B` checkpoint and `z-lab/Qwen3.5-9B-DFlash`. They then approved the base
+   `Qwen/Qwen3.5-4B` (`851bf6e8`) for the separately evaluated 4B experiment.
    `Config/training_assets.json` pins all 31 files, about 31.3 GB, by size and SHA-256.
    `Tools/install_training_assets.py` installs one snapshot outside OneDrive, resumes byte
    ranges, never replaces a file, and writes the deterministic install manifest the worker
