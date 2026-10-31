@@ -283,7 +283,9 @@ accepted; the failed answer stays only on the rejected side. Related sessions, t
 sources and identical prompts share one partition, and earlier exports' partitions are
 kept. Withdrawn sources make examples ineligible at export, and again just before a
 worker reads them. It changes no memory, skill or model and has no runtime capture
-yet; see [OFFLINE_TRAINING.md](OFFLINE_TRAINING.md).
+yet; see [OFFLINE_TRAINING.md](OFFLINE_TRAINING.md). The optional isolated
+`Tools/revia_training_worker.py` consumes one export and publishes only an immutable
+candidate adapter. Nothing activates it.
 
 `Memory/memoryRevision` transports explicit owner corrections. The existing SQLite
 store atomically retains the original row, corrected row and exact revision

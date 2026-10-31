@@ -55,6 +55,18 @@ Inventory at `8aa4ca5`, from tracked code only:
    `Tests/datasetExportTests.cpp` passed, and four deliberate code removals each failed
    it. Not yet wired to runtime capture, and no real failure has been exported; the
    remaining steps are in `docs/OFFLINE_TRAINING.md`.
+4. **Training worker (roadmap 8).** `Tools/revia_training_worker.py` runs one optional
+   BF16 LoRA job. It verifies the base install manifest and the dataset digests, rechecks
+   withdrawals before model work and never reads the test partition. It refuses quantized
+   LoRA and thinking-mode rendering, supports cancellation with checkpoint and resume, and
+   publishes an immutable `candidate.json` that is never promoted by the worker. Linux
+   fixture: 11 orchestration tests passed, and three deliberate code removals each failed
+   one. The real backend trained a tiny hybrid Qwen3.5 on CPU, was cancelled at a
+   checkpoint, resumed, and its adapter changed the base model's output. That run also
+   showed Qwen3.5's thinking template breaks naive response masking. A real 9B adapter is
+   blocked: about 22 GB is needed for BF16 LoRA against a 12 GB GPU, plus the unapproved
+   base download, no reviewed data yet, and no GGUF roundtrip. The 4B, offload or
+   rented-GPU alternatives are owner decisions.
 
 ## Wrap checkpoint, 2026-10-30, D5
 

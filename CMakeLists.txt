@@ -984,6 +984,8 @@ if(BUILD_TESTING)
         )
         add_test(NAME Revia.VideoServicePolicy COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaVideoWorker.test.py")
+        add_test(NAME Revia.TrainingWorkerPolicy COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Tests/reviaTrainingWorker.test.py")
     endif()
     if(TARGET ReviaDesktop)
         add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp
