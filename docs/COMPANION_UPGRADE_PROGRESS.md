@@ -105,7 +105,8 @@ Inventory at `8aa4ca5`, from tracked code only:
    Linux: 7 fixture tests passed, and three deliberate rule removals each failed one. A smoke
    run against a real llama-server `b10453` on the tiny model ran both arms end to end. It
    found that `check` run results overwrote the base identity and adapter flag; that is fixed
-   and asserted. The C++ quality tools have only been driven through stand-ins here.
+   and asserted. The C++ quality tools have only been driven through stand-ins here. Windows
+   CI passed it with the other branch checks (run 41164612553, commit `db6114e`).
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
@@ -128,8 +129,8 @@ Intermittent on identical C++ sources (commits `58335fd` and `1e00faa`):
 
 - `Revia.ObservedLocalModel`: its credential-refusal check failed in run 41156920820 and
   passed in run 41159287582.
-- `ReviaProactiveStateTests`: passed, then failed. A request after a prior native source
-  finding lacked the profile's 0.75 temperature.
+- `ReviaProactiveStateTests`: passed once, then failed in runs 41159287582 and 41164612553.
+  A request after a prior native source finding lacked the profile's 0.75 temperature.
 
 All but the first are queued as a separate task.
 
