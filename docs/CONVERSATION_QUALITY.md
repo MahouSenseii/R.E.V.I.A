@@ -78,7 +78,10 @@ parser or a semantic correctness judge.
 The opt-in `ReviaAnswerQualityLive` developer target compares the production
 evaluation path against `Config/Evaluation/answer-quality.json` and an explicit
 authored profile. Pass a loopback model port and output JSONL path; add `review`
-only to measure the optional review configuration. Its corpus supports
+only to measure the optional review configuration. It answers as the one model the
+port reports in `/v1/models` and names it in the report. A server that does not
+report exactly one model is refused unless one of its models is
+`Qwen3.5-4B-Q4_K_M.gguf`, the old fixed default. Its corpus supports
 `exactSentences` on a turn in addition to the ordinary evaluator checks. It
 preserves raw and delivered replies, profile/configuration metadata and failures.
 It writes exact request and response sidecars beside the report and uses a fresh

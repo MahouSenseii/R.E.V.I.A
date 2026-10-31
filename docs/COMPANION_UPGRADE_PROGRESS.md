@@ -255,6 +255,34 @@ Inventory at `8aa4ca5`, from tracked code only:
     paths, as did every other branch check. Besides the three failures `main` shares, two
     tests failed, both intermittent (below): `ReviaProactiveStateTests` and, for the first
     time, `Revia.Foundation`. Since the previous run, only Python and docs had changed.
+14. **Evaluation runner against the real quality tools (2026-10-31).** The runner had only
+    driven Python stand-ins for `ReviaAnswerGateLive` and `ReviaAnswerQualityLive`. Windows
+    builds of both tools now ran under Wine 9 against llama-server `b10453`, serving the tiny
+    Qwen3.5 and its adapter. The run covered `plan`, both arms, `review` and `score`, on 14
+    golden cases (two per category), the six-case holdout and the tool cases.
+    - Found: in its default mode the quality tool answered as the fixed model name
+      `Qwen3.5-4B-Q4_K_M.gguf`. The runtime's identity check refused the owned server, so all
+      six holdout cases came back unjudged and no evaluation could ever have accepted. The
+      tool now answers as the one model the server reports, as the cognition campaign already
+      did, and names it in its report. The old name is only a fallback for a server that
+      reports none.
+    - The runner now counts a golden-set or holdout report only if it names the arm's own
+      alias. Otherwise those cases are unavailable, and the decision says why.
+    - With the fix, on the committed build, each report named its own arm. All 14 golden
+      cases in each arm were judged, as were 11 of the 12 holdout results. The twelfth was
+      counted as unavailable, not judged, because llama-server rejected the random model's
+      output. The decision was reject, which is right for a random tiny model: no held-out
+      improvement, and prefill 34% slower than base, outside the 5% limit. Retention found
+      no regressions and was incomplete only for that one case.
+    - The golden set and holdout run through the production runtime with the profile's own
+      sampling (temperature 0.75; the gate seeds it with the plan's seed). Only the held-out
+      replays and tool cases use temperature 0. The documentation now says so.
+
+    Linux evidence: the runner suite passed its 8 fixture tests, and removing either the
+    identity check or the reason it reports made the new test fail. The tools were
+    cross-built with MinGW-w64 GCC 13.2 against a stub XML library, because this container's
+    network policy refused the expat download. Neither tool parses XML, and Windows CI builds
+    them with the real library.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so

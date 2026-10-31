@@ -251,17 +251,25 @@ def command_run(arguments):
 
 
 def arm_results(directory, arm):
-    root = directory / arm
+    root, alias, problems = directory / arm, f"revia-eval-{arm}", []
     require((root / "run.json").exists(), f"The {arm} arm has not run.")
+
+    def cases(path, suite, served):
+        records = read_lines(path)
+        model = served(next((record for record in records if record.get("record") == "run"), {}))
+        if model != alias:
+            # Verdicts about another model say nothing about this arm.
+            problems.append(f"The {arm} arm's {suite} report names the model {model!r}, not {alias!r}.")
+            return {}
+        return {record["id"]: record for record in records if record.get("record") == "case"}
+
     golden_files = [path for path in sorted((root / "golden").glob("*.jsonl")) if path.name != "history.jsonl"] \
         if (root / "golden").exists() else []
-    golden = {}
-    for path in golden_files[-1:]:
-        golden = {record["id"]: record for record in read_lines(path) if record.get("record") == "case"}
-    holdout = {record["id"]: record for record in read_lines(root / "holdout.jsonl") if record.get("record") == "case"} \
-        if (root / "holdout.jsonl").exists() else {}
+    golden = cases(golden_files[-1], "golden set", lambda run: run.get("provenance", {}).get("model")) if golden_files else {}
+    holdout = cases(root / "holdout.jsonl", "holdout", lambda run: run.get("model")) if (root / "holdout.jsonl").exists() else {}
     return {"run": read_json(root / "run.json"), "heldOut": {record["id"]: record for record in read_lines(root / "held-out.jsonl")},
-            "tools": {record["id"]: record for record in read_lines(root / "tools.jsonl")}, "golden": golden, "holdout": holdout}
+            "tools": {record["id"]: record for record in read_lines(root / "tools.jsonl")}, "golden": golden, "holdout": holdout,
+            "problems": problems}
 
 
 def command_review(arguments):
@@ -332,6 +340,7 @@ def score(plan, arms, key, verdicts):
             regressions.append("tools:" + case_id)
     if not base["golden"] or not base["holdout"]:
         unavailable.append("A retention suite produced no results.")
+    unavailable += [problem for arm in ARMS for problem in arms[arm].get("problems", [])]
     over = len(regressions) > criteria["maximumRetentionRegressions"]
     results["retention"] = {"status": "fail" if over else "incomplete" if unavailable else "pass",
                             "regressions": regressions, "unavailable": unavailable}

@@ -43,8 +43,8 @@ if served != model:
 (out / "arguments.json").write_text(json.dumps(args))
 fail = set(json.loads(Path(__file__).with_name("behavior.json").read_text()).get(model, {}).get("golden", []))
 ids = [json.loads(line)["id"] for line in open(golden, encoding="utf-8") if line.strip()][:4]
-lines = [json.dumps({"record": "run"})] + [json.dumps({"record": "case", "id": case, "available": True,
-    "deterministicPassed": case not in fail, "judge": {"available": False}}) for case in ids]
+lines = [json.dumps({"record": "run", "provenance": {"model": served}})] + [json.dumps({"record": "case", "id": case,
+    "available": True, "deterministicPassed": case not in fail, "judge": {"available": False}}) for case in ids]
 (out / "2026-10-31T00-00-00Z.jsonl").write_text("\n".join(lines) + "\n")
 (out / "history.jsonl").write_text("{}\n")
 '''
@@ -53,9 +53,11 @@ import json, sys, urllib.request
 from pathlib import Path
 profile, corpus, port, report = sys.argv[1:5]
 model = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=30))["data"][0]["id"]
-fail = set(json.loads(Path(__file__).with_name("behavior.json").read_text()).get(model, {}).get("holdout", []))
+behavior = json.loads(Path(__file__).with_name("behavior.json").read_text()).get(model, {})
+fail = set(behavior.get("holdout", []))
 ids = [case["id"] for case in json.load(open(corpus, encoding="utf-8"))["cases"]][:3]
-lines = [json.dumps({"record": "run"})] + [json.dumps({"record": "case", "id": case,
+# The real tool names the model it answered as; "reports" reproduces one that names another.
+lines = [json.dumps({"record": "run", "model": behavior.get("reports", model)})] + [json.dumps({"record": "case", "id": case,
     "verdict": "fail" if case in fail else "pass"}) for case in ids]
 Path(report).write_text("\n".join(lines) + "\n")
 sys.exit(1 if fail else 0)
@@ -276,6 +278,23 @@ class AdapterEvaluationTests(unittest.TestCase):
         self.assertEqual(decision["results"]["retention"]["regressions"], ["golden:code-001"])
         with redirect_stdout(io.StringIO()):
             self.assertEqual(EVAL.main(["score", "--plan", str(directory), "--verdicts", str(self.campaign.root / "verdicts.json")]), 1)
+
+    def test_verdicts_count_only_from_the_arms_own_model(self):
+        # The real quality tool once answered as a fixed model name in its default mode, so an
+        # owned server's every holdout case came back unjudged with no stated reason.
+        directory = Path(self.plan()["plan"]).parent
+        self.campaign.run_arm(directory, "base")
+        (self.campaign.root / "tools" / "behavior.json").write_text(
+            json.dumps({"revia-eval-candidate": {"reports": "Qwen3.5-4B-Q4_K_M.gguf"}}))
+        self.campaign.run_arm(directory, "candidate")
+        arms = {arm: EVAL.arm_results(directory, arm) for arm in EVAL.ARMS}
+        self.assertEqual((arms["base"]["problems"], len(arms["base"]["holdout"])), ([], 3))
+        self.assertEqual((arms["candidate"]["holdout"], len(arms["candidate"]["golden"])), ({}, 4))
+        verdicts = {case: {"A": "pass" if case != "x0" else "fail", "B": "pass"} for case in self.key}
+        result = EVAL.score(self.plan_record, arms, self.key, verdicts)
+        self.assertEqual(result["decision"], "incomplete", json.dumps(result["results"], indent=1))
+        self.assertIn("The candidate arm's holdout report names the model 'Qwen3.5-4B-Q4_K_M.gguf', not 'revia-eval-candidate'.",
+                      result["results"]["retention"]["unavailable"])
 
     def test_score_rejects_or_waits_on_the_frozen_criteria(self):
         verdicts = {case: {"A": "pass" if case != "x0" else "fail", "B": "pass"} for case in self.key}

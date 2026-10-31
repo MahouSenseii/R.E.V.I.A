@@ -680,28 +680,42 @@ held-out replies go to the owner.
     and `--ignore-baseline`, without a judge unless the plan names a judge port;
   - runs `ReviaAnswerQualityLive` on the holdout.
 
-  Each arm runs once into its own directory and is never rerun in place.
+  Each arm runs once into its own directory and is never rerun in place. The held-out replays
+  and tool cases use temperature 0 and the plan's seed. The golden set and holdout run through
+  the production conversation runtime with the profile's own sampling, so they measure
+  retention as Revia would answer; the gate seeds it with the plan's seed.
 - `review` writes `review.json`. Each held-out case shows its criterion, conversation and
   reviewed reference, with the two replies as A and B in a seeded random order. The mapping
   goes to `review-key.json`, which the reviewer should not open. A blank
   `verdicts.template.json` is written alongside.
 - `score --verdicts <file>` writes `decision.json`: accept, reject, or incomplete while evidence
   is missing. Any failed criterion rejects. Retention regressions are cases the base passed and
-  the candidate fails. Latency compares the medians of llama-server's own `prompt_ms` and
+  the candidate fails. A golden-set or holdout report counts only if it names the arm's own
+  alias; otherwise its cases are unavailable, and the decision says why. Latency compares the medians of llama-server's own `prompt_ms` and
   `predicted_per_second`, over only the requests both arms completed. Golden-set judge scores,
   when present, are reported as advisory. Nothing is activated.
 
 Evidence, all on Linux:
 
-- `Tests/reviaAdapterEvaluation.test.py` passed its 7 fixture tests. They use a loopback model,
-  and stand-ins that reproduce the quality tools' arguments, result files and exit codes.
-- Each of these removals made a test fail: the no-new-failures rule, matched latency, and the
-  plan's digest recheck.
+- `Tests/reviaAdapterEvaluation.test.py` passed its 8 fixture tests. They use a loopback model,
+  and stand-ins that reproduce the quality tools' arguments, result files, model identity and
+  exit codes.
+- Each of these removals made a test fail: the no-new-failures rule, matched latency, the
+  plan's digest recheck, and the report identity check.
 - A smoke run planned both arms against a real llama-server `b10453` on the tiny Qwen3.5, then
   ran, reviewed and scored them. Without verdicts it could not accept. It rejected on latency,
   which is correct, because LoRA overhead on a tiny CPU model is large.
 - The smoke run also found a bug in `check`: run results overwrote the base identity and the
   adapter flag. Run results now sit under `runs`, and the roundtrip test asserts the identity.
+- A second smoke run drove the real tools: Windows builds of `ReviaAnswerGateLive` and
+  `ReviaAnswerQualityLive` under Wine 9, against the same llama-server and tiny model. It ran 14
+  golden cases (two per category), the six-case holdout and the tool cases. It found that the
+  quality tool's default mode answered as a fixed model name, `Qwen3.5-4B-Q4_K_M.gguf`.
+  The runtime refused the owned server, every holdout case came back unjudged, and no
+  evaluation could have accepted. The tool now answers as the model the server reports. With
+  the fix, each report named its own arm. Every golden case and 11 of the 12 holdout results
+  were judged. llama-server rejected the random model's output on the twelfth, which counted
+  as unavailable. The decision was reject, on held-out and latency.
 
 On the host, with Revia stopped so both arms get the 5070:
 
@@ -729,8 +743,8 @@ The `score` exit code is 0 for accept, 1 for reject and 2 for incomplete.
 
   Replies the owner judges in ordinary use can also be kept, corrected in the companion and
   exported from it with **Export dataset…**, as numbered datasets of the companion's lineage.
-- **Evaluation runner on the host.** The runner exists, but on this branch it has only driven
-  stand-ins for the C++ quality tools. Its first host run is also the first check that
-  `ReviaAnswerGateLive` and `ReviaAnswerQualityLive` work against an owned llama-server.
+- **Evaluation runner on the host.** The runner has driven the real quality tools only as
+  Windows builds under Wine, against a tiny CPU model. Its first host run is the first with
+  native Windows, the GPU and the real 4B pair.
 - **A 9B adapter.** Training it locally is still infeasible as configured: about 22 GB for
   BF16 LoRA against the 12 GB 5070.

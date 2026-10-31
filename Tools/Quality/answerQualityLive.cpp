@@ -146,26 +146,29 @@ int main(int argc, char** argv)
             llmSettings settings;
             settings.host = "127.0.0.1";
             settings.port = observed.port;
+            // Every mode answers as the one model the server reports, which the report then
+            // names. The default is only a fallback when it does not report exactly one, and the
+            // runtime's own identity check then refuses a server none of whose models match it.
             settings.modelName = "Qwen3.5-4B-Q4_K_M.gguf";
             const auto requestedProvider = settings.modelName;
             nlohmann::json providerInventory;
             nlohmann::json providerProperties;
             bool providerObserved = false;
+            httplib::Client probe("127.0.0.1", upstreamPort);
+            probe.set_connection_timeout(3, 0);
+            probe.set_read_timeout(3, 0);
+            if (const auto inventory = probe.Get("/v1/models"); inventory && inventory->status == 200)
+            {
+                providerInventory = nlohmann::json::parse(inventory->body);
+                const auto& data = providerInventory.at("data");
+                if (data.is_array() && data.size() == 1 && data.front().at("id").is_string())
+                {
+                    settings.modelName = data.front().at("id").get<std::string>();
+                    providerObserved = !settings.modelName.empty();
+                }
+            }
             if (cognition)
             {
-                httplib::Client probe("127.0.0.1", upstreamPort);
-                probe.set_connection_timeout(3, 0);
-                probe.set_read_timeout(3, 0);
-                if (const auto inventory = probe.Get("/v1/models"); inventory && inventory->status == 200)
-                {
-                    providerInventory = nlohmann::json::parse(inventory->body);
-                    const auto& data = providerInventory.at("data");
-                    if (data.is_array() && data.size() == 1 && data.front().at("id").is_string())
-                    {
-                        settings.modelName = data.front().at("id").get<std::string>();
-                        providerObserved = !settings.modelName.empty();
-                    }
-                }
                 if (const auto properties = probe.Get("/props"); properties && properties->status == 200)
                     providerProperties = nlohmann::json::parse(properties->body);
                 revia::quality::RetainCognitionEvidenceOnce(output.string() + ".provider.json",
