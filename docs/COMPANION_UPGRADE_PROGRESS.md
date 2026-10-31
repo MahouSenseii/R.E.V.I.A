@@ -117,8 +117,9 @@ Inventory at `8aa4ca5`, from tracked code only:
    strict `ReadDatasetCandidates` and exports through the existing `Learning/datasetExport`.
    Linux: 5 tests passed; the end-to-end test ran the real C++ exporter, and the training
    worker read and later refused the result. Three deliberate removals each failed a test, and
-   the C++ reader's round-trip test passed. Windows CI is set to run the same end-to-end test
-   with the built exporter. The Stage E text failures can be captured on the host; the
+   the C++ reader's round-trip test passed. In Windows CI (run 41175961328, commit `4df13d5`)
+   the new `ReviaDatasetExport` built, and all 5 tests passed, including the end-to-end case
+   against the built exporter. The Stage E text failures can be captured on the host; the
    image-feeling failure cannot, because the training path is text-only.
 
 10. **Live capture from the running companion (2026-10-31).** The owner judges a displayed
@@ -147,8 +148,21 @@ Inventory at `8aa4ca5`, from tracked code only:
       after its chat was withdrawn.
     - A tiny-model training run included a tool example.
 
-    The session test and the desktop check build only on Windows. Neither has run against the
-    companion on the host.
+    Windows CI (run 41178797203, commit `64da0c5`):
+    - Every changed desktop, session and llama.cpp source built.
+    - 148 of 149 tests ran; the other is the approved optional video skip.
+    - These passed: `ReviaLiveCaptureTests`, `Revia.DatasetCapturePolicy` (all 8, including
+      both live tests and the end-to-end export), `Revia.DesktopStopPolicy` with the
+      unticked-box check, and the other branch checks.
+    - `ReviaQualityFeedbackRuntimeTests` failed on its last assertion, through a test bug.
+      The test switched the audience to public and back, then reused the judgment made
+      before the switch. The session correctly refused it as stale, at admission, so the
+      held-reply check the assertion named was never reached.
+    - The next commit fixes the test. It now holds a fresh reply under the current audience
+      before forgetting, and checks the reason for each refusal. That fix has not run in CI
+      yet.
+
+    None of this has run against the companion on the host.
 
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
@@ -167,14 +181,21 @@ Failing in both runs:
   name.
 - `Revia.VideoPreview`: reports SKIP without FFmpeg but exits as a failure.
 
-Intermittent on identical C++ sources (commits `58335fd` and `1e00faa`):
+Intermittent:
 
 - `Revia.ObservedLocalModel`: its credential-refusal check failed in run 41156920820 and
-  passed in run 41159287582.
+  passed in run 41159287582, on identical C++ sources (commits `58335fd` and `1e00faa`).
 - `ReviaProactiveStateTests`: passed once, then failed in runs 41159287582 and 41164612553.
-  A request after a prior native source finding lacked the profile's 0.75 temperature.
+  A request after a prior native source finding lacked the profile's 0.75 temperature. It
+  passed in runs 41175961328 and 41178797203.
+- `ReviaDelegationTests`: failed once, in run 41175961328 (commit `4df13d5`), at
+  `TestWorkersYieldToTheConversation`. An analysis worker preempted by the conversation
+  failed instead of retrying. That commit's only production change was an uncalled reader,
+  and the test passed in the three runs before it and in run 41178797203.
 
-All but the first are queued as a separate task.
+Of these, `Revia.ObservedLocalModel`, `ReviaProactiveStateTests` and the three tests failing
+in both runs are queued as a separate task. `ReviaDelegationTests` was found after that task
+was queued.
 
 ## Wrap checkpoint, 2026-10-30, D5
 

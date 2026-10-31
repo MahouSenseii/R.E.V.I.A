@@ -206,15 +206,21 @@ void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
     Check(!session.CaptureJudgedTurn(later, again, error) && error.find("changed after this reply") != std::string::npos,
         "An exchange was kept under a configuration that did not produce it.");
     Check(session.SetAudience({revia::identity::AudienceKind::Public, "fixture-public", 0, {}}, error), error);
-    Check(!session.CaptureJudgedTurn(Feedback(session), again, error), "A public audience kept a private exchange.");
+    Check(!session.CaptureJudgedTurn(Feedback(session), again, error) && error.find("current private session") != std::string::npos,
+        "A public audience kept a private exchange.");
     Check(session.SetAudience({revia::identity::AudienceKind::Private, "fixture-private", 0, {}}, error), error);
+    // Back in private, the replies held before the audience changed belong to an older epoch.
+    Check(!session.CaptureJudgedTurn(Feedback(session), again, error) && error.find("no longer held") != std::string::npos,
+        "A reply held under an earlier audience was kept under a new one.");
 
+    // Held under the current audience, so only forgetting the chats can drop it.
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
     session.ForgetConversations();
     const auto withdrawn = nlohmann::json::parse(ReadFile(paths.Resolve("RuntimeData/Learning/Captures/withdrawn.json")))
                                .get<std::vector<std::string>>();
     Check(!std::filesystem::exists(kept) && std::find(withdrawn.begin(), withdrawn.end(), sources.front()) != withdrawn.end(),
         "Forgetting every chat left its kept capture, or did not list it as withdrawn.");
-    Check(!session.CaptureJudgedTurn(feedback, again, error) && error.find("no longer held") != std::string::npos,
+    Check(!session.CaptureJudgedTurn(Feedback(session), again, error) && error.find("no longer held") != std::string::npos,
         "A forgotten chat's reply was still held in memory.");
 }
 

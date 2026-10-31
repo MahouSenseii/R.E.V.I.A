@@ -244,6 +244,15 @@ Evidence:
   fingerprints, refusing a second keep, and withdrawal when every chat is forgotten. The
   desktop test checks that the box exists and starts unticked. Both build only on Windows,
   so they run in Windows CI.
+- Windows CI (run 41178797203, commit `64da0c5`):
+  - The desktop and session changes built.
+  - These passed: `ReviaLiveCaptureTests`, `Revia.DatasetCapturePolicy` (all 8, including
+    both live tests and the end-to-end export) and `Revia.DesktopStopPolicy`.
+  - `ReviaQualityFeedbackRuntimeTests` failed on its last assertion, through a test bug. It
+    reused a judgment from before an audience change, which the session correctly refused
+    as stale.
+  - The fix holds a fresh reply under the current audience before forgetting, and checks
+    the reason for each refusal. It has not run in CI yet.
 - Not yet run: the Qt dialog, a real server's `/props` template, and a real judged turn on
   the host.
 
