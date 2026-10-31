@@ -295,6 +295,12 @@ Evidence:
   - a deleted capture's draft does not move to another capture;
   - a hidden list and a companion switch show nothing private.
 - The changed window sources and the desktop test also compiled against those headers.
+- The test was also built for Windows with MinGW-w64 GCC 13.2 and LLD 18.1.3, using CI's
+  flags. That build passed all 5 tests under Wine 9, including Windows file replacement for
+  correction revisions.
+- Windows CI run 41199765499 (commit `3181af9`) stopped at a link of
+  `ReviaLiveCaptureTests.exe` that printed nothing, so no test ran there; the retry is
+  recorded in the progress notes.
 - `Tests/qualityFeedbackRuntimeTests.cpp` adds the session path. It covers:
   - holding, admissions and fingerprints;
   - refusing a second keep;

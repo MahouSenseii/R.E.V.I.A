@@ -187,6 +187,16 @@ Inventory at `8aa4ca5`, from tracked code only:
 
     The session and desktop tests run in Windows CI.
 
+    Windows CI run 41199765499 (commit `3181af9`):
+    - The build stopped at linking `ReviaLiveCaptureTests.exe`. The link printed nothing:
+      no linker message reached the captured build output or the job log.
+    - The other 21 executables linked from the same freshly rebuilt foundation library,
+      and no test ran.
+    - Reproduced locally without that failure: MinGW-w64 GCC 13.2 and LLD 18.1.3 compiled
+      the test with CI's flags and linked it. Its Windows build then passed all 5 tests
+      under Wine 9, including the `ReplaceFileW` path a second correction revision takes.
+    - The next commit's run is the retry. Nothing in the code was changed for it.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins
