@@ -6,6 +6,9 @@ complete candidate whose manifest binds the base checkpoint, the dataset export 
 exact configuration. Promotion is a separate decision. The native owner controls the
 process tree and deadline, and asks for cancellation by creating `cancel` in the job
 directory.
+
+`prepare` writes a new job for a dataset export and an installed base, with every digest
+taken from the files themselves and checked as a run would check them.
 """
 
 from __future__ import annotations
@@ -62,6 +65,16 @@ def plain(path):
             information = part.lstat()
             require(not stat.S_ISLNK(information.st_mode) and not getattr(information, "st_file_attributes", 0) & 0x400,
                     "Links and reparse points are not training inputs or destinations.")
+    return path
+
+
+def outside_onedrive(path):
+    """Checkpoints and adapters come from private data; OneDrive would upload them."""
+    resolved = Path(path).resolve()
+    for variable in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        root = os.environ.get(variable)
+        if root and (resolved == Path(root).resolve() or Path(root).resolve() in resolved.parents):
+            raise ValueError("Training scratch and candidates stay outside OneDrive; choose a local folder such as D:/ReviaTraining.")
     return path
 
 
@@ -140,8 +153,8 @@ def validate_job(job, job_path):
     require(job.get("schema") == SCHEMA, "Unsupported training job schema.")
     identifier = job.get("jobId")
     require(isinstance(identifier, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", identifier), "Invalid training job identity.")
-    scratch = plain(Path(job.get("scratchRoot", "")))
-    output_root = plain(Path(job.get("outputRoot", "")))
+    scratch = outside_onedrive(plain(Path(job.get("scratchRoot", ""))))
+    output_root = outside_onedrive(plain(Path(job.get("outputRoot", ""))))
     directory = scratch / identifier
     require(scratch.is_absolute() and output_root.is_absolute() and scratch.name == "ReviaTrainingJobs" and
             Path(job_path) == directory / "job.json" and not scratch.is_relative_to(output_root) and
@@ -469,7 +482,81 @@ def finish(directory, receipt):
         json.dump(receipt, output, allow_nan=False)
 
 
+# The 4B experiment's configuration in docs/OFFLINE_TRAINING.md. A smoke run measures peak VRAM
+# in 5 steps; a full run is three epochs.
+PREPARED_CONFIGURATION = {
+    "method": "sft-lora", "backend": "transformers-peft", "precision": "bf16", "enableThinking": False, "seed": 20261031,
+    "learningRate": 0.0001, "gradientAccumulation": 8, "maxSequenceTokens": 4096, "loraRank": 16, "loraAlpha": 32,
+    "loraDropout": 0.05, "targetModules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]}
+SMOKE_STEPS = 5
+EPOCHS = 3
+
+
+def prepare(arguments):
+    """Writes a new training job for a dataset export and an installed base, checked as a run checks it."""
+    base = plain(Path(arguments.base).absolute())
+    install_bytes = read_bounded(base / INSTALL_MANIFEST, SMALL_FILE)
+    installed = json.loads(install_bytes)
+    dataset = plain(Path(arguments.dataset).absolute())
+    manifest_bytes = read_bounded(dataset / "manifest.json", SMALL_FILE)
+    manifest = json.loads(manifest_bytes)
+    require(manifest.get("schema") == DATASET_SCHEMA, "Unsupported dataset export schema.")
+    train_examples = manifest.get("files", {}).get("train.jsonl", {}).get("examples")
+    require(bounded_int(train_examples, 1, 1 << 30), "The dataset export has no training examples.")
+    accumulation = PREPARED_CONFIGURATION["gradientAccumulation"]
+    steps = SMOKE_STEPS if arguments.smoke else math.ceil(EPOCHS * train_examples / accumulation)
+    configuration = {**PREPARED_CONFIGURATION, "maxSequenceTokens": arguments.max_sequence_tokens, "maxSteps": steps,
+                     "checkpointEverySteps": min(steps, SMOKE_STEPS)}
+    scratch = Path(arguments.scratch_root).absolute()
+    job_path = scratch / arguments.job_id / "job.json"
+    job = {"schema": SCHEMA, "jobId": arguments.job_id, "scratchRoot": str(scratch), "outputRoot": str(Path(arguments.output_root).absolute()),
+           "withdrawnSourcesPath": str(Path(arguments.withdrawn).absolute()),
+           "base": {"directory": str(base), "repository": installed.get("repository"), "revision": installed.get("revision"),
+                    "installManifestSha256": digest_bytes(install_bytes)},
+           "dataset": {"directory": str(dataset), "manifestSha256": digest_bytes(manifest_bytes)},
+           "resources": {"device": arguments.device, "minimumFreeVramMiB": arguments.minimum_free_vram_mib,
+                         "minimumFreeRamMiB": arguments.minimum_free_ram_mib, "minimumFreeDiskMiB": arguments.minimum_free_disk_mib},
+           "configuration": configuration}
+    require(not job_path.exists(), f"{job_path} already exists; a job is never replaced. Use a new --job-id.")
+    # Every check a run makes before loading a model, so a prepared job does not fail on them later.
+    checked = json.loads(json.dumps(job))
+    validate_job(checked, job_path)
+    verify_base(checked)
+    train, validation, _ = verify_dataset(checked)
+    job_path.parent.mkdir(parents=True, exist_ok=True)
+    job_path.write_bytes((json.dumps(job, indent=2) + "\n").encode("utf-8"))
+    return {"job": str(job_path), "maxSteps": steps, "trainExamples": len(train), "validationExamples": len(validation),
+            "base": f"{installed.get('repository')}@{installed.get('revision')}"}
+
+
+def main_prepare(argv):
+    parser = argparse.ArgumentParser(prog="revia_training_worker.py prepare", description=prepare.__doc__)
+    parser.add_argument("--dataset", required=True, help="A dataset export directory.")
+    parser.add_argument("--base", required=True, help="An installed base directory with its revia-install-manifest.json.")
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--scratch-root", required=True, help="An owned folder named ReviaTrainingJobs.")
+    parser.add_argument("--output-root", required=True, help="Where the candidate adapter is published.")
+    parser.add_argument("--withdrawn", required=True, help="The current withdrawal list, such as the companion's withdrawn.json.")
+    parser.add_argument("--smoke", action="store_true", help=f"A {SMOKE_STEPS}-step run that measures peak VRAM.")
+    parser.add_argument("--max-sequence-tokens", type=int, default=PREPARED_CONFIGURATION["maxSequenceTokens"])
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--minimum-free-vram-mib", type=int, default=10500)
+    parser.add_argument("--minimum-free-ram-mib", type=int, default=16384)
+    parser.add_argument("--minimum-free-disk-mib", type=int, default=20480)
+    arguments = parser.parse_args(argv)
+    try:
+        result = prepare(arguments)
+    except (ValueError, KeyError, OSError, json.JSONDecodeError) as error:
+        print(json.dumps({"state": "failed", "error": f"{type(error).__name__}: {error}"}), file=sys.stderr)
+        return 1
+    print(json.dumps({"state": "prepared", **result}, indent=2))
+    return 0
+
+
 def main(argv=None, backend_factory=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "prepare":
+        return main_prepare(argv[1:])
     parser = argparse.ArgumentParser()
     parser.add_argument("--job", required=True)
     arguments = parser.parse_args(argv)

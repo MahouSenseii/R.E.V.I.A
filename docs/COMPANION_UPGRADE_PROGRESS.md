@@ -227,6 +227,21 @@ Inventory at `8aa4ca5`, from tracked code only:
 
     The session and desktop tests run in Windows CI.
 
+13. **Training jobs prepared from an export (2026-10-31).** `revia_training_worker.py prepare`
+    writes the job for a dataset export and an installed base. Before, `job.json` was
+    hand-written with its digests.
+    - It reads every digest from the files and applies the run's own checks: job layout,
+      base install manifest, dataset manifest and withdrawal recheck.
+    - It uses the 4B configuration: `--smoke` gives 5 steps, and otherwise three epochs.
+    - It names the companion's live withdrawal list, and never replaces a job.
+    - Scratch and candidate folders inside OneDrive are now refused, when preparing and when
+      running.
+
+    Linux evidence:
+    - The worker suite passed 16 fixture tests, and 4 removals each made one fail.
+    - A smoke-prepared job with the full default configuration trained the tiny Qwen3.5
+      with the real backend.
+
 **CI.** `main` had been failing the Windows CTest inventory gate before any test ran.
 `Install Qt` re-runs `setup-python` and moves the job to CPython 3.15 without numpy, so
 `Revia.RetrievalBenchmarkContracts` was never registered. Configure now pins

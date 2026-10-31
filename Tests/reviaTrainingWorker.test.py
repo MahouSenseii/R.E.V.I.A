@@ -9,7 +9,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 
@@ -297,6 +297,61 @@ class TrainingWorkerTests(unittest.TestCase):
             self.temporary = tempfile.TemporaryDirectory()
             self.fixture = Fixture(self.temporary.name, tools=tools)
             self.refused("tool")
+
+    def prepare(self, *extra, job_id="job-2", scratch=None):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = MODULE.main(["prepare", "--dataset", str(self.fixture.dataset), "--base", str(self.fixture.base), "--job-id", job_id,
+                                "--scratch-root", str(scratch or self.fixture.root / "ReviaTrainingJobs"),
+                                "--output-root", str(self.fixture.output_root), "--withdrawn", str(self.fixture.withdrawn),
+                                "--device", "cpu", "--minimum-free-vram-mib", "0", "--minimum-free-ram-mib", "0",
+                                "--minimum-free-disk-mib", "0", *extra])
+        return code, json.loads(out.getvalue() or err.getvalue())
+
+    def test_prepared_job_has_the_files_digests_and_runs_as_written(self):
+        code, result = self.prepare()
+        self.assertEqual(code, 0, result)
+        job = json.loads(Path(result["job"]).read_text())
+        self.assertEqual((job["base"], job["dataset"]["manifestSha256"]),
+                         ({**self.fixture.job["base"], "directory": str(self.fixture.base)}, self.fixture.job["dataset"]["manifestSha256"]))
+        # Three epochs of the 5 training examples at gradient accumulation 8.
+        self.assertEqual((job["configuration"]["maxSteps"], result["trainExamples"], result["validationExamples"]), (2, 5, 1))
+        self.assertEqual(job["configuration"]["backend"], "transformers-peft")
+        directory = Path(result["job"]).parent
+        factory = lambda configuration, device: FakeBackend(configuration, device, job_directory=directory)
+        with mock.patch.dict(MODULE.BACKENDS, {"transformers-peft": factory}), redirect_stdout(io.StringIO()):
+            self.assertEqual(MODULE.main(["--job", result["job"]]), 0)
+        self.assertTrue((self.fixture.output_root / "adapter-job-2" / "candidate.json").exists())
+        code, result = self.prepare("--smoke", job_id="job-3")
+        self.assertEqual(code, 0, result)
+        configuration = json.loads(Path(result["job"]).read_text())["configuration"]
+        self.assertEqual((configuration["maxSteps"], configuration["checkpointEverySteps"]), (5, 5))
+
+    def test_prepare_refuses_and_writes_nothing(self):
+        jobs = self.fixture.root / "ReviaTrainingJobs"
+        self.assertEqual(self.prepare()[0], 0)
+        refusals = [("job-2", self.prepare(), "never replaced")]
+        self.fixture.withdrawn.write_text(json.dumps(["source-t0"]))
+        refusals.append(("job-withdrawn", self.prepare(job_id="job-withdrawn"), "withdrawn since the export"))
+        self.fixture.withdrawn.write_text("[]")
+        # The same size, so only the content digest can tell.
+        (self.fixture.base / "chat_template.jinja").write_text("{{ massages }}")
+        refusals.append(("job-changed-base", self.prepare(job_id="job-changed-base"), "changed since installation"))
+        (self.fixture.base / "chat_template.jinja").write_text("{{ messages }}")
+        other = self.fixture.root / "OtherJobs"
+        other.mkdir()
+        refusals.append(("job-elsewhere", self.prepare(job_id="job-elsewhere", scratch=other), "scratch directory"))
+        with mock.patch.dict(os.environ, {"OneDrive": str(self.fixture.root)}):
+            refusals.append(("job-synced", self.prepare(job_id="job-synced"), "outside OneDrive"))
+        for name, (code, result), message in refusals:
+            self.assertEqual(code, 1, name)
+            self.assertIn(message, result["error"], name)
+        self.assertEqual(sorted(path.name for path in jobs.iterdir()), ["job-1", "job-2"], "A refused job was written.")
+        self.assertFalse(any(other.iterdir()), "A refused job was written outside the scratch root.")
+
+    def test_run_refuses_onedrive_destinations(self):
+        with mock.patch.dict(os.environ, {"OneDrive": str(self.fixture.root)}):
+            self.refused("outside OneDrive")
 
     def test_missing_runtime_is_refused_without_importing_it(self):
         with mock.patch.dict(sys.modules, {"peft": None}):

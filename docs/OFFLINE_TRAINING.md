@@ -432,6 +432,11 @@ the dataset manifest and the train and validation files against their digests. I
 the withdrawal check against the current list the host writes beside the job. The test
 partition is never opened.
 
+`prepare` writes a job from a dataset export and an installed base. It uses the 4B
+configuration below, and runs every check a run makes before loading a model, so a prepared
+job does not fail on them later. Scratch and candidate folders inside OneDrive are refused,
+both when preparing and when running: checkpoints and adapters come from private data.
+
 Configurations other than BF16 supervised LoRA are refused. Quantized LoRA is refused
 with the reason the current Qwen3.5 guidance gives: 4-bit training shows larger than
 normal quantization differences. A checkpoint from another base, dataset or configuration
@@ -471,11 +476,18 @@ Its state is `candidate`. Nothing activates, converts or merges it.
 Evidence, all on Linux:
 
 - `Tests/reviaTrainingWorker.test.py` covers orchestration with a deterministic fixture
-  backend, in 13 tests. Each of these changes made its own test fail:
+  backend, in 16 tests. Each of these changes made its own test fail:
   - removing the withdrawal recheck;
   - reading the test partition;
   - dropping the checkpoint identity check;
   - rendering tools in the exported order instead of the server's.
+- `prepare` is covered too: a prepared job runs as written, and each refusal writes nothing.
+  These changes each made a test fail:
+  - skipping its dataset or base checks;
+  - the OneDrive refusal;
+  - the three-epoch step count.
+- A smoke-prepared job, with the default configuration (all seven attention and MLP
+  targets), also trained the tiny Qwen3.5 with the real backend and published its adapter.
 - With `REVIA_TRAINING_SMOKE_MODEL` set, the real backend trained
   `trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think` (`6860d7ec`, a hybrid
   linear-attention plus full-attention Qwen3.5) on CPU. The software was torch 2.15.0+cpu,
@@ -568,13 +580,27 @@ model-selection decision. Steps on the host:
 
    The tiny model is `trl-internal-testing/tiny-Qwen3_5ForConditionalGeneration-Think` at
    `6860d7ec`. This proves the host environments before the 9 GB job.
-3. Produce a reviewed dataset export, and write the current withdrawal list as
-   `withdrawn.json` beside the job just before starting it. **This is the remaining blocker.**
-4. With Revia stopped, run the job below. The 10,500 MiB free-VRAM floor enforces that, since
-   Main and the voice worker would not leave that much free. Run it first with `maxSteps` 5:
-   `candidate.json` then records `peakVramMiB`. The guidance's 10 GB figure assumes Unsloth's
-   optimizations, so plain peft on a 12 GB card has to be measured, and `maxSequenceTokens`
-   lowered if needed.
+3. Correct kept captures in Training corrections and use **Export dataset…**. Then prepare a
+   5-step job, which measures peak VRAM:
+
+   ```powershell
+   python -I -B Tools\revia_training_worker.py prepare --smoke --job-id qwen35-4b-companion-smoke --dataset D:\ReviaTraining\datasets\revia-live-1 --base D:\ReviaModels\Qwen3.5-4B-851bf6e --scratch-root D:\ReviaTraining\ReviaTrainingJobs --output-root D:\ReviaTraining\candidates --withdrawn <companion>\RuntimeData\Learning\Captures\withdrawn.json
+   ```
+
+   `prepare` reads every digest from the files themselves. It checks the base, the dataset and
+   the withdrawal list as a run would, and writes `job.json` under the scratch root. It never
+   replaces a job. The job names the companion's own withdrawal list, so a withdrawal made
+   after preparing is still honoured when the run starts.
+4. With Revia stopped, run it:
+   `python -I -B Tools\revia_training_worker.py --job D:\ReviaTraining\ReviaTrainingJobs\qwen35-4b-companion-smoke\job.json`.
+
+   The 10,500 MiB free-VRAM floor enforces the stop, since Main and the voice worker would
+   not leave that much free. `candidate.json` then records `peakVramMiB`. The guidance's
+   10 GB figure assumes Unsloth's optimizations, so plain peft on a 12 GB card has to be
+   measured.
+
+   Then prepare the full run: the same command without `--smoke` and with a new `--job-id`.
+   If the smoke run's peak VRAM requires it, add a lower `--max-sequence-tokens`.
 5. Export the matched baseline and the adapter, then run `check` with
    `--server-arg=-ngl --server-arg=99`.
 6. Evaluate with the runner described below. Plan the campaign first, then run the base arm and
@@ -589,13 +615,15 @@ model-selection decision. Steps on the host:
    The base arm is the same file served without `--lora`, so it is also the rollback.
    A rejected candidate is a valid result.
 
+For reference, this is the job `prepare` writes for a full run:
+
 ```json
 {
   "schema": "revia-training-job-v1",
   "jobId": "qwen35-4b-companion-1",
   "scratchRoot": "D:/ReviaTraining/ReviaTrainingJobs",
   "outputRoot": "D:/ReviaTraining/candidates",
-  "withdrawnSourcesPath": "D:/ReviaTraining/ReviaTrainingJobs/qwen35-4b-companion-1/withdrawn.json",
+  "withdrawnSourcesPath": "<companion>/RuntimeData/Learning/Captures/withdrawn.json",
   "base": {"directory": "D:/ReviaModels/Qwen3.5-4B-851bf6e", "repository": "Qwen/Qwen3.5-4B",
            "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
            "installManifestSha256": "f5a92a1bf46485d70bd38e9643ee6dd29bb674029733fe0fddf097db45396a5e"},
@@ -613,9 +641,10 @@ Qwen3.5 projections differ by layer type. Gated DeltaNet layers use
 `linear_attn.in_proj_qkv/z/b/a` and `out_proj`, the full-attention layers (every fourth) use
 `self_attn.q/k/v/o_proj`, and every layer has `mlp.gate/up/down_proj`. The listed targets
 therefore cover attention where it exists and MLP everywhere. The Gated DeltaNet projections
-stay frozen until measured. After the short run, set `maxSteps` to about three epochs,
-`ceil(3 × train examples / 8)`, use a new `jobId`, and keep the configuration otherwise
-fixed.
+stay frozen until measured.
+
+For a full run, `prepare` sets `maxSteps` to three epochs, `ceil(3 × train examples / 8)`, and
+checkpoints every 5 steps. It keeps the configuration otherwise fixed.
 
 ## Evaluation runner
 
