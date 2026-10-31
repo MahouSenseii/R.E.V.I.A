@@ -100,7 +100,8 @@ class Fixture:
                             {"role": "assistant", "content": f"Honestly, poem {identifier} made me smile."}]
                 lines += json.dumps({"id": identifier, "messages": messages}, sort_keys=True) + "\n"
                 examples.append({"id": identifier, "eligible": True, "partition": partition, "sources": [f"source-{identifier}"]})
-            (self.dataset / f"{partition}.jsonl").write_text(lines)
+            # Bytes, not text: Windows text mode would turn each newline into CRLF and break the digest.
+            (self.dataset / f"{partition}.jsonl").write_bytes(lines.encode("utf-8"))
             files[f"{partition}.jsonl"] = {"sha256": sha(lines.encode()), "examples": len(identifiers)}
         manifest = json.dumps({"schema": "revia-dataset-v1", "name": "fixture", "files": files, "examples": examples}, indent=2).encode()
         (self.dataset / "manifest.json").write_bytes(manifest)
