@@ -1093,8 +1093,9 @@ if(BUILD_TESTING)
         add_test(NAME Revia.ShellWidgets COMMAND ReviaDesktopStopTests --suite=shell)
         add_test(NAME Revia.SettingsBackend COMMAND ReviaDesktopStopTests --suite=settingsBackend)
         add_test(NAME Revia.TestCatalogSlash COMMAND ReviaDesktopStopTests --suite=test-catalog-slash)
+        add_test(NAME Revia.StopCleanup COMMAND ReviaDesktopStopTests --suite=stop-cleanup)
         # REVIA_THEME=light keeps every capture the same whatever the runner's Windows colour setting.
-        set_tests_properties(Revia.DesktopStopPolicy Revia.ProfileVoiceAssignment Revia.VideoPreview Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend Revia.TestCatalogSlash PROPERTIES
+        set_tests_properties(Revia.DesktopStopPolicy Revia.ProfileVoiceAssignment Revia.VideoPreview Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend Revia.TestCatalogSlash Revia.StopCleanup PROPERTIES
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs;REVIA_THEME=light"
                 TIMEOUT 30)
         add_executable(ReviaSvgRendererTests

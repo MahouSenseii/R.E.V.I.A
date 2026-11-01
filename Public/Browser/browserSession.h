@@ -19,7 +19,10 @@ class BrowserSession
     BrowserSession& operator=(const BrowserSession&) = delete;
 
     [[nodiscard]] actions::ActionResult Execute(const actions::ActionRequest& request, const BrowserSettings& settings);
+    void RequestStop();
     void Stop();
+    // Lifecycle-only: drain cancellation and retire handles/profile after admitted work.
+    void DrainStop();
     [[nodiscard]] std::optional<BrowserReceipt> Observation() const;
 
   private:
