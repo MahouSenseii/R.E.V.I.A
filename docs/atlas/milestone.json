@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "milestone": "Reusable test selection and reliability review",
-  "recorded_utc": "2026-11-01T19:09:32.965612+00:00",
+  "recorded_utc": "2026-11-01T20:17:34.482Z",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
@@ -626,5 +626,44 @@
     },
     "git_lf_source_sha256": "6510ed2848313636c0c6c6197712159bfcaf1b157b91022d64d8e5d6c44c4409",
     "ci": "Commit uses [skip ci]; remote CI is not claimed to have passed"
+  },
+  "browser_budget_follow_on": {
+    "id": "ACT-3",
+    "name": "Keep browser observation receipts within the native limit",
+    "code": "Locally reviewed five-file candidate; source publication is blocked/pending",
+    "source_publication": "No ACT3 source commit, branch or PR has been published",
+    "changed_paths": 5,
+    "base_commit": "6d65d44e3afe8ba0a8d8f7043fa122dad234c75f",
+    "depends_on_pull_request": 11,
+    "raw_source_sha256": "7a60cf2d461f0395387e7db255d85d6d981de3b23f4e15793782fc4c15fed2a6",
+    "git_lf_source_sha256": "7e86722164d4769e57e165074728422441339e8d8c7b334a636b03b1d5428f39",
+    "source_files": 1403,
+    "frame_measurement": {
+      "before_utf8_bytes": 498782,
+      "after_utf8_bytes": 261313,
+      "native_limit_bytes": 262144,
+      "target_identities": 60,
+      "complete_available_values": 31,
+      "explicit_unavailable_values": 29,
+      "scope": "Synthetic encoded receipt-size comparison; not runtime or GPU performance"
+    },
+    "checks": {
+      "fresh_catalog_modules_passed": 1,
+      "node_cases_in_module_passed": 9,
+      "node_cases_failed": 0,
+      "node_cases_skipped": 0,
+      "selected_existing_pure_node_cases_passed": 2,
+      "discovered_registrations": 157,
+      "discovery_is_pass_count": false,
+      "existing_native_companions": "UI4-built BrowserContract and StopCleanup executed; not a fresh ACT3 native build"
+    },
+    "review": "Independent final review passed the bounded component repair with qualification limits",
+    "limits": [
+      "VM evaluation seam and synthetic DOM/CDP; not live native-browser integration",
+      "CDP transport and maximum DOM transportability remain unqualified",
+      "No full suite, actual browser/model/voice/media/GPU, normal-app or release qualification"
+    ],
+    "ci": "Broad autoBuild real-browser paths explicitly deferred and not qualified; no remote CI pass claim",
+    "merged_installed_or_deployed": false
   }
 }
