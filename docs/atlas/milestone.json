@@ -1,22 +1,23 @@
 {
   "schema_version": 2,
-  "milestone": "Nine reliability repairs integrated into GitHub main",
-  "recorded_utc": "2026-11-01T20:50:48.434Z",
+  "milestone": "Eleven reliability repairs integrated into GitHub main",
+  "recorded_utc": "2026-11-01T23:09:17+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
-    "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+    "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
+    "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
     "source_files": 1403,
-    "raw_source_sha256": "7a60cf2d461f0395387e7db255d85d6d981de3b23f4e15793782fc4c15fed2a6",
-    "git_lf_source_sha256": "7e86722164d4769e57e165074728422441339e8d8c7b334a636b03b1d5428f39",
+    "raw_source_sha256": "d36d4014118b711b63626a26001b4df89764515e4623212661e7d3682d8fb4bd",
+    "git_lf_source_sha256": "0029e7631db645fa1ebbc52a94da9db2494b62b14735b15f1c129bb165526035",
     "incremental_changed_paths": [
       67,
       8,
-      5
+      5,
+      4
     ],
-    "reliability_repairs": 9,
+    "reliability_repairs": 11,
     "installed_app_updated": false,
     "release_qualified": false,
     "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
@@ -96,6 +97,22 @@
       "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Historical PR 10 context: 7 fresh scoped CLI results passed; resume recheck reused 4 unchanged results. Earlier discovery setup timeout remains unexplained.",
       "next_step": "Qualify integrated test selection and cancellation in live use."
+    },
+    {
+      "id": "MEM-3",
+      "name": "Require a usable withdrawal list before export",
+      "summary": "Check withdrawal data before an eligible export reserves a number or publishes data.",
+      "checks": "Reused: 1 existing CTest module contains 8 functions; meaningful RED exit 8, then GREEN exit 0. Exact-source reconciliation passed; no new run here.",
+      "next_step": "Qualify export and withdrawal behavior in authorized running-app use.",
+      "implementation": "Merged into GitHub main through PR 13; installed app unchanged"
+    },
+    {
+      "id": "MED-6",
+      "name": "Reject oversized external-message envelopes before parsing",
+      "summary": "Bound an inbox envelope before JSON parsing, while retaining normal message and permission behavior.",
+      "checks": "Preceding repair: the direct existing Presence module passed GREEN with 4 new cases and its original playback checks. This evidence is reused here; no new run.",
+      "next_step": "Qualify external-adapter input handling in authorized running-app use.",
+      "implementation": "Merged into GitHub main through PR 13; installed app unchanged"
     }
   ],
   "capabilities": [
@@ -576,7 +593,7 @@
     "qualification": "Application CI has not run; no CI pass is claimed. Broad autoBuild real-browser paths remain deferred and unqualified; retained local results are scoped evidence",
     "scope": "Application source CI only; excludes static Atlas Pages publishing"
   },
-  "excluded_later_work": "Only the reviewed PR 10, PR 11 and PR 12 source changes are integrated; later local work is excluded",
+  "excluded_later_work": "Only the reviewed PR10/11/12 source and the four-file MEM3/MED6 delta in PR13 are integrated; other later work is excluded",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -712,22 +729,134 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
-    "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+    "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
+    "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
     "merge_order": [
       10,
       11,
-      12
+      12,
+      13
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
       "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
-      "12": "0b908ef779ea10564d7746834065adcf02abb07c"
+      "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+      "13": "23f20c91c81c6f0002335daa0c77360decc32240"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": true,
     "application_ci_run": false,
     "installed_app_updated": false,
     "runtime_release_qualified": false
+  },
+  "historical_integration_before_MEM3_MED6": {
+    "milestone": "Nine reliability repairs integrated into GitHub main",
+    "recorded_utc": "2026-11-01T20:50:48.434Z",
+    "source": {
+      "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+      "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
+      "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+      "source_files": 1403,
+      "raw_source_sha256": "7a60cf2d461f0395387e7db255d85d6d981de3b23f4e15793782fc4c15fed2a6",
+      "git_lf_source_sha256": "7e86722164d4769e57e165074728422441339e8d8c7b334a636b03b1d5428f39",
+      "incremental_changed_paths": [
+        67,
+        8,
+        5
+      ],
+      "reliability_repairs": 9,
+      "installed_app_updated": false,
+      "release_qualified": false,
+      "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
+    },
+    "integration": {
+      "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
+      "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+      "merge_order": [
+        10,
+        11,
+        12
+      ],
+      "merge_commits": {
+        "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+        "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+        "12": "0b908ef779ea10564d7746834065adcf02abb07c"
+      },
+      "method": "normal merge commits; reviewed source heads preserved",
+      "merge_commit_skip_ci": true,
+      "application_ci_run": false,
+      "installed_app_updated": false,
+      "runtime_release_qualified": false
+    },
+    "scope": "Previous nine-repair merged-source epoch; retained as history, not the current source head"
+  },
+  "combined_export_envelope_follow_on": {
+    "ids": [
+      "MEM-3",
+      "MED-6"
+    ],
+    "source_state": "Merged source; installed app unchanged; runtime/release qualification open",
+    "reviewed_source_paths": [
+      "Private/Learning/liveDatasetExport.cpp",
+      "Tests/liveDatasetExportTests.cpp",
+      "Private/Presence/presenceRuntime.cpp",
+      "Tests/playbackPresenceTests.cpp"
+    ],
+    "reviewed_incremental_paths": 4,
+    "source_head": "5b3cd5a6594a7ec5c295388e89b7c718d7d5f8f5",
+    "source_merge_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
+    "pull_request": 13,
+    "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/13",
+    "independent_source_review": "GO for the exact four-file union with component qualification limits",
+    "raw_union_sha256": "d36d4014118b711b63626a26001b4df89764515e4623212661e7d3682d8fb4bd",
+    "git_lf_union_sha256": "0029e7631db645fa1ebbc52a94da9db2494b62b14735b15f1c129bb165526035",
+    "source_files": 1403,
+    "source_file_count_scope": "Pinned repository files, not all code",
+    "evidence_boundary": "Evidence boundary: MEM3 reuses its export CTest evidence after exact-source reconciliation. MED6's direct-module GREEN ran in the preceding repair and is reused here. Both are component relinks, not clean app builds. This milestone ran no combined build, suite, CI, live-runtime, release or installation checks, and makes no performance claim.",
+    "MEM3": {
+      "existing_CTest_modules": 1,
+      "contained_test_functions": 8,
+      "RED_exit": 8,
+      "GREEN_exit": 0,
+      "evidence_reused_after_current_source_reconciliation": true,
+      "new_test_in_this_milestone": false
+    },
+    "MED6": {
+      "existing_module": "ReviaPlaybackPresenceTests",
+      "execution_route": "direct executable, not CTest",
+      "added_cases": 4,
+      "original_playback_checks_retained": true,
+      "preceding_repair_GREEN_fresh": true,
+      "evidence_reused_here": true,
+      "new_test_in_this_milestone": false,
+      "envelope_max_bytes": 262144,
+      "bounded_read_bytes": 262145
+    },
+    "combined_build_or_suite_run": false,
+    "application_CI_run": false,
+    "live_runtime_release_qualified": false,
+    "installed_app_updated": false,
+    "application_deployed": false
+  },
+  "repair_count_scope": {
+    "repair_ids": [
+      "MEM-1",
+      "MEM-2",
+      "ACT-1",
+      "RUN-3",
+      "UI-2",
+      "UI-1",
+      "UI-3",
+      "UI-4",
+      "ACT-3",
+      "MEM-3",
+      "MED-6"
+    ],
+    "merged_repairs": 11,
+    "separate_tooling_ids": [
+      "QUAL-1",
+      "TEST-CATALOG"
+    ],
+    "capabilities": 20
   }
 }
