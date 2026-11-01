@@ -1,6 +1,7 @@
 #include "Computer/taskContent.h"
 
 #include "Planning/quotedText.h"
+#include "Browser/browserTypes.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -98,6 +99,7 @@ using revia::planning::QuotedSpan;
     std::string word;
     while (words >> word)
     {
+        const bool endsPhrase = !word.empty() && std::string_view(",.;!?").find(word.back()) != std::string_view::npos;
         // Punctuation is not part of a field's name.
         while (!word.empty() && std::ispunct(static_cast<unsigned char>(word.back())) != 0)
         {
@@ -110,7 +112,7 @@ using revia::planning::QuotedSpan;
         phrase.push_back(word);
         // A destination is a name, not a sentence. Three words is already generous for
         // something a person reads off a screen.
-        if (phrase.size() >= 3) break;
+        if (endsPhrase || phrase.size() >= 3) break;
     }
 
     std::string destination;
@@ -229,10 +231,133 @@ std::string QuotedDestination(const std::string& request, const revia::planning:
         while (words >> word) last = word;
         previous = span.after;
         if (span.opening == content.opening) continue;
+        // A later quoted application cannot replace an already named unquoted field.
+        if (span.opening > content.after &&
+            !ParseDestination(request.substr(content.after, span.opening - content.after)).empty()) continue;
         if (last == "in" || last == "into" || last == "to")
             return Lowered(request.substr(span.begin, span.end - span.begin));
     }
     return {};
+}
+
+struct AcceptanceToken
+{
+    std::string text;
+    bool quoted = false;
+    std::size_t opening = std::string::npos;
+};
+
+std::vector<AcceptanceToken> AcceptanceTokens(const std::string& request, const planning::ParsedQuotation& parsed)
+{
+    std::vector<AcceptanceToken> tokens;
+    std::size_t at = 0;
+    std::size_t quote = 0;
+    while (at < request.size())
+    {
+        if (quote < parsed.spans.size() && at == parsed.spans[quote].opening)
+        {
+            const auto& span = parsed.spans[quote++];
+            tokens.push_back({Lowered(request.substr(span.begin, span.end - span.begin)), true, span.opening});
+            at = span.after;
+        }
+        else if (std::isspace(static_cast<unsigned char>(request[at])) != 0)
+            ++at;
+        else if (std::string_view(",.;!?").find(request[at]) != std::string_view::npos)
+            tokens.push_back({std::string(1, request[at++])});
+        else
+        {
+            const auto begin = at;
+            const bool url = request.compare(at, 7, "http://") == 0 || request.compare(at, 8, "https://") == 0;
+            while (at < request.size() && std::isspace(static_cast<unsigned char>(request[at])) == 0 &&
+                (url || std::string_view(",.;!?").find(request[at]) == std::string_view::npos) &&
+                (quote >= parsed.spans.size() || at != parsed.spans[quote].opening)) ++at;
+            tokens.push_back({Lowered(request.substr(begin, at - begin))});
+        }
+    }
+    return tokens;
+}
+
+bool SolePlacement(const std::string& request, const planning::ParsedQuotation& parsed, const TaskContent& content, std::string& application, std::string& browserOrigin)
+{
+    const auto tokens = AcceptanceTokens(request, parsed);
+    std::size_t at = 0;
+    const auto take = [&](const std::string_view word)
+    {
+        if (at == tokens.size() || tokens[at].quoted || tokens[at].text != word) return false;
+        ++at;
+        return true;
+    };
+    static_cast<void>(take("please"));
+    if (take("can") || take("could") || take("would"))
+    {
+        if (!take("you")) return false;
+        static_cast<void>(take("please"));
+    }
+    if (!(take("put") || take("type") || take("enter") || take("write") || take("paste"))) return false;
+    if (take("the"))
+    {
+        if (!take("text")) return false;
+    }
+    else static_cast<void>(take("text"));
+    const auto payload = ContentSpan(request, parsed);
+    if (at == tokens.size() || !tokens[at].quoted || tokens[at++].opening != payload.opening) return false;
+    if (!(take("in") || take("into") || take("to"))) return false;
+    if (at < tokens.size() && !tokens[at].quoted && IsArticle(tokens[at].text)) ++at;
+    // Multiword labels need explicit quoting; otherwise an unknown verb could be
+    // swallowed as part of a destination. Unsupported wording asks for clarification.
+    if (at == tokens.size() || tokens[at++].text != Lowered(content.destination)) return false;
+    if (at < tokens.size() && !tokens[at].quoted && IsFieldNoun(tokens[at].text)) ++at;
+    if (take("in") || take("on") || take("using") || take("at"))
+    {
+        static_cast<void>(take("the"));
+        if (at == tokens.size()) return false;
+        const auto& context = tokens[at++];
+        if (context.text.empty()) return false;
+        if (!context.quoted)
+        {
+            static const std::array<std::string_view, 16> instructions{
+                "and", "then", "also", "after", "before", "open", "save", "check",
+                "send", "submit", "post", "publish", "delete", "close", "run", "launch"};
+            if (std::find(instructions.begin(), instructions.end(), context.text) != instructions.end())
+                return false;
+        }
+        const bool applicationNoun = take("app") || take("application") || take("window");
+        const bool explicitUrl = context.text.starts_with("https://") || context.text.starts_with("http://");
+        if (!applicationNoun && !explicitUrl) return false;
+        if (explicitUrl)
+        {
+            browserOrigin = browser::UrlOrigin(context.text);
+            if (browserOrigin.empty()) return false;
+        }
+        if (applicationNoun && !explicitUrl)
+        {
+            if (!context.quoted && std::any_of(context.text.begin(), context.text.end(), [](const unsigned char character)
+                { return std::isalnum(character) == 0 && character != '-' && character != '_'; })) return false;
+            application = context.text;
+        }
+    }
+    while (at < tokens.size())
+    {
+        if (take(",") || take(".") || take(";") || take("!") || take("?")) continue;
+        if (take("please") || take("thanks")) continue;
+        if (take("thank"))
+        {
+            if (!take("you")) return false;
+            continue;
+        }
+        static_cast<void>(take("and"));
+        if (take("do"))
+        {
+            if (!take("not")) return false;
+        }
+        else if (!(take("don't") || take("dont") || take("without"))) return false;
+        if (!(take("send") || take("submit") || take("post") || take("sending"))) return false;
+        if (!(take("it") || take("anything")))
+        {
+            if (take("the") && !(take("text") || take("message"))) return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -257,6 +382,37 @@ std::string ToString(const ContentRequirement value)
         case ContentRequirement::None:
         default: return "none";
     }
+}
+
+bool TaskAcceptanceContract::MatchesApplication(const std::string& executable) const
+{
+    if (application.empty()) return true;
+    const auto canonical = [](std::string value)
+    {
+        value = Lowered(std::move(value));
+        if (value.ends_with(".exe")) value.resize(value.size() - 4);
+        return value;
+    };
+    return !executable.empty() && canonical(application) == canonical(executable);
+}
+
+TaskAcceptanceContract DeriveTaskAcceptance(const std::string& request)
+{
+    TaskAcceptanceContract contract;
+    if (request.empty() || request.size() > MaximumTaskContentLength + 4096) return contract;
+    const auto parsed = planning::ParseQuotation(request);
+    if (!parsed.complete) return contract;
+    const auto content = ExtractTaskContent(request);
+    if (!content.RequiresExactContent() || content.value.empty() || content.destination.empty() || content.submissionRequested)
+        return contract;
+    contract.placementOnly = SolePlacement(request, parsed, content, contract.application, contract.browserOrigin);
+    if (contract.placementOnly)
+    {
+        contract.surface = contract.browserOrigin.empty() ? TaskAcceptanceSurface::Native : TaskAcceptanceSurface::Browser;
+        contract.detail = "The whole admitted request requires exact placement only.";
+    }
+    else contract.detail += " Remaining instructions (quoted data omitted): " + parsed.instruction.substr(0, 512);
+    return contract;
 }
 
 TaskContent ExtractTaskContent(const std::string& request)

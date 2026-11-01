@@ -191,6 +191,21 @@ TaskProgress DeriveTaskProgress(const TaskProgressInputs& inputs)
     // rather than a rule somebody has to remember to check.
     if (!content.submissionRequested)
     {
+        if (inputs.acceptance == nullptr || !inputs.acceptance->placementOnly)
+        {
+            progress.detail = inputs.acceptance ? inputs.acceptance->detail : TaskAcceptanceContract{}.detail;
+            return progress;
+        }
+        if (inputs.acceptance->surface != TaskAcceptanceSurface::Native)
+        {
+            progress.detail = "The original request requires browser origin evidence; native placement leaves remaining work unresolved.";
+            return progress;
+        }
+        if (!inputs.acceptance->MatchesApplication(context.observation.screen.foregroundApplication))
+        {
+            progress.detail = "The original requested application context is unverified; remaining work is unresolved.";
+            return progress;
+        }
         // The request asked for placement and placement has happened. Submitting would
         // be doing something nobody asked for, and asking a model whether to would be
         // offering it the chance to say yes.

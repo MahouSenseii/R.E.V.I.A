@@ -280,13 +280,36 @@ void TestRefusalsWriteNothing()
     Check(!fixture.Export(exported, error) && error.find("lineage could not be read") != std::string::npos,
         "An unreadable lineage was reset instead of refusing.");
 }
+
+void TestPendingCleanupMetadataIsOpaqueToExport()
+{
+    Fixture fixture;
+    std::string first;
+    for (int number = 1; number <= 20; ++number)
+    {
+        const auto id = Keep(fixture.store, number);
+        if (number == 1)
+            first = id;
+    }
+    const auto pending = std::string(1, '\0') + "revia-live-capture-cleanup-v1:" + first;
+    const json withdrawn = json::array({pending, "conversation:conversation-1", "capture:literal-permanent-source"});
+    Write(fixture.store.WithdrawnList(), withdrawn.dump());
+    LiveDatasetExport exported;
+    std::string error;
+    Check(fixture.Export(exported, error) && exported.train + exported.validation + exported.test == 19 &&
+              exported.excluded.size() == 1 && exported.excluded[0].reason == "a source it used was withdrawn" &&
+              json::parse(Read(fixture.store.WithdrawnList())) == withdrawn,
+        "Native export did not accept opaque cleanup metadata while enforcing permanent withdrawals: " + error);
+}
+
 } // namespace
 
 void RunLiveDatasetExportTests()
 {
     std::string errors;
     for (const auto test : {TestCandidateFileMatchesTheCaptureTool, TestNumberedExportsKeepEveryEarlierPartition,
-             TestReturningExampleKeepsItsPartitionFromAnyEarlierExport, TestRefusalsWriteNothing})
+             TestReturningExampleKeepsItsPartitionFromAnyEarlierExport, TestRefusalsWriteNothing,
+             TestPendingCleanupMetadataIsOpaqueToExport})
         try
         {
             test();

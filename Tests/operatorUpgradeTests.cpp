@@ -3,6 +3,8 @@
 #include "Actions/actionRuntime.h"
 #include "Goals/goalRunner.h"
 #include "Planning/goalPlanner.h"
+#include "Computer/taskAcceptance.h"
+#include "Computer/computerTaskCoordinator.h"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -59,6 +61,71 @@ void RunOperatorUpgradeTests()
     }
     tests::Check(runner.Operate(goal).status == goals::GoalStatus::Succeeded,
         "Actual runtime acceptance evidence could not complete an already satisfied task.");
+    {
+        const auto task = computer::ExtractTaskContent("put \"hello\" into Compose and open the project folder");
+        computer::ComputerObservation observed;
+        observed.screen.succeeded = true;
+        observed.screen.foregroundApplication = "fixture.exe";
+        computer::ObservedCandidate field;
+        field.id = "compose";
+        field.name = "Compose";
+        field.role = "edit";
+        field.maySetText = true;
+        observed.candidates.push_back(field);
+        goals::Goal compound;
+        compound.title = "put \"hello\" into Compose and open the project folder";
+        compound.scope = runtime.Settings();
+        goals::GoalStep placed;
+        placed.action.type = actions::ActionType::SetControlText;
+        placed.action.application = "fixture.exe";
+        placed.action.control = field.id;
+        placed.action.value = "hello";
+        placed.status = goals::StepStatus::Succeeded;
+        goals::StepAttempt verified;
+        verified.executed = true;
+        verified.outcome = goals::VerificationOutcome::Verified;
+        verified.checkedBy = goals::PostconditionKind::ControlValueIs;
+        placed.attempts.push_back(verified);
+        compound.steps.push_back(placed);
+        runner.SetCompletionVerifier([&](const goals::Goal& current, std::stop_token)
+            { return computer::VerifyExactContentPlacement(task, current, observed, true, computer::DeriveTaskAcceptance(compound.title)); });
+        const auto incomplete = runner.Operate(compound);
+        tests::Check(incomplete.status == goals::GoalStatus::Blocked,
+            "ACT-1: the runner certified a whole multi-part task using only native placement evidence.");
+        tests::Check(incomplete.steps.size() == 1 && incomplete.steps.front().status == goals::StepStatus::Succeeded &&
+                !incomplete.stopDetail.empty(), "ACT-1: unresolved remaining work lost its placement receipt or explanation.");
+    }
+    runner.SetCompletionVerifier([&](const goals::Goal&, std::stop_token)
+        { return goals::CompletionEvidence{true, "The independent fixture file exists."}; });
+    {
+        const std::string request = "put \"hello\" into \"Compose https://example.com/form\" in the Other window";
+        const auto nativeTask = computer::ExtractTaskContent(request);
+        browser::BrowserReceipt receipt;
+        receipt.session = "owned-fixture";
+        receipt.generation = 4;
+        receipt.url = "https://example.com/form";
+        receipt.elements.push_back({"node-1", nativeTask.destination, "textarea", false, true, "hello", true});
+        goals::Goal browserGoal;
+        browserGoal.id = goals::NewGoalId();
+        goals::GoalStep placed;
+        placed.action.type = actions::ActionType::BrowserFill;
+        placed.action.browser = {receipt.url, receipt.session, 2, "node-1", "hello"};
+        placed.status = goals::StepStatus::Succeeded;
+        goals::StepAttempt verified;
+        verified.executed = true;
+        verified.outcome = goals::VerificationOutcome::Verified;
+        verified.checkedBy = goals::PostconditionKind::BrowserControlValueIs;
+        placed.attempts.push_back(verified);
+        browserGoal.steps.push_back(placed);
+        computer::ComputerObservation observed;
+        observed.browser = receipt;
+        actions::windows::DesktopObserver observer;
+        computer::ComputerTaskCoordinator coordinator(observer, directory.root);
+        coordinator.BeginTask(browserGoal.id, computer::RequestOrigin::UserDirected, nativeTask, request);
+        tests::Check(!coordinator.VerifyCompletion(browserGoal, observed, {}).accepted,
+            "ACT-1: browser placement certified a native requested app because a quoted field label contained a URL.");
+        coordinator.EndTask();
+    }
     int recoveries = 0;
     runner.SetRecoveryHandler(
         [&](goals::NextStep::Recovery kind, const goals::Goal&, std::stop_token token, std::string& evidence)

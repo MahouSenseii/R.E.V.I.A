@@ -401,6 +401,37 @@ void TestExplicitReplacementUsesIndependentlyConfirmedSample()
     Check(fixture.recognition.Observe(second, fixture.identities.RecognitionConsentRevisions()).entityId.empty(),
         "Revoked recognition consent kept the replacement usable.");
 }
+void TestUnreadableIdentityCannotConfirmDurableEnrollment()
+{
+    for (const std::string& original : {std::string("{ unreadable earned identity"),
+             std::string(R"({"schemaVersion":999,"earnedState":"preserve me"})")})
+    {
+        Fixture fixture;
+        const auto path = fixture.directory.root / "identity.json";
+        std::ofstream(path, std::ios::binary) << original;
+        std::string error;
+        Check(!fixture.identities.Load(error), "The dialogue unreadable identity fixture unexpectedly loaded.");
+        (void)fixture.identities.Get(fixture.current.entityId);
+        auto callbacks = fixture.Callbacks();
+        callbacks.commit = [&](const auto& captured, const auto& features, const auto& admits, std::string& saveError)
+        { return fixture.identities.SaveConsentedSpeakerSample(captured.entityId, features, admits, saveError); };
+        speech::SpeakerEnrollmentDialogue dialogue(std::move(callbacks));
+        const auto wave = fixture.directory.root / "synthetic.wav";
+        WriteWave(wave, 300);
+        Arm(dialogue, fixture.current);
+        Check(dialogue.CaptureNextSample(wave).phase == SpeakerEnrollmentPhase::AwaitingConfirmation,
+            "The unreadable identity fixture did not reach independent sample confirmation.");
+        const auto result = dialogue.HandleTyped("confirm this voice sample", fixture.current);
+        std::ifstream input(path, std::ios::binary);
+        const std::string actual{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        Check(actual == original, "Conversational confirmation overwrote unreadable identity.");
+        Check(!result.completed, "Conversational confirmation reported a durable enrollment after a failed load.");
+        Check(result.message.find("No enrollment success is claimed") != std::string::npos,
+            "Conversational confirmation hid its unsaved outcome.");
+        Check(!fixture.identities.RecognitionConsentRevision(fixture.current.entityId) && fixture.identities.SpeakerTemplates().empty(),
+            "Blocked conversational enrollment adopted live biometric consent or a sample.");
+    }
+}
 } // namespace
 
 void RunSpeakerEnrollmentDialogueTests()
@@ -414,5 +445,6 @@ void RunSpeakerEnrollmentDialogueTests()
     TestContextChangesCannotConfirmOldFeatures();
     TestCommitAdmissionAndErrorsDoNotClaimSuccess();
     TestExplicitReplacementUsesIndependentlyConfirmedSample();
-    std::cout << "Speaker enrollment dialogue tests passed (9 fixtures; controlled WAVs, no physical accuracy/authentication claim).\n";
+    TestUnreadableIdentityCannotConfirmDurableEnrollment();
+    std::cout << "Speaker enrollment dialogue tests passed (10 fixtures; controlled WAVs, no physical accuracy/authentication claim).\n";
 }

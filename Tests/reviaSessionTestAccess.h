@@ -573,6 +573,16 @@ struct ReviaSessionTestAccess
         return std::unique_lock(session.operationMutex);
     }
 
+    static std::unique_lock<std::mutex> HoldVoiceStudio(ReviaSession& session)
+    {
+        return std::unique_lock(session.voiceStudioMutex);
+    }
+
+    static bool VoiceWarmupStarted(const ReviaSession& session)
+    {
+        return session.voiceWarmupWorker.joinable();
+    }
+
     static std::stop_token OperationToken(ReviaSession& session)
     {
         return session.CurrentOperationToken();
@@ -665,7 +675,7 @@ struct ReviaSessionTestAccess
         goal.id = goals::NewGoalId();
         goal.title = request;
         goal.scope = goals::NarrowScopeForGoal(session.Capabilities());
-        BeginComputerTask(session, goal.id, computer::ExtractTaskContent(request));
+        BeginComputerTask(session, goal.id, computer::ExtractTaskContent(request), request);
         goals::Goal finished =
             OperateGoal(session, std::move(goal), /*cancelBeforeRun=*/true);
         EndComputerTask(session);
@@ -857,10 +867,10 @@ struct ReviaSessionTestAccess
             std::move(goal), stopToken);
     }
 
-    static void BeginComputerTask(ReviaSession& session, const std::string& goalId, computer::TaskContent content = {})
+    static void BeginComputerTask(ReviaSession& session, const std::string& goalId, computer::TaskContent content = {}, const std::string& request = {})
     {
         session.computerTasks.BeginTask(
-            goalId, computer::RequestOrigin::UserDirected, std::move(content));
+            goalId, computer::RequestOrigin::UserDirected, std::move(content), request);
     }
 
     static void EndComputerTask(ReviaSession& session)

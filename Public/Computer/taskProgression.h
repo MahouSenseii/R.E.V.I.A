@@ -66,6 +66,7 @@ struct TaskProgressInputs
     // Whether the content has been seen in a field and verified, from the goal's own
     // record rather than from anything a provider claimed.
     bool contentPlaced = false;
+    const TaskAcceptanceContract* acceptance = nullptr;
     // Exact draft/control/context checked again since the historical placement.
     bool submissionReady = false;
     // This iteration's single observation.

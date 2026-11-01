@@ -552,9 +552,9 @@ void TestNewChatStartsAFreshContextAndKeepsTheOldOne()
         "The Markdown export lost the title or the turn.");
     Check(!session.ContinueConversation("first-chat", error) && !error.empty(),
         "An unidentified typist continued a chat without an attributed scope.");
-    Check(session.DeleteConversation("first-chat", error) && session.BrowseConversations({}, 10, error).size() == 1,
+    Check(session.DeleteConversation("first-chat").Succeeded() && session.BrowseConversations({}, 10, error).size() == 1,
         "Deleting a past chat did not remove it.");
-    Check(session.DeleteConversation(fresh, error) && ReviaSessionTestAccess::WorkingContext(session).empty() &&
+    Check(session.DeleteConversation(fresh).Succeeded() && ReviaSessionTestAccess::WorkingContext(session).empty() &&
               session.CurrentConversationId() == fresh,
         "Deleting the current chat did not clear its working context.");
     ReviaSessionTestAccess::MarkStudioStarted(session, false);

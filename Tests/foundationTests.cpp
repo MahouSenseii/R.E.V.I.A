@@ -16,6 +16,7 @@
 #include "testSupport.h"
 
 void RunLookupAuthorityTests();
+void RunNativeTaskAcceptanceSessionTests();
 
 #include "Actions/IActionExecutor.h"
 #include "Actions/actionDispatcher.h"
@@ -6088,8 +6089,8 @@ void TestConversationArchiveRemembersAndSearches()
     Check(afterEmpty.size() == 2 && afterEmpty.front().content.find("502") != std::string::npos,
         "An empty session in between hid the previous conversation from restore.");
 
-    const std::size_t removed = archive.Forget();
-    Check(removed == 2 && archive.TotalTurns() == 0,
+    const auto removed = archive.Forget();
+    Check(removed.Succeeded() && removed.turnsRemoved == 2 && archive.TotalTurns() == 0,
         "Forgetting the archive left turns behind.");
 }
 
@@ -6109,7 +6110,8 @@ void TestArchiveForgetLeavesNoTextOnDisk()
             "My grandmother's " + marker + " recipe, part " + std::to_string(turn), reason),
             "A turn was not archived: " + reason);
     }
-    Check(archive.Forget() == 12, "Forgetting did not remove every turn.");
+    const auto forgotten = archive.Forget();
+    Check(forgotten.Succeeded() && forgotten.turnsRemoved == 12, "Forgetting did not remove every turn.");
 
     // Read while the connection is still open, which is when the write-ahead log exists.
     // A forget that only empties the tables leaves every forgotten turn in that file.
@@ -6181,7 +6183,8 @@ void TestArchiveReachesAStretchOfTimeDirectly()
     Check(!earliest.empty() && earliest.front().role == "user",
         "The earliest mention of a subject was not returned oldest first.");
 
-    Check(archive.Forget() == 3, "Forgetting did not remove every turn.");
+    const auto forgotten = archive.Forget();
+    Check(forgotten.Succeeded() && forgotten.turnsRemoved == 3, "Forgetting did not remove every turn.");
 }
 
 void TestArchiveIsConsultedOnlyWhenThePastIsAskedAbout()
@@ -9765,6 +9768,12 @@ int main(const int argc, char** argv)
         if (argc > 1 && std::string(argv[1]) == "--operator-loop")
         {
             RunOperatorLoopTests();
+            return 0;
+        }
+        // The owned native fixture requires foreground activation; it never synthesizes input.
+        if (argc > 1 && std::string(argv[1]) == "--native-task-acceptance")
+        {
+            RunNativeTaskAcceptanceSessionTests();
             return 0;
         }
         if (argc > 1 && std::string(argv[1]) == "--operator-session")

@@ -199,6 +199,17 @@ class TrainingWorkerTests(unittest.TestCase):
         self.refused("withdrawn since the export")
         self.assertEqual(FakeBackend.created, [])
 
+    def test_pending_cleanup_metadata_is_opaque_to_withdrawal_reader(self):
+        marker = "\0revia-live-capture-cleanup-v1:0123456789abcdef"
+        self.fixture.withdrawn.write_text(json.dumps([marker, "capture:literal-permanent-source"]), encoding="utf-8")
+        train, validation, identity = MODULE.verify_dataset(self.fixture.job)
+        self.assertEqual((len(train), len(validation)), (5, 1))
+        self.assertEqual(identity["withdrawnSourcesSha256"], sha(self.fixture.withdrawn.read_bytes()))
+        self.fixture.withdrawn.write_text(json.dumps([marker, "source-t3"]), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "withdrawn since the export"):
+            MODULE.verify_dataset(self.fixture.job)
+        self.assertEqual(FakeBackend.created, [])
+
     def test_tampered_dataset_or_base_is_refused(self):
         cases = [
             (lambda: (self.fixture.dataset / "train.jsonl").write_text("{}\n"), "does not match its dataset manifest"),

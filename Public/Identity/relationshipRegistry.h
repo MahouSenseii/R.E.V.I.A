@@ -36,7 +36,7 @@ class RelationshipRegistry
     explicit RelationshipRegistry(std::filesystem::path path = "RuntimeData/Identity/identity.json");
 
     // Reads persisted relationships. A missing file is a first run, not a failure; a
-    // corrupt one is reported so the caller can refuse to overwrite it.
+    // corrupt one blocks both persistence paths for this registry's lifetime.
     bool Load(std::string& outError);
     bool Save(std::string& outError) const;
 
@@ -120,12 +120,14 @@ class RelationshipRegistry
     mutable std::mutex mutex;
     IdentityStore store;
     IdentitySnapshot snapshot;
+    bool persistenceBlocked = false;
     std::map<std::string, std::chrono::steady_clock::time_point> frictionUpdatedAt;
     // Kept alongside the snapshot rather than inside it: the set owns the bounded update
     // rules, and the snapshot is the plain data those rules produce.
     PreferenceSet preferences;
     void ReplayEvidenceLocked();
     void CompactEvidenceLocked();
+    bool CanPersistLocked(std::string& outError) const;
 };
 
 } // namespace revia::identity

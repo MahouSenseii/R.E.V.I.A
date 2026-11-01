@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <sqlite3.h>
 
 namespace
 {
@@ -161,6 +162,170 @@ std::string ReadFile(const std::filesystem::path& path)
     return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
 }
 
+void ForgetSql(const std::filesystem::path& path, const std::string& sql)
+{
+    sqlite3* database = nullptr;
+    Check(sqlite3_open(path.string().c_str(), &database) == SQLITE_OK, "Forget fault database could not be opened.");
+    const int code = sqlite3_exec(database, sql.c_str(), nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    Check(code == SQLITE_OK, "Forget fault could not be configured.");
+}
+
+void TestForgetCommandReportsArchiveRollback()
+{
+    for (const std::string table : {"conversation_turns", "conversation_sessions"})
+    {
+        revia::tests::ScopedTestDirectory fixture;
+        ReviaSession session(CompanionPaths(fixture.root, {"forget-rollback", "Synthetic forget", "assistant", false}));
+        Prepare(session, fixture.root);
+        const auto path = fixture.root / "archive.sqlite";
+        ReviaSessionTestAccess::OpenConversationArchive(session, path, "fixture");
+        revia::memory::ConversationArchive archive(path.string());
+        std::string error;
+        Check(archive.Record("fixture", "user", "synthetic pottery discussion", error) &&
+                  archive.Record("fixture", "assistant", "synthetic pottery reply", error), error);
+        ReviaSessionTestAccess::RecordDeliveredEditorOpening(session, "synthetic working context");
+        ForgetSql(path, "CREATE TRIGGER block_delete BEFORE DELETE ON " + table +
+            " BEGIN SELECT RAISE(ABORT, 'synthetic delete failure'); END;");
+        const auto result = ReviaSessionTestAccess::HandleCommand(session, "/history forget");
+        Check(archive.TotalTurns() == 2 && archive.Search("pottery").size() == 2,
+            "Forget command failure did not preserve both durable turns.");
+        Check(ReviaSessionTestAccess::WorkingContext(session).empty(), "Forget command did not clear live context on archive failure.");
+        Check(!result.succeeded && result.text.find("nothing archived") == std::string::npos &&
+                  result.text.find("Nothing is kept") == std::string::npos,
+            "MEM-2: archive rollback was projected as successful empty history: " + result.text);
+        const auto receipt = session.ForgetConversations();
+        Check(receipt.Outcome() == ConversationForgetOutcome::Partial && !receipt.archive.rowsDeleted &&
+                  receipt.archive.turnsRemoved == 0 && !receipt.archive.error.empty() && receipt.contextCleared,
+            "Archive rollback lost its typed outcome or completed live-context reset.");
+        ForgetSql(path, "DROP TRIGGER block_delete;");
+        Check(ReviaSessionTestAccess::HandleCommand(session, "/history forget").succeeded && archive.TotalTurns() == 0,
+            "Forget command could not retry after rollback.");
+    }
+}
+
+void TestForgetCommandReportsCaptureFailure()
+{
+    for (const bool corrupt : {true, false})
+    {
+        revia::tests::ScopedTestDirectory fixture;
+        const CompanionPaths paths(fixture.root, {"forget-capture", "Synthetic forget", "assistant", false});
+        ReviaSession session(paths);
+        Prepare(session, fixture.root);
+        const auto archivePath = fixture.root / "archive.sqlite";
+        ReviaSessionTestAccess::OpenConversationArchive(session, archivePath, "fixture");
+        revia::memory::ConversationArchive archive(archivePath.string());
+        std::string error, captureId, taskId, recordId;
+        Check(archive.Record("fixture", "user", "synthetic forgotten turn", error), error);
+        ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
+        const auto feedback = Feedback(session);
+        Check(session.RecordQualityFeedback(feedback, taskId, recordId, error) &&
+                  session.CaptureJudgedTurn(feedback, captureId, error), error);
+        const auto root = paths.Resolve("RuntimeData/Learning/Captures");
+        const auto fault = root / (corrupt ? "withdrawn.json" : "withdrawn.json.partial");
+        if (corrupt)
+            std::ofstream(fault) << "{broken";
+        else
+            std::filesystem::create_directory(fault);
+        const auto result = ReviaSessionTestAccess::HandleCommand(session, "/history forget");
+        Check(archive.TotalTurns() == 0 && std::filesystem::exists(root / "live" / (captureId + ".json")),
+            "Capture fault fixture did not keep capture after archive deletion.");
+        Check(!result.succeeded && result.text.find("Nothing is kept") == std::string::npos &&
+                  result.text.find("withdraw") != std::string::npos,
+            "MEM-2: capture withdrawal failure was projected as completed forgetting: " + result.text);
+        const auto receipt = session.ForgetConversations();
+        Check(receipt.Outcome() == ConversationForgetOutcome::Partial && receipt.archive.Succeeded() &&
+                  receipt.contextCleared && !receipt.captures.succeeded && !receipt.captures.error.empty(),
+            "Capture failure was not carried separately from completed archive/context work.");
+        std::filesystem::remove(fault);
+        Check(ReviaSessionTestAccess::HandleCommand(session, "/history forget").succeeded &&
+                  !std::filesystem::exists(root / "live" / (captureId + ".json")), "Capture withdrawal retry did not complete.");
+    }
+}
+
+void TestForgetReportsEmptyAndNewSessionFailure()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    ReviaSession session(CompanionPaths(fixture.root, {"forget-new", "Synthetic forget", "assistant", false}));
+    Prepare(session, fixture.root);
+    const auto path = fixture.root / "archive.sqlite";
+    ReviaSessionTestAccess::OpenConversationArchive(session, path, "fixture");
+    const auto empty = session.ForgetConversations();
+    Check(empty.Succeeded() && empty.Outcome() == ConversationForgetOutcome::Empty && empty.archive.turnsRemoved == 0,
+        "An empty archive was not distinguished from failure.");
+    revia::memory::ConversationArchive archive(path.string());
+    std::string error;
+    Check(archive.Record("fixture", "user", "synthetic deleted turn", error), error);
+    ForgetSql(path, "CREATE TRIGGER block_new BEFORE INSERT ON conversation_sessions "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic new session failure'); END;");
+    const auto partial = session.ForgetConversations();
+    Check(partial.Outcome() == ConversationForgetOutcome::Partial && partial.archive.Succeeded() &&
+              partial.archive.turnsRemoved == 1 && !partial.newSessionStarted && !partial.sessionError.empty() && archive.TotalTurns() == 0,
+        "New session failure hid committed deletion or was reported as complete.");
+    ForgetSql(path, "DROP TRIGGER block_new;");
+    Check(session.ForgetConversations().Succeeded() && archive.HasSession("fixture"), "Fresh session creation could not be retried.");
+}
+
+void TestDeleteConversationRetainsPartialReceiptAndRetriesOrphan()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const CompanionPaths paths(fixture.root, {"delete-retry", "Synthetic delete", "assistant", false});
+    ReviaSession session(paths);
+    Prepare(session, fixture.root);
+    const auto path = fixture.root / "archive.sqlite";
+    ReviaSessionTestAccess::OpenConversationArchive(session, path, "fixture");
+    revia::memory::ConversationArchive archive(path.string());
+    std::string error, captureId, taskId, recordId;
+    Check(archive.Record("fixture", "user", "synthetic deleted conversation", error), error);
+    ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
+    const auto feedback = Feedback(session);
+    Check(session.RecordQualityFeedback(feedback, taskId, recordId, error) && session.CaptureJudgedTurn(feedback, captureId, error), error);
+    std::uint64_t revision = 0;
+    Check(session.CorrectLiveCapture(captureId, revia::learning::LearningDecision::Accept, "Synthetic correct reply", revision, error), error);
+    ReviaSessionTestAccess::OpenConversationArchive(session, path, "current");
+    const auto blocked = paths.Resolve("RuntimeData/Learning/Captures/corrections") / (captureId + ".json.bak");
+    std::filesystem::create_directory(blocked);
+    std::ofstream(blocked / "fault") << "synthetic";
+    ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    struct RestoreStarted
+    {
+        ReviaSession& session;
+        ~RestoreStarted() { ReviaSessionTestAccess::MarkStudioStarted(session, false); }
+    } restore{session};
+    const auto partial = session.DeleteConversation("fixture");
+    Check(partial.Outcome() == ConversationForgetOutcome::Partial && partial.archive.Succeeded() && partial.archive.turnsRemoved == 1 &&
+              partial.captures.capturesRemoved == 1 && !partial.captures.succeeded && !archive.HasSession("fixture"),
+        "Past-chat deletion did not retain the completed archive/capture work and pending correction.");
+    std::filesystem::remove(blocked / "fault");
+    const auto retry = session.DeleteConversation("fixture");
+    Check(retry.Succeeded() && retry.archive.turnsRemoved == 0 && retry.captures.correctionsRemoved == 1 &&
+              !std::filesystem::exists(blocked), "Deleting an absent archive row could not retry pending correction removal.");
+    ForgetSql(path, "CREATE TRIGGER block_delete BEFORE DELETE ON conversation_sessions "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic current delete failure'); END;");
+    Check(archive.Record("current", "user", "synthetic retained current turn", error), error);
+    ReviaSessionTestAccess::RecordDeliveredEditorOpening(session, "synthetic current context");
+    const auto current = session.DeleteConversation("current");
+    Check(!current.Succeeded() && !current.archive.rowsDeleted && current.archive.turnsRemoved == 0 &&
+              current.contextCleared && archive.LoadSession("current").size() == 1,
+        "Current-chat deletion hid archive rollback or failed to clear context.");
+}
+
+void TestForgetCommandFailureRegressions()
+{
+    std::string failures;
+    for (const auto test : {TestForgetCommandReportsArchiveRollback, TestForgetCommandReportsCaptureFailure,
+             TestForgetReportsEmptyAndNewSessionFailure, TestDeleteConversationRetainsPartialReceiptAndRetriesOrphan})
+        try
+        {
+            test();
+        }
+        catch (const std::exception& error)
+        {
+            failures += std::string(error.what()) + '\n';
+        }
+    Check(failures.empty(), failures);
+}
+
 void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
 {
     revia::tests::ScopedTestDirectory fixture;
@@ -216,7 +381,7 @@ void TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn()
 
     // Held under the current audience, so only forgetting the chats can drop it.
     ReviaSessionTestAccess::HoldDeliveredReply(session, HeldReply("Actual synthetic displayed reply"), "owner");
-    session.ForgetConversations();
+    Check(session.ForgetConversations().Succeeded(), "Ordinary forgetting failed.");
     const auto withdrawn = nlohmann::json::parse(ReadFile(paths.Resolve("RuntimeData/Learning/Captures/withdrawn.json")))
                                .get<std::vector<std::string>>();
     Check(!std::filesystem::exists(kept) && std::find(withdrawn.begin(), withdrawn.end(), feedback.targetId) != withdrawn.end(),
@@ -457,6 +622,7 @@ void TestCanceledQualityRetestPreservesAttemptHistory()
 
 void RunQualityFeedbackRuntimeTests()
 {
+    TestForgetCommandFailureRegressions();
     TestRuntimeJudgmentAuthorityAndAudienceEpoch();
     TestPrivateCandidateCapturedConfigurationAndOrdinaryReview();
     TestJudgedReplyExchangeIsKeptOnlyOnRequestAndWithdrawn();

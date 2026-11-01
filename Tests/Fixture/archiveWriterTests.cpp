@@ -121,7 +121,8 @@ void EndingASessionCannotOverwriteTheDeletionCount()
     }
     hooks.changed.notify_all();
     const bool ended = ending.get();
-    const std::size_t removed = deleting.get();
+    const auto deletion = deleting.get();
+    const std::size_t removed = deletion.turnsRemoved;
     activeHooks = nullptr;
 
     std::cout << "EndSession succeeded=" << ended << "; DELETE overlap=" << overlapped
@@ -130,7 +131,7 @@ void EndingASessionCannotOverwriteTheDeletionCount()
     Check(ended, "EndSession failed while deletion ran.");
     Check(archive.TotalTurns() == 0 && archive.LoadSession("delete").empty(),
         "Session deletion did not remove the two real archived turns.");
-    Check(removed == 2, "EndSession overwrote the committed deletion count: reported " + std::to_string(removed));
+    Check(deletion.Succeeded() && removed == 2, "EndSession overwrote the committed deletion count: reported " + std::to_string(removed));
     const auto sessions = archive.RecentSessions();
     Check(sessions.size() == 1 && sessions.front().id == "keep",
         "Deleting one session changed another session's metadata.");

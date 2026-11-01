@@ -78,6 +78,27 @@ struct TaskContent
     [[nodiscard]] bool Any() const { return requirement != ContentRequirement::None; }
 };
 
+enum class TaskAcceptanceSurface
+{
+    Unresolved,
+    Native,
+    Browser
+};
+
+// Derived only from the whole admitted request, independently of payload custody.
+// Unknown syntax or remaining work cannot inherit placement success.
+struct TaskAcceptanceContract
+{
+    bool placementOnly = false;
+    TaskAcceptanceSurface surface = TaskAcceptanceSurface::Unresolved;
+    std::string application;
+    std::string browserOrigin;
+    [[nodiscard]] bool MatchesApplication(const std::string& executable) const;
+    std::string detail = "Additional or unsupported remaining work is unresolved; exact placement alone cannot complete this request.";
+};
+
+[[nodiscard]] TaskAcceptanceContract DeriveTaskAcceptance(const std::string& request);
+
 // Planner grammar requires this token for held content; the gate supplies the original.
 inline constexpr const char* PreparedContentToken = "<the prepared content>";
 

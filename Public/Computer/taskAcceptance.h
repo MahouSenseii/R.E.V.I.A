@@ -9,11 +9,13 @@ namespace revia::computer
 
 // The caller supplies an admitted current observation and an independent draft readback.
 [[nodiscard]] goals::CompletionEvidence VerifyExactContentPlacement(
-    const TaskContent& task, const goals::Goal& goal, const ComputerObservation& observation, bool currentPlacementVerified);
+    const TaskContent& task, const goals::Goal& goal, const ComputerObservation& observation, bool currentPlacementVerified,
+    const TaskAcceptanceContract& acceptance = {});
 
 [[nodiscard]] const browser::BrowserElement* MatchOriginalBrowserField(
     const TaskContent& task, const browser::BrowserReceipt& receipt, std::string& refusal);
 [[nodiscard]] goals::CompletionEvidence VerifyExactBrowserPlacement(
-    const TaskContent& task, const goals::Goal& goal, const browser::BrowserReceipt& receipt);
+    const TaskContent& task, const goals::Goal& goal, const browser::BrowserReceipt& receipt,
+    const TaskAcceptanceContract& acceptance = {});
 
 } // namespace revia::computer

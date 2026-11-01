@@ -566,8 +566,7 @@ void ReviaWindow::RebuildSessionPanels()
     internetActivityPanel = new InternetActivityPanel(ui->internetActivityPage);
     ui->internetActivityHostLayout->addWidget(internetActivityPanel);
     delete canvasPanel;
-    canvasPanel = new CanvasPanel(ui->canvasPage);
-    ui->canvasHostLayout->addWidget(canvasPanel);
+    BuildCanvasPanel();
     delete resourcePanel;
     resourcePanel = new ResourcePanel(
         [this](const std::string& device) { return Session().SetPreference("resources.voiceDevice", device); }, ui->resourcePage);

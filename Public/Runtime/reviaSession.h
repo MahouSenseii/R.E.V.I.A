@@ -12,6 +12,7 @@
 #include "Runtime/agentProviderMode.h"
 #include "Runtime/companion.h"
 #include "Runtime/sessionIdentity.h"
+#include "Runtime/testRunRuntime.h"
 #include "Runtime/learningStudio.h"
 #include "Learning/liveCapture.h"
 #include "Learning/liveDatasetExport.h"
@@ -244,6 +245,22 @@ struct BooleanSettingState
 };
 
 struct ReviaSessionTestAccess;
+
+enum class ConversationForgetOutcome { Empty, Completed, Partial, Failed };
+
+struct ConversationForgetResult
+{
+    memory::ArchiveForgetResult archive;
+    learning::CaptureWithdrawalResult captures;
+    bool contextCleared = false;
+    bool newSessionStarted = true;
+    std::string sessionError;
+    std::string retryTarget;
+
+    [[nodiscard]] bool Succeeded() const;
+    [[nodiscard]] ConversationForgetOutcome Outcome() const;
+    [[nodiscard]] std::string Message() const;
+};
 
 class ReviaSession
 {
@@ -486,7 +503,7 @@ class ReviaSession
     [[nodiscard]] std::string RecallConversation(
         const memory::RecallRequest& request, const std::string& currentInput, const memory::MemoryScope& scope) const;
     [[nodiscard]] std::vector<memory::ArchivedSession> RecentConversations(std::size_t maxSessions = 20) const;
-    std::size_t ForgetConversations();
+    [[nodiscard]] ConversationForgetResult ForgetConversations();
 
     // The desktop chat list. Every call refuses outside a private audience, the same
     // boundary /history sits behind, so past chats never appear on a shared screen. The
@@ -505,7 +522,7 @@ class ReviaSession
     // archives later turns there. Only an attributed private speaker can continue.
     bool ContinueConversation(const std::string& sessionId, std::string& outError);
     bool RenameConversation(const std::string& sessionId, const std::string& title, std::string& outError);
-    bool DeleteConversation(const std::string& sessionId, std::string& outError);
+    [[nodiscard]] ConversationForgetResult DeleteConversation(const std::string& sessionId);
     // Retract the latest conversational exchange from the working context and the
     // archive, then run the same or the edited text through Submit, so the new turn
     // passes every admission check a typed message does. outRetracted is false when
@@ -628,6 +645,7 @@ class ReviaSession
         const std::string& name, const std::string& description, const std::string& referenceText, const std::string& language);
     speech::VoiceOperationResult RenderVoiceBank(const std::string& presetId);
     speech::VoiceOperationResult PreviewVoice(const std::string& presetId, const std::string& text);
+    // Refuses at once while a manual voice operation holds the studio; never queues a retry.
     speech::VoiceOperationResult AssignVoice(const std::string& profileId, const std::string& presetId);
 
     // Profile edits cannot change capabilities.
@@ -641,6 +659,10 @@ class ReviaSession
     ProfileOperationResult ActivateProfile(const std::string& profileId);
 
   private:
+    bool TryHandleTestInput(const std::string& input, agents::InputSource source, SessionResult& result, bool hasAttachments = false);
+    void OpenTestCommands();
+    void StopTestCommands();
+
     SessionResult GenerateImageRequest(const visual::ImageRequest& request, std::optional<conversationMediaReference> source,
         std::stop_token stopToken, std::function<bool()> admission, bool publishTurnStates = true);
     void DiscardGeneratedMedia(const std::vector<conversationMediaReference>& references);
@@ -1004,6 +1026,11 @@ class ReviaSession
 
     CompanionPaths companionPaths;
     SessionIdentity sessionIdentity;
+    std::mutex testCommandMutex;
+    TestRunRuntime testRunRuntime;
+    bool testCommandsOpen = true;
+    bool testRunConfigured = false;
+    std::string testRunConfigurationError;
     resources::RuntimeLease foregroundLease;
     std::shared_ptr<policy::CompanionAuthority> companionAuthority;
     agents::AgentWorkflow agentWorkflow;
@@ -1145,7 +1172,7 @@ class ReviaSession
     void HoldDeliveredReply(const responseOutput& reply, std::uint64_t audienceRevision, const std::string& participantId);
     // Drops held replies and kept captures that name `source`, or every one when it is empty.
     // Returns why kept captures could not be withdrawn, or nothing.
-    std::string WithdrawLiveCaptures(const std::string& source);
+    learning::CaptureWithdrawalResult WithdrawLiveCaptures(const std::string& source);
     [[nodiscard]] learning::LiveCaptureStore CaptureStore() const;
     // The kept captures as last listed, read again only when the store's revision changes or
     // this session changes the store. The Learning panel asks for them every second.

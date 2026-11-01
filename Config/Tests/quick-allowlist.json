@@ -1,0 +1,4851 @@
+{
+  "schema": 1,
+  "groups": {
+    "quick": {
+      "approval": "reviewed-pure-native",
+      "scope": "quick",
+      "purpose": "Four small in-memory policy and ownership checks; no services or device startup.",
+      "ids": [
+        "Revia.VideoPublicationLane",
+        "Revia.DrawingIntent",
+        "Revia.VideoRequestPolicy",
+        "ReviaVideoFrameReplyTests"
+      ]
+    },
+    "response": {
+      "approval": "reviewed-pure-native",
+      "scope": "quick",
+      "purpose": "Synthetic response-timing logic; no model-response benchmark.",
+      "ids": [
+        "ReviaResponseLatencyTests"
+      ]
+    },
+    "conversation": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Conversation, identity, privacy and reply-policy fixture checks.",
+      "ids": [
+        "Revia.SessionIdentity",
+        "Revia.CompanionIsolationMigration",
+        "ReviaAudienceInputTests",
+        "ReviaSocialIdentityTests",
+        "ReviaRelationshipEvidenceTests",
+        "ReviaConversationGuidanceTests",
+        "ReviaReplyFormatTests",
+        "ReviaStructuredReplyTests",
+        "ReviaCalculationVerifierTests",
+        "ReviaCalculationGroundingTests",
+        "ReviaContentDigestTests",
+        "ReviaResponseLatencyTests",
+        "ReviaInvestigationCheckTests",
+        "ReviaAnswerQualityTests",
+        "ReviaQualityFeedbackTests",
+        "ReviaContextFittingTests",
+        "ReviaCloudModelTests",
+        "ReviaRoutingProductionTests",
+        "ReviaRelationshipTests",
+        "ReviaInitiativeModeTests",
+        "ReviaSavedFileObservationTests",
+        "ReviaEditorAwarenessTests",
+        "ReviaProactiveStateTests",
+        "ReviaSourceDiagnosticTests",
+        "ReviaSourceDiagnosticReplyTests",
+        "Revia.CognitionWrongAnswers",
+        "Revia.CognitionFrozenAccounting",
+        "ReviaCognitionLiveTests",
+        "Revia.ObservedLocalModel",
+        "Revia.CompanionRuntime",
+        "revia_web_guest",
+        "revia_web_guest_privacy",
+        "Revia.OutputBoundaries",
+        "Revia.IdentityFinalSave"
+      ]
+    },
+    "memory": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Memory correction, isolation, archives and retrieval fixtures.",
+      "ids": [
+        "ReviaMemoryRevisionTests",
+        "ReviaMemoryCorrectionTests",
+        "ReviaMemoryCorrectionAgentTests",
+        "ReviaMemoryCorrectionRuntimeTests",
+        "ReviaSemanticDuplicateTests",
+        "ReviaSemanticDuplicateAgentTests",
+        "ReviaConversationArchiveHybridTests",
+        "ReviaArchiveEmbeddingBackfillTests",
+        "ReviaQualityFeedbackRuntimeTests",
+        "ReviaMemoryScopeTests",
+        "ReviaScopedMemoryQueueTests",
+        "Revia.ArchiveWriter",
+        "Revia.MemoryReranker",
+        "Revia.MemoryNliWorker",
+        "Revia.MemoryRetrievalPipeline",
+        "Revia.MemoryRerankerWorker",
+        "Revia.MemoryNliPythonWorker"
+      ]
+    },
+    "tools": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Tool, process, browser-policy and task-contract fixture checks.",
+      "ids": [
+        "ReviaProcessExecutionTests",
+        "ReviaProcessOwnerTests",
+        "ReviaOperatorUpgradeTests",
+        "ReviaProcessCapabilityTests",
+        "ReviaCapabilityProjectionTests",
+        "ReviaTaskAcceptanceTests",
+        "ReviaBrowserContractTests",
+        "ReviaAgentToolBudgetTests",
+        "ReviaAgentToolWorkerTests",
+        "ReviaAgentToolActionTests",
+        "ReviaToolLoopTests",
+        "ReviaDelegationTests",
+        "ReviaMcpClientTests",
+        "ReviaLocalApiTests",
+        "Revia.TaskContracts",
+        "Revia.TaskContractActions",
+        "Revia.TaskContractSession",
+        "Revia.EvaluationCampaignIdentity",
+        "ReviaEvidenceJournalTests",
+        "ReviaRuntimeEvidenceBridgeTests"
+      ]
+    },
+    "media": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Synthetic image, audio and video policy/format fixtures; no generation or physical playback.",
+      "ids": [
+        "ReviaSpeakerRecognitionTests",
+        "ReviaSpeakerEnrollmentDialogueTests",
+        "ReviaSpeakerEnrollmentStoreTests",
+        "ReviaSpeakerEnrollmentRuntimeTests",
+        "ReviaPlaybackEnvelopeTests",
+        "ReviaPlaybackPresenceTests",
+        "ReviaPerformanceTests",
+        "ReviaVisionContextTests",
+        "ReviaAttachmentTests",
+        "ReviaMediaSelectionTests",
+        "ReviaVideoSelectionTests",
+        "ReviaConversationStyleDataTests",
+        "ReviaReminderIntentTests",
+        "Revia.VideoPublicationLane",
+        "ReviaVideoFrameReplyTests",
+        "ReviaGeneratedArtifactContinuityTests",
+        "ReviaGeneratedMediaRuntimeTests",
+        "ReviaVideoCoverageTests",
+        "ReviaFileTranscriptionTests",
+        "ReviaImageTokenSettingsTests",
+        "ReviaPromptBatchSettingsTests",
+        "Revia.DrawingIntent",
+        "Revia.VideoRequestPolicy",
+        "Revia.ImageArtifact",
+        "Revia.BrowserWorkerPolicy",
+        "Revia.DiscordVoiceAdapter",
+        "Revia.Live2DBridge"
+      ]
+    },
+    "development": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Build, learning, export, qualification and worker-policy fixtures; no real training or model startup.",
+      "ids": [
+        "ReviaSkillPackageTests",
+        "ReviaLearningReviewTests",
+        "ReviaDatasetExportTests",
+        "ReviaLiveCaptureTests",
+        "ReviaLiveDatasetExportTests",
+        "ReviaCapabilityGapTests",
+        "ReviaSelfDevelopmentTests",
+        "ReviaImprovementAgentTests",
+        "Revia.CognitionCampaignReceipts",
+        "Revia.EditorObservationScripts",
+        "Revia.CompanionQualificationProtocol",
+        "Revia.CompanionQualificationFixture",
+        "Revia.DevelopmentStudioAdmission",
+        "Revia.SetupScriptPolicy",
+        "Revia.RetrievalBenchmarkContracts",
+        "Revia.GuestPreparation",
+        "Revia.ContextBenchmarkContract",
+        "Revia.AnswerGateSessionContract",
+        "Revia.NliDedupBenchmarkContract",
+        "Revia.ImageServicePolicy",
+        "Revia.VideoServicePolicy",
+        "Revia.TrainingWorkerPolicy",
+        "Revia.TrainingAssetInstaller",
+        "Revia.AdapterExportPolicy",
+        "Revia.AdapterEvaluationPolicy",
+        "Revia.DatasetCapturePolicy"
+      ]
+    },
+    "desktop": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Offscreen widget, profile and settings fixture checks; no physical desktop input.",
+      "ids": [
+        "Revia.StudioPanels",
+        "Revia.ProfileVoiceAssignment",
+        "Revia.Theme",
+        "Revia.SettingsDialog",
+        "Revia.ShellWidgets",
+        "Revia.SvgRenderer"
+      ]
+    },
+    "catalog": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Reusable test catalog and local slash-command fixture checks.",
+      "ids": [
+        "Revia.TestCatalog",
+        "Revia.TestCatalogSlash"
+      ]
+    },
+    "all-reviewed": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Explicit broad selection of reviewed isolated fixtures. Missing prerequisites stay blocked; live and held tests stay excluded.",
+      "ids": [
+        "Revia.TestCatalog",
+        "Revia.SessionIdentity",
+        "Revia.CompanionIsolationMigration",
+        "ReviaSkillPackageTests",
+        "ReviaLearningReviewTests",
+        "ReviaDatasetExportTests",
+        "ReviaLiveCaptureTests",
+        "ReviaLiveDatasetExportTests",
+        "ReviaCapabilityGapTests",
+        "ReviaAudienceInputTests",
+        "ReviaSocialIdentityTests",
+        "ReviaSpeakerRecognitionTests",
+        "ReviaSpeakerEnrollmentDialogueTests",
+        "ReviaSpeakerEnrollmentStoreTests",
+        "ReviaSpeakerEnrollmentRuntimeTests",
+        "ReviaRelationshipEvidenceTests",
+        "ReviaConversationGuidanceTests",
+        "ReviaReplyFormatTests",
+        "ReviaStructuredReplyTests",
+        "ReviaCalculationVerifierTests",
+        "ReviaCalculationGroundingTests",
+        "ReviaPlaybackEnvelopeTests",
+        "ReviaPlaybackPresenceTests",
+        "ReviaPerformanceTests",
+        "ReviaSelfDevelopmentTests",
+        "ReviaContentDigestTests",
+        "ReviaResponseLatencyTests",
+        "ReviaInvestigationCheckTests",
+        "ReviaAnswerQualityTests",
+        "ReviaQualityFeedbackTests",
+        "ReviaMemoryRevisionTests",
+        "ReviaMemoryCorrectionTests",
+        "ReviaMemoryCorrectionAgentTests",
+        "ReviaMemoryCorrectionRuntimeTests",
+        "ReviaSemanticDuplicateTests",
+        "ReviaSemanticDuplicateAgentTests",
+        "ReviaConversationArchiveHybridTests",
+        "ReviaArchiveEmbeddingBackfillTests",
+        "ReviaQualityFeedbackRuntimeTests",
+        "ReviaImprovementAgentTests",
+        "ReviaContextFittingTests",
+        "ReviaCloudModelTests",
+        "ReviaRoutingProductionTests",
+        "ReviaProcessExecutionTests",
+        "ReviaProcessOwnerTests",
+        "ReviaOperatorUpgradeTests",
+        "ReviaProcessCapabilityTests",
+        "ReviaCapabilityProjectionTests",
+        "ReviaTaskAcceptanceTests",
+        "ReviaMemoryScopeTests",
+        "ReviaScopedMemoryQueueTests",
+        "ReviaRelationshipTests",
+        "ReviaBrowserContractTests",
+        "ReviaVisionContextTests",
+        "ReviaAgentToolBudgetTests",
+        "ReviaAgentToolWorkerTests",
+        "ReviaAgentToolActionTests",
+        "ReviaToolLoopTests",
+        "ReviaDelegationTests",
+        "ReviaMcpClientTests",
+        "ReviaLocalApiTests",
+        "ReviaInitiativeModeTests",
+        "ReviaSavedFileObservationTests",
+        "ReviaEditorAwarenessTests",
+        "ReviaProactiveStateTests",
+        "ReviaSourceDiagnosticTests",
+        "ReviaSourceDiagnosticReplyTests",
+        "ReviaAttachmentTests",
+        "ReviaMediaSelectionTests",
+        "ReviaVideoSelectionTests",
+        "ReviaConversationStyleDataTests",
+        "ReviaReminderIntentTests",
+        "Revia.VideoPublicationLane",
+        "ReviaVideoFrameReplyTests",
+        "ReviaGeneratedArtifactContinuityTests",
+        "ReviaGeneratedMediaRuntimeTests",
+        "ReviaVideoCoverageTests",
+        "ReviaFileTranscriptionTests",
+        "ReviaImageTokenSettingsTests",
+        "ReviaPromptBatchSettingsTests",
+        "Revia.TaskContracts",
+        "Revia.TaskContractActions",
+        "Revia.TaskContractSession",
+        "Revia.EvaluationCampaignIdentity",
+        "ReviaEvidenceJournalTests",
+        "ReviaRuntimeEvidenceBridgeTests",
+        "Revia.CognitionCampaignReceipts",
+        "Revia.EditorObservationScripts",
+        "Revia.CognitionWrongAnswers",
+        "Revia.CognitionFrozenAccounting",
+        "ReviaCognitionLiveTests",
+        "Revia.ObservedLocalModel",
+        "Revia.DrawingIntent",
+        "Revia.VideoRequestPolicy",
+        "Revia.ImageArtifact",
+        "Revia.CompanionRuntime",
+        "Revia.CompanionQualificationProtocol",
+        "Revia.CompanionQualificationFixture",
+        "Revia.DevelopmentStudioAdmission",
+        "Revia.ArchiveWriter",
+        "revia_web_guest",
+        "revia_web_guest_privacy",
+        "Revia.OutputBoundaries",
+        "Revia.IdentityFinalSave",
+        "Revia.SetupScriptPolicy",
+        "Revia.BrowserWorkerPolicy",
+        "Revia.DiscordVoiceAdapter",
+        "Revia.Live2DBridge",
+        "Revia.MemoryReranker",
+        "Revia.MemoryNliWorker",
+        "Revia.MemoryRetrievalPipeline",
+        "Revia.MemoryRerankerWorker",
+        "Revia.MemoryNliPythonWorker",
+        "Revia.RetrievalBenchmarkContracts",
+        "Revia.GuestPreparation",
+        "Revia.ContextBenchmarkContract",
+        "Revia.AnswerGateSessionContract",
+        "Revia.NliDedupBenchmarkContract",
+        "Revia.ImageServicePolicy",
+        "Revia.VideoServicePolicy",
+        "Revia.TrainingWorkerPolicy",
+        "Revia.TrainingAssetInstaller",
+        "Revia.AdapterExportPolicy",
+        "Revia.AdapterEvaluationPolicy",
+        "Revia.DatasetCapturePolicy",
+        "Revia.StudioPanels",
+        "Revia.ProfileVoiceAssignment",
+        "Revia.Theme",
+        "Revia.SettingsDialog",
+        "Revia.ShellWidgets",
+        "Revia.TestCatalogSlash",
+        "Revia.SvgRenderer"
+      ]
+    },
+    "benchmark-contract": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Mocked context benchmark contract only; no GPU, model or process workload.",
+      "ids": [
+        "Revia.ContextBenchmarkContract"
+      ]
+    },
+    "panels": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Standalone Qt synthetic panel signals and layout; no session startup.",
+      "ids": [
+        "Revia.StudioPanels"
+      ]
+    }
+  },
+  "modules": {
+    "Revia.TestCatalog": {
+      "purpose": "Catalog discovery, mixed outcomes, resume validity, cancellation, isolation and durable result checks.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTestCatalogTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "ce317637ceafc2d6b52a4eff5b2004a4da12943c7956ae031c0ed49f963e4361",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "catalog-focused-checkpoint-before-context-extension",
+        "outcome": "passed_focused_checkpoint",
+        "fresh": false
+      }
+    },
+    "Revia.SessionIdentity": {
+      "purpose": "Only synthetic SessionIdentity stamps and RuntimeEventBus subscriptions in main",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSessionIdentityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "09648fd81bfcecc36ab7ae072641a023595734d4cba818263f25a28d4b638675",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CompanionIsolationMigration": {
+      "purpose": "Synthetic companion registries, profiles, SQLite/WAL migrations, memory agents and newly owned loopback responders",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCompanionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "32ed155f438de1e6a3711c3b4aa79462f7837323811f3fbd81432d4ec2bee0ed",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CompanionAuthority": {
+      "purpose": "On Windows the registered suite creates a visible native window and invokes UIA controls. That crosses the requested no-real-desktop boundary even though it owns the window.",
+      "prerequisites": [
+        "On Windows the registered suite creates a visible native window and invokes UIA controls. That crosses the requested no-real-desktop boundary even though it owns the window."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCompanionAuthorityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "54f607340265891bd56cfbe00bc028b7b076217e1039b4817fab8739b906807b",
+        "interpreterArguments": [],
+        "holdReason": "On Windows the registered suite creates a visible native window and invokes UIA controls. That crosses the requested no-real-desktop boundary even though it owns the window.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.AgentWorkflow": {
+      "purpose": "Fake CPU providers are bounded, but checkpoint fixtures unconditionally create and overwrite fixed files below the source checkout using __FILE__",
+      "prerequisites": [
+        "Fake CPU providers are bounded, but checkpoint fixtures unconditionally create and overwrite fixed files below the source checkout using __FILE__; CWD and TEMP cannot redirect them."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAgentWorkflowTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f9e5849527bbfbb5a09dc417ac08dfb27491798c9958946a2e06f9b4fa6b803e",
+        "interpreterArguments": [],
+        "holdReason": "Fake CPU providers are bounded, but checkpoint fixtures unconditionally create and overwrite fixed files below the source checkout using __FILE__; CWD and TEMP cannot redirect them.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaSkillPackageTests": {
+      "purpose": "Reads checked-in neutral skill package seeds",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSkillPackageTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "6c06e7deb0b7eeeaab81db837af9c778834638d9e626dbd3fd9c93906df50056",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaLearningReviewTests": {
+      "purpose": "Synthetic LearningRecordStore revisions, checks and receipts only",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaLearningReviewTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f1906c2ca47fb073b9bdf7a6209640b02e74f1472cfc3daa4cfe25419d188f74",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaDatasetExportTests": {
+      "purpose": "Builds synthetic candidates and partitions in memory",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDatasetExportTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "25745570e83e1f2006d0043d708d1cca1f0d65a200ea2ed723019173cbb38486",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaLiveCaptureTests": {
+      "purpose": "Despite Live name, serializes fabricated exchanges and temporary capture/correction stores. Two optional fixture-regeneration env variables can write arbitrary paths and must be absent.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaLiveCaptureTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7dd52381eb54d8739859e66543f62c0985d9bf07281185fc371f0c953ae6591c",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaLiveDatasetExportTests": {
+      "purpose": "Exports synthetic saved captures/corrections to owned temp paths",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaLiveDatasetExportTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a8e8633c0721696882c91d5357ee637afaf5dca51025f5f8383e9d9bf6071ea6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCapabilityGapTests": {
+      "purpose": "SelfAssessment records synthetic capability-gap observations and bounded attempts in temporary journal files",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCapabilityGapTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "1aa05139b4de9195758867b6ae6b0d9f3c4357bc77ac0dcdd277c85db4b05088",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAudiencePrivacyTests": {
+      "purpose": "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable; no proven command env switch disables the hardcoded settings."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAudiencePrivacyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e45f89019a19739316dc31ea1666c352fc64c04cc155675cd4981863a7068842",
+        "interpreterArguments": [],
+        "holdReason": "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable; no proven command env switch disables the hardcoded settings.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaAudienceInputTests": {
+      "purpose": "Pure in-memory InputArbiter synthetic participants/audience revisions",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAudienceInputTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f9327ee5398b5afd56d8ec82f88a6a1631c8ac81080c531be3348198d124e65d",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSocialIdentityTests": {
+      "purpose": "Synthetic relationship/consent persistence, addressee gates and initiative policy only. No live recognition service is started.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSocialIdentityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f47b65a3a26249753bea283c7776bdad1b590beebfacd4eec697ce17c71a062d",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSpeakerRecognitionTests": {
+      "purpose": "Writes generated tone WAVs and extracts bounded PCM features locally",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSpeakerRecognitionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a551baa4359ce1af8d73723d3b30f49e4c96dd8f8ff3acb9c6c7db89f6a8b041",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSpeakerEnrollmentDialogueTests": {
+      "purpose": "State-machine dialogue and recognition consent use synthetic identity and generated tone WAVs",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSpeakerEnrollmentDialogueTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7329dd0f5493c811313ade9457be15a966bd6de1dfab6b61ab94cfdc52465664",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSpeakerEnrollmentStoreTests": {
+      "purpose": "Persists synthetic voice-feature arrays and consent history in a disposable IdentityStore",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSpeakerEnrollmentStoreTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d36ee792656edb19affbbeae0a9c1ccd61d2a440777e703eb93a32b6a44c4b91",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSpeakerEnrollmentRuntimeTests": {
+      "purpose": "Constructs sessions with explicit temporary CompanionPaths and bypasses Start via MarkStudioStarted",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSpeakerEnrollmentRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2c3a0ad8c3716ea8b2c514c08b8e2b112607422ace4c17c4b004914113642f3a",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaRelationshipEvidenceTests": {
+      "purpose": "Pure text-to-signal, relationship-event and stimulus calculations using literal dialogue and synthetic speaker IDs.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaRelationshipEvidenceTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "cfbad43bb7c81bd6fd89f7bb52efd5d1498ae69e0aa2327fdb55ab588624fa90",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaConversationGuidanceTests": {
+      "purpose": "Pure ConversationStylePolicy/ResponseFilter transformations of authored literals",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaConversationGuidanceTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "cddcb56ebb79b9815041b39c0f5582462f084ae4af7071df6c6e7d0c9f1e4cb2",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaReplyFormatTests": {
+      "purpose": "Pure reply-contract/schema/text validation of fixed input/output corpora",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaReplyFormatTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e648e7cbb88d5b84e69a1affe0891877e78fb58d9e432920278fa53591209eb6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaStructuredReplyTests": {
+      "purpose": "All actual requests go to newly owned ephemeral HTTP fixtures",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaStructuredReplyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "9532cc59c57b975ca02b10ea1172b7227f00be5faf2583f0488d5e16c32b0192",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCalculationVerifierTests": {
+      "purpose": "Pure closed arithmetic grammar and units evaluator, including forbidden code-like strings as rejected data",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCalculationVerifierTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e134f6c129d576386413661c206e73179c8d096150a1ca95eb26159816c0bbdc",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCalculationGroundingTests": {
+      "purpose": "Closed arithmetic grounding plus fake loopback proposal/answer backend. Runtime fixture uses temp DB/log paths and disables embeddings, autostart, vision and self-inquiry.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCalculationGroundingTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b9d2a9c12e2aaa6ea4b60547ca432ca79cff2d06ddfedc0c33abcbd0da233d7d",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSpeechAdmissionTests": {
+      "purpose": "Owns a fake Qwen HTTP endpoint and uses callback fake players, but QwenTtsClient::EnsureAvailable unconditionally starts a real Python voice worker if health fails",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Owns a fake Qwen HTTP endpoint and uses callback fake players, but QwenTtsClient::EnsureAvailable unconditionally starts a real Python voice worker if health fails; fixture retains default worker launcher/script. No production process-disable guard is demonstrated."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSpeechAdmissionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "ad87aca281ae7909022bcf23be7c39e67acc62e50eae3e3dcaddc02e66099a6e",
+        "interpreterArguments": [],
+        "holdReason": "Owns a fake Qwen HTTP endpoint and uses callback fake players, but QwenTtsClient::EnsureAvailable unconditionally starts a real Python voice worker if health fails; fixture retains default worker launcher/script. No production process-disable guard is demonstrated.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaPlaybackEnvelopeTests": {
+      "purpose": "CPU-only PCM/WAV decoding and envelope generation from synthetic sample vectors and one temporary disk file",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaPlaybackEnvelopeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c47356b069ab5f5801255c81a3ca8fc13ee0dfeea35532b5db1901ff005936d8",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaPlaybackPresenceTests": {
+      "purpose": "Synthetic mouth-track events only, but PresenceRuntime creates default Inbox/Outbox under canonical RuntimeRoot. Eligible only with a fresh owned Config-bearing launch root",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "owned-config",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaPlaybackPresenceTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e51255e9049b2edeae802a56ec858066c2a49e8739417ba406e731894e42a051",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaPerformanceTests": {
+      "purpose": "Generated tones and malformed synthetic WAVs test native decoding/mixing. Start is used only on deliberately malformed song, which fails mixing before native waveOutOpen",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaPerformanceTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c72f57221172c74d34a144d2f7a74d23f5662eacedafc938ee04b29cea746225",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSelfDevelopmentTests": {
+      "purpose": "Mutates fake Desktop/studioDuration.h source under unique temporary roots. All validator/review/release-probe dependencies are CPU lambdas returning fabricated evidence",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSelfDevelopmentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "111a8b4bdcbc26e729726268dd74b369ce433d29d878ec977d3ab0930e865619",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaStudioRuntimeTests": {
+      "purpose": "Session objects bypass full Start and use temporary paths, but workflow cases use ConfigureStartupBrains with default enabled unowned embedding endpoint. Also launches ReviaProcessFixture.exe cwd helper: CPU-only and finite if proven binary exists",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Session objects bypass full Start and use temporary paths, but workflow cases use ConfigureStartupBrains with default enabled unowned embedding endpoint. Also launches ReviaProcessFixture.exe cwd helper: CPU-only and finite if proven binary exists; blocked embedding remains."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaStudioRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7be62465fd5fa0fa6d04423118a1d63b34f05b815db5ef32482f343296c0efd2",
+        "interpreterArguments": [],
+        "holdReason": "Session objects bypass full Start and use temporary paths, but workflow cases use ConfigureStartupBrains with default enabled unowned embedding endpoint. Also launches ReviaProcessFixture.exe cwd helper: CPU-only and finite if proven binary exists; blocked embedding remains.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaContentDigestTests": {
+      "purpose": "Pure SHA256 checks over fixed byte strings including embedded NUL",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaContentDigestTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "876e0c962dee1c294271f7ba7e44a6432081f7d7f838b7d4f428b8bf450db966",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaResponseLatencyTests": {
+      "purpose": "Pure timing accumulator fed synthetic clock points and RuntimeEvents",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaResponseLatencyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a18419dcfe17e7b89b9b6e0a895351320901a541153133f6c53ad420f756d4e0",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaResponseLatencyRuntimeTests": {
+      "purpose": "Direct ConversationRuntime fixtures explicitly disable embeddings",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Direct ConversationRuntime fixtures explicitly disable embeddings; one shared-session case instead calls ConfigureStartupBrains with default enabled unowned8081 endpoint. Shared audience may suppress private retrieval, but all downstream embedding paths were not proven disabled before reply."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaResponseLatencyRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "08d502b98c724a16e70b84ef224f8ecc01901428a76dc4290904e8cb924c3498",
+        "interpreterArguments": [],
+        "holdReason": "Direct ConversationRuntime fixtures explicitly disable embeddings; one shared-session case instead calls ConfigureStartupBrains with default enabled unowned8081 endpoint. Shared audience may suppress private retrieval, but all downstream embedding paths were not proven disabled before reply.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaInvestigationCheckTests": {
+      "purpose": "Real ActionRuntime performs only approved reads/lists/calculations on created fixture files",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaInvestigationCheckTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "42a3603d807a6f522bd0b80af9500efb7858f364202d09ecfdca2418ce069be6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAnswerQualityTests": {
+      "purpose": "Pure quality/format corpus, fake judge backend, synthetic evaluator callback and read-only checked-in golden-set JSONL. No actual judge/network/model invocation.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAnswerQualityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c8cea0764910b661cf2fda602ed7d361ab1a6ecb50fa11db30f376b7b422cadc",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaQualityFeedbackTests": {
+      "purpose": "Writes synthetic judged failure/retest/correction records to temp SelfAssessment/LearningRecordStore",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaQualityFeedbackTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "377ed10cdd4463463e0713e89630900b861cf7545fc8008071a298b0cefd0eb0",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMemoryRevisionTests": {
+      "purpose": "Synthetic SQLite memory revision chains, rollback and concurrency under explicit temp database paths",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryRevisionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "68d476f1040c46d711697cdbb354c7aecf4fa86e4017e956c0426a06d5e1596b",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMemoryCorrectionTests": {
+      "purpose": "Synthetic SQLite facts and correction proposals use explicit temporary DBs",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryCorrectionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "736baff00b350e55d0072c6c691529ce9f9f682c3d6554de527e1c8ceee8b66b",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMemoryCorrectionAgentTests": {
+      "purpose": "Real CPU MemoryAgent thread uses explicit temp DB",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryCorrectionAgentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "37c6cc1c3a1786e1c9e0a1fe2a511f7a2e1876cf45fff72c4835dc7e11b5914c",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMemoryCorrectionRuntimeTests": {
+      "purpose": "Session uses explicit temporary CompanionPaths and test-access studio flag, not full Start. Prepare disables actual embedding service and clears model name before owner correction receipts. Synthetic foreground contention is finite and uses no desktop operations.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryCorrectionRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "561a7892c1fddfcf454f25652b7adf8a3a14d11903d7138d2cd3aeef7d51897c",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSemanticDuplicateTests": {
+      "purpose": "SQLite advisory duplicate marks with in-process scorer and fixed vectors only.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSemanticDuplicateTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "cf368968c59c070b247545af439630641599a399b64089b2e656be5722bbbc48",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSemanticDuplicateAgentTests": {
+      "purpose": "CPU MemoryAgent thread uses injected evaluator and scorer",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSemanticDuplicateAgentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "8cb60888e1ca79d5a63611552b09ca58d9f4b476f35eccf923bd57086aca4e33",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaConversationArchiveHybridTests": {
+      "purpose": "Owned synthetic SQLite archives and caller-supplied vectors",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaConversationArchiveHybridTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "ba0be0d9035fb7aa3b6f19fe154c9ccf340ab3ca4e6f1d74e0d66c61139bb213",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaArchiveEmbeddingBackfillTests": {
+      "purpose": "Embedding requests go to a newly bound in-process loopback stand-in, with temporary databases.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaArchiveEmbeddingBackfillTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b8e12a0a577c3eaad3d9e3058c3fc8a76fc4826c1df1aa6c4b28e6bab9426d6c",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaQualityFeedbackRuntimeTests": {
+      "purpose": "Session construction and native quality/history/memory seams operate on synthetic temp-root state without Start.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaQualityFeedbackRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "625991113ca69df3d8a456b1b7938b83f0e4fb5a1b56c459ec55e4eb37f779e0",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaImprovementAgentTests": {
+      "purpose": "Improvement proposals and proof use a synthetic source tree and injected review/build callbacks.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaImprovementAgentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7b588f475a0321b75b987414a61a6da3164e03556532d74d3b8197ddbcc373ad",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaContextFittingTests": {
+      "purpose": "CPU token-count corpus and owned fake HTTP template/tokenizer/chat service",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaContextFittingTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "69c8cdebc9a9ebf66f4dfa7251c6363ee9fcba064e971584742af28792613afa",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCloudModelTests": {
+      "purpose": "Cloud HTTP transport and environment reader are injected fakes",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCloudModelTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7e46ad97eefb5c4f0fb100c0aa1faaa34d462212962f29da05756a4a84db3bcb",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaRoutingProductionTests": {
+      "purpose": "Pure routing inputs, decisions, and output metadata over in-memory synthetic values.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaRoutingProductionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b68b9b3c24357fb28c2b250a052f73307277d8095a0041082048c80de8680ef8",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaProcessExecutionTests": {
+      "purpose": "Runs only verified ReviaProcessFixture CPU modes inside temporary approved root.",
+      "prerequisites": [
+        "Not run: full-static fixture link failed in installed MinGW runtime archives (__intrinsic_setjmpex and __ms_vsnprintf). Selected safety eligibility unchanged; assertion/test body never executed. No product/linkflag/runtime substitution authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessExecutionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessFixture.exe",
+            "reason": "Previously failed full-static helper link in installed MinGW runtime libraries."
+          }
+        ],
+        "registrationDigest": "4839d16b9309e8a646884ba7dc4c53987ab507e20fad1dcdb894574288c58902",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_run_build_blocked",
+        "fresh": false
+      }
+    },
+    "ReviaProcessOwnerTests": {
+      "purpose": "Native process owner test launches only sibling CPU fixture, then guarded temporary file I/O.",
+      "prerequisites": [
+        "Not run: full-static fixture link failed in installed MinGW runtime archives (__intrinsic_setjmpex and __ms_vsnprintf). Selected safety eligibility unchanged; assertion/test body never executed. No product/linkflag/runtime substitution authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessOwnerTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessFixture.exe",
+            "reason": "Previously failed full-static helper link in installed MinGW runtime libraries."
+          }
+        ],
+        "registrationDigest": "f78602253dbb14a090cdbcb0d79c458d04c6ad7ce2315d48af5553f1f27d64e7",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_run_build_blocked",
+        "fresh": false
+      }
+    },
+    "ReviaOperatorUpgradeTests": {
+      "purpose": "Goal runner exercises supplied completion/recovery callbacks and temporary files",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaOperatorUpgradeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "399a42acce99ce8517195c2f28bdd916d8e78ec8484a24e2eac4d4593dff1024",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaProcessCapabilityTests": {
+      "purpose": "Writes/loads only its new temporary JSON policy, including process/browser permission editing.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessCapabilityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "ddcde76d21eccd7e6a28dd10be50f8d7f1b53a281944023a62944206e6f108c7",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCapabilityProjectionTests": {
+      "purpose": "Pure capability intersection, no executor/resource owner.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCapabilityProjectionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2f7a4ce0c754ef4680675232a6bd09218dc0c691b7ae642ab2c48dcc81f547a3",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaTaskAcceptanceTests": {
+      "purpose": "Pure task acceptance/progression/postcondition checks over fabricated native/browser receipts.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTaskAcceptanceTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "adbc8809702d3e9ac1aa87f2fc39b44fe7a5d8e19f3284a6c995229bf1f63a12",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMemoryScopeTests": {
+      "purpose": "Synthetic scoped memory/archive databases, migrations, revisions and retractions.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryScopeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "75aa7c92524f52210aac1973226e41cf3c84c4f7631262c6848fc0f4f00a2830",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaScopedMemoryQueueTests": {
+      "purpose": "Memory worker runs injected evaluator on synthetic queued.db",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaScopedMemoryQueueTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e90d19188773b81a4b308ff1e2dd693df6d6c203508730c2aff0edf1e0c654a5",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaRelationshipTests": {
+      "purpose": "Relationship evidence and registry persistence use synthetic identities under fresh temporary roots.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaRelationshipTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "251255fe54d48c743960425a65faa20a1f7e9ae6fe3f8842433dc6b8f95e3627",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaBrowserContractTests": {
+      "purpose": "Browser URL/origin/parser/policy validation only",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaBrowserContractTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f0a505bf86a0958929d62213d901a47bbe7cc8ef9587a8e2039900e0c422129b",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaVisionContextTests": {
+      "purpose": "Formats synthetic visual-description context and schema",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVisionContextTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "495a62bc66e33a92e9cffaedebb45777baf0c3e5602acce86ec0d30ab3165b04",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAgentToolBudgetTests": {
+      "purpose": "Workflow CPU workers invoke in-process provider lambdas and persist only fixture checkpoints.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAgentToolBudgetTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "67ffda2133b475b0d1a42b1d4a29d65dbedd4820146facd3358a70438f797651",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAgentToolWorkerTests": {
+      "purpose": "Worker JSON parser and bounded receipt serialization only.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAgentToolWorkerTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d107c3f8aa3f97689388eafb13ba02c880b3fce088aad01d714c108718eaf86a",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAgentToolActionTests": {
+      "purpose": "Typed worker file operations and sibling CPU fixture execute through owned ActionRuntime.",
+      "prerequisites": [
+        "Not run: full-static fixture link failed in installed MinGW runtime archives (__intrinsic_setjmpex and __ms_vsnprintf). Selected safety eligibility unchanged; assertion/test body never executed. No product/linkflag/runtime substitution authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAgentToolActionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaProcessFixture.exe",
+            "reason": "Previously failed full-static helper link in installed MinGW runtime libraries."
+          }
+        ],
+        "registrationDigest": "2daccdca4f084e5f2ad70d22f882c42ebbc6955ad5793841f0120ed6e9485019",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_run_build_blocked",
+        "fresh": false
+      }
+    },
+    "ReviaToolLoopTests": {
+      "purpose": "Owned scripted loopback model transport plus fake tool, guest and image callbacks",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaToolLoopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2eb48af3804530bf0f187bb3594347c0aca758bbc29d08ad319c9c7896ee2ac6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaDelegationTests": {
+      "purpose": "Whole chat turns use owned fake backend and temp-root session seams",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDelegationTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "55e09ae4bf8e332b9d9510f61bd1891ac80099b862edf61d5bd5b634e5b6ddf9",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMcpClientTests": {
+      "purpose": "Stdio MCP uses only verified sibling fixture, plus owned fake model/HTTP servers.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Not run: full-static fixture link failed in installed MinGW runtime archives (__intrinsic_setjmpex and __ms_vsnprintf). Selected safety eligibility unchanged; assertion/test body never executed. No product/linkflag/runtime substitution authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {
+          "REVIA_MCP_SERVER_FIXTURE": "<BUILD_ROOT>/ReviaMcpServerFixture.exe"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMcpClientTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaMcpServerFixture.exe",
+            "reason": "Previously failed full-static helper link in installed MinGW runtime libraries."
+          }
+        ],
+        "registrationDigest": "d20fff51d9561bb8318dfa5131588da6a0f5ee7d952484286cee257d1beb16db",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_run_build_blocked",
+        "fresh": false
+      }
+    },
+    "ReviaLocalApiTests": {
+      "purpose": "Local API and upstream fake llama endpoints are newly owned loopback servers",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaLocalApiTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d152ffd44df0a725c29c890d97a1bd7596b7159b9b16c81ccfebb324c13fcad9",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaInitiativeModeTests": {
+      "purpose": "Preference/config policy tests write only a generated temporary root",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaInitiativeModeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "f83eb8758735577669bdae93c399d9a4d8c22c26a6517b6ba4453366662cca58",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSavedFileObservationTests": {
+      "purpose": "Pure supplied-source validation/context formatting",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSavedFileObservationTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "0d431ab889d0cba5d32662f2157c4910ab70f1818edd48449b27546ac63e1eee",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaEditorAwarenessTests": {
+      "purpose": "Trusted editor observation reads only own synthetic saved files under explicit approved root",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaEditorAwarenessTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7dcceddc8287ca384ac569960e2eb3e233e76eef5a7e76a844ade0f0693aa6eb",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaProactiveStateTests": {
+      "purpose": "Conversation metadata/source/vision requests use owned fake HTTP backend and synthetic evidence",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaProactiveStateTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c484bc9db105df39f9f8a4cfd40275cb02243559e9ecd9aeb85d0a7df7485734",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSourceDiagnosticTests": {
+      "purpose": "Pure C++ source parser/diagnostic tests over embedded strings.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSourceDiagnosticTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c654bcbf4fca7c9c5011319d0a655343258cb1b3bac7a4e9d33557e2fa684d29",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaSourceDiagnosticReplyTests": {
+      "purpose": "Pure native diagnostic reply and intent grammar over strings.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSourceDiagnosticReplyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d646f13de56ae5cc7397281843381dce29ec6eecadb38d3f121fac9df2c067ee",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaAttachmentTests": {
+      "purpose": "Parses bundled synthetic document/image bytes and temporary attachment stores",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaAttachmentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "702d1c04428b686eb35e23e7afaa07589049487d2273e09138457cb3ee272409",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaMediaSelectionTests": {
+      "purpose": "Pure media-reference selection and conversation context serialization.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMediaSelectionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "69a8af6971b6007b72fb41e3507a13e339a1d838c40589e0acd59ec1ff5ef3cc",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaVideoSelectionTests": {
+      "purpose": "Pure interval/transcript/clip metadata selection",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoSelectionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c00416ebdade502135eb4661956bf672781eb09752beeebe19d03b002a6d06e1",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaConversationStyleDataTests": {
+      "purpose": "Pure conversation-style policy and repetition handling over supplied strings.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaConversationStyleDataTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "05d3589f5d1b9e9952b33dd6c1be5e2f7cbc6c1bc52e0fad558c7fbd947a19d6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaReminderIntentTests": {
+      "purpose": "Persistent reminders use only a new temporary JSON book",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaReminderIntentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a33971455e6f19bc704fd5cb2050ead53654ec1864be2e22c233c3c171047254",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.VideoPublicationLane": {
+      "purpose": "Mutex/publication-lane CPU checks with std::async, no session startup or media workers.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoPublicationLaneTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3417de094e54c8b89f22dc84b46c3e82e6cd70a0e5aabe1d973a39821ea8585b",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaVideoFrameReplyTests": {
+      "purpose": "Bounded schemas/parsing/rendering operate on made-up pixel strings and frame metadata",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoFrameReplyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "55f62e4a414539cea7aa27dc029ce4b68f7ed83e3278f0725bf314b9e3572810",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaGeneratedArtifactContinuityTests": {
+      "purpose": "Synthetic SQLite migration/archive/selection and native CPU PNG verification/import. Model names are receipt metadata",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaGeneratedArtifactContinuityTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b4d00abdf8d10eb2a3799e1fff5144d613b1f48ee625454bed4536aedcfd4ac1",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaGeneratedMediaRuntimeTests": {
+      "purpose": "Constructs a session in owned CompanionPaths and uses test access, never full Start. CPU PNG imports and disabled-video availability path. Generated completion checks do not start SpeechService.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaGeneratedMediaRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2ae609b000fc2b308d075081e14fe662cbceaaa366db2c62215c8a7cf9235597",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaVideoCoverageTests": {
+      "purpose": "Pure string/timestamp uncertainty checks. Unlike nearby decoder suite, this body never instantiates a decoder or launches ffmpeg.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoCoverageTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "93a5fc06622173140c71e92442854769dd78983d0b6971a47d086aa0dee810fa",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaVideoDecoderTests": {
+      "purpose": "Resolves real installed ffmpeg/ffprobe or REVIA_TEST_FFMPEG/FFPROBE overrides",
+      "prerequisites": [
+        "Resolves real installed ffmpeg/ffprobe or REVIA_TEST_FFMPEG/FFPROBE overrides; creates/decodes real synthetic media. Skip-on-missing is not a disable guarantee."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoDecoderTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "191b8468e6a6e179d1a935c6b329f8126016f56b16a722056f4fed5d64d50ea0",
+        "interpreterArguments": [],
+        "holdReason": "Resolves real installed ffmpeg/ffprobe or REVIA_TEST_FFMPEG/FFPROBE overrides; creates/decodes real synthetic media. Skip-on-missing is not a disable guarantee.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaVideoAttachmentTests": {
+      "purpose": "StageBytes of corrupt MP4 reaches production attachment intake VideoDecoder::Probe, so installed real ffprobe may execute even though refusal is expected.",
+      "prerequisites": [
+        "StageBytes of corrupt MP4 reaches production attachment intake VideoDecoder::Probe, so installed real ffprobe may execute even though refusal is expected."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoAttachmentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "4fab0fdfd73c7e52dd0f7241d205b893cde92fdf15ecd0aeb5e744ef720c1329",
+        "interpreterArguments": [],
+        "holdReason": "StageBytes of corrupt MP4 reaches production attachment intake VideoDecoder::Probe, so installed real ffprobe may execute even though refusal is expected.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "ReviaFileTranscriptionTests": {
+      "purpose": "TranscribeWaveFile is explicitly pointed to ReviaFileTranscriptionFixture, compiled from the same file with REVIA_FILE_TRANSCRIPTION_FIXTURE. JSON 'model' and VAD files are plain fixture bytes",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Not run: full-static fixture link failed in installed MinGW runtime archives (__intrinsic_setjmpex and __ms_vsnprintf). Selected safety eligibility unchanged; assertion/test body never executed. No product/linkflag/runtime substitution authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaFileTranscriptionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaFileTranscriptionFixture.exe",
+            "reason": "Previously failed full-static helper link in installed MinGW runtime libraries."
+          }
+        ],
+        "registrationDigest": "6ee6230a916516eb511da356101377402f4d315a5244ede5d6123fd5b8ce2f23",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_run_build_blocked",
+        "fresh": false
+      }
+    },
+    "ReviaImageTokenSettingsTests": {
+      "purpose": "Config load/validation and BuildLlamaServerArguments only",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaImageTokenSettingsTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c5b833f00e553bd782ec6dc4338996e3a3d5b12e5f4ff0c595bb513d486a13d7",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaPromptBatchSettingsTests": {
+      "purpose": "Config validation, launch-argument vectors and canned log parsing",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaPromptBatchSettingsTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5c4a4a93a1399e296e6bf51fe6c71f6e4ca2a82dc2b99f84be1dbd85fb9278d8",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.TaskContracts": {
+      "purpose": "Reads frozen JSON contract/evidence fixtures and writes only a unique temporary output directory. Contract process fields are data, not execution.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTaskContractTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7967748ca760884f0090896ea9442cd84ce6e2869d597a2b9457222525448db5",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.TaskContractActions": {
+      "purpose": "Explicit dispatcher registers only native FileSystemExecutor and bounds roots to ScopedTestDirectory",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTaskContractIntegrationTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2f99bbf504a7419acbd0c3da84b2bcfd659ea754127953d6a32df1345641e330",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.TaskContractSession": {
+      "purpose": "Default no-argument suite uses synthetic localhost ProposedWorkerBackend and owned native filesystem effects. --live branch is distinct and not the registered command. No full ReviaSession Start.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTaskContractSessionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "23be01e27d036407d765611dcbc19c757d5ed5d0d282db5d9cef9a9b51330ac6",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.EvaluationCampaignIdentity": {
+      "purpose": "Parses synthetic manifest identity mismatches and tests immutable writes. It does not run a campaign/provider.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaEvaluationCampaignTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7681cc1c7daeabea004891e325aecfb141e229a8e78cb837f5ec8643908629d5",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaEvidenceJournalTests": {
+      "purpose": "Owned journals and synthetic native file mutations (60 effect-*.txt)",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaEvidenceJournalTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5bf1e708dc63f8bada68718efd7f36790f51b9c2464c314cda5ada0af0164b2f",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaRuntimeEvidenceBridgeTests": {
+      "purpose": "RuntimeEventBus + EvidenceJournal only",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaRuntimeEvidenceBridgeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "9880a80daba173f1942798215dce3b0502330d27bd21f903ced50836010dabf0",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.EvaluationCampaignRunner": {
+      "purpose": "Current registered script writes/deletes a GUID file in the reviewed source tree to test dirty-source identity",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Current registered script writes/deletes a GUID file in the reviewed source tree to test dirty-source identity; this violates the source-read-only regression lane."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "powershell",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/evaluationCampaign.test.ps1",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d8e49d9b2c3a12ea8a05e9a1b9795a04d733b76daa7957e95e1ee17eb38b9fa8",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "powershell"
+          }
+        ],
+        "holdReason": "Current registered script writes/deletes a GUID file in the reviewed source tree to test dirty-source identity; this violates the source-read-only regression lane.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.CognitionCampaignReceipts": {
+      "purpose": "Metadata server and CLI are generated fakes",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "powershell",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/cognitionLiveCampaign.test.ps1",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "03743e0a449e06e306f4ff8d0bd5be418452bb8b7abbee2a699585c272b924ff",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "powershell"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true,
+        "requiredPrograms": [
+          "git.exe",
+          "cmake.exe",
+          "ninja.exe",
+          "c++.exe"
+        ]
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "passed_controlled_comspec_recheck",
+        "fresh": false
+      }
+    },
+    "Revia.EditorObservationScripts": {
+      "purpose": "Generates synthetic DPAPI tokens, owned C++ text files and an ephemeral loopback receiver",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "powershell",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/editorObservationScripts.test.ps1",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3fc707a7187d6dc64665cd3b28f80c3c5daeb76833851dd95d7e39acaa25ff58",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "powershell"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CognitionWrongAnswers": {
+      "purpose": "Structured accounting/answer-oracle checks use CannedJudge",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCognitionEvaluationTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "26c5f04a8ddbd5ece10416525aae9383f6de31d9e1fd14f4c797079e7be1f49e",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CognitionFrozenAccounting": {
+      "purpose": "Reads frozen corpus and checks synthetic 720-run accounting. Temporary duplicate-key corpus filename is deterministic from fixture digest.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCognitionEvaluationTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3fa5f907d77f0ff72636b3d3056faeb1ec098f6d8185313e8ca1b54f0b57e26e",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "ReviaCognitionLiveTests": {
+      "purpose": "Despite Live name, runners return canned data",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCognitionLiveTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "2d3f2ee396735783f069a6cbf27fc5ad047a0211bdb9cdfd1842e3aa129af622",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ObservedLocalModel": {
+      "purpose": "All model/template/tokenize/completion replies come from in-process canned Upstream bound to a new loopback port. Explicit key is a string literal fixture.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaObservedLocalModelTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "1f421db777ad45e77db5a755ccf43a5dae85922160ece1c80d17497288be207d",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.InteractiveBrowser": {
+      "purpose": "Real browser harness is not headless: interactiveHost starts installed Edge/Chrome with --new-window and default graphics. windowsHide does not suppress browser UI.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Real browser harness is not headless: interactiveHost starts installed Edge/Chrome with --new-window and default graphics. windowsHide does not suppress browser UI."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Browser/interactiveNative.live.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaBrowserExecutionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "17c05f0a23d7b4e9cd6b505372c6108fe05638993d213e44073463a9ca3f859d",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "Real browser harness is not headless: interactiveHost starts installed Edge/Chrome with --new-window and default graphics. windowsHide does not suppress browser UI.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.InteractiveBrowserOwner": {
+      "purpose": "Same visible actual Chromium startup as ordinal101",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Same visible actual Chromium startup as ordinal101; fresh profile and page origin restrictions do not satisfy headless/no-desktop requirement."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Browser/interactiveNative.live.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaBrowserOwnerTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d02f8dfd7d6a3184e0802e2c5a098694036861c8f90be5aedd432d8ad3be3047",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "Same visible actual Chromium startup as ordinal101; fresh profile and page origin restrictions do not satisfy headless/no-desktop requirement.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.DrawingIntent": {
+      "purpose": "Pure text request classification",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDrawingIntentTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "bb6595200fab69519ee91037dd043678f38e293480d3d2f6663faccb4d57c8d5",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.VideoRequestPolicy": {
+      "purpose": "Pure string video-intent/prompt extraction",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaVideoRequestPolicyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5dd332dbaf3a499208d9e662609837b861e8d37fe158b8ecc66853dd0037395f",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ImageArtifact": {
+      "purpose": "Writes a built-in one-pixel PNG, validates native CPU GDI+ decoding/digests and corrupt-byte refusal. No model or image worker.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaImageArtifactTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "29245515f005ed9ac3eb0810111958ec3f87641e8de6f575c94d81c4c308f577",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ImageGenerator": {
+      "purpose": "Registered argv explicitly sets Python + dependency-free imageWorkerFixture.py. Fixture synthesizes PNG with zlib, has no torch/diffusers/model imports, reports CPU. Production image-service script is never selected.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Campaign hold: fixed port18093 can reach an existing foreign listener; current EnsureRunning accepts any HTTP200 health result without PID ownership proof. Free-port precheck alone is not race-free proof."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaImageGeneratorTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/Fixture/imageWorkerFixture.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "aee0dfc7307a98a8e8740bdb7faaf526eb1fc88523f84d1fab41ea1605366f59",
+        "interpreterArguments": [
+          {
+            "index": 1,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "Campaign hold: fixed port18093 can reach an existing foreign listener; current EnsureRunning accepts any HTTP200 health result without PID ownership proof. Free-port precheck alone is not race-free proof.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.ImageActions": {
+      "purpose": "Action/audit integration binds ImageGenerator to exact same dependency-free Python fixture",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Campaign hold: fixed port18095 has the same listener-ownership gap. No new launcher/product-test seam or source change is authorized."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaImageActionTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/Fixture/imageWorkerFixture.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "6c35866c39f577963cb12827f8d2365277a62449f180b111a074f5cfb9b06267",
+        "interpreterArguments": [
+          {
+            "index": 1,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "Campaign hold: fixed port18095 has the same listener-ownership gap. No new launcher/product-test seam or source change is authorized.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.CompanionRuntime": {
+      "purpose": "Constructs sessions on synthetic CompanionPaths, tests memory/identity/goal isolation and deterministic demonstration workflow. No full Start and no actual model/device lease work.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCompanionRuntimeTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b867b9980230613fea004d97f9b38f1bce496d4139eebdb8053745a54eef5b4a",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CompanionQualificationProtocol": {
+      "purpose": "No --worker selects OracleTests+OwnershipTests only. Synthetic provider, deliberate fake children, owned junction target/refusal controls. No native full Start or actual model.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Quality/qualifyCompanionTests.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "0872668178a0b425a1d0c4c195d7dcdb261f9fb454a34d42827d01a5ad44df15",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CompanionQualificationFixture": {
+      "purpose": "Known QUAL1 owned synthetic-provider fixture. --worker selects NativeTests only",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Quality/qualifyCompanionTests.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaCompanionQualification.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "dffddbbdfb9a38e73365e606cc032b127c72eb45dea6b8aaee796813a5805bbb",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.DevelopmentStudioAdmission": {
+      "purpose": "No-argument CTest returns immediately after registration and missing-maintenance-scope refusal controls",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDevelopmentStudioTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "97f2e27d62660bef0b5561c409544bad04ccec067f972e9ae839e8f384292622",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ArchiveWriter": {
+      "purpose": "Real SQLite wrapped calls coordinate two owned synthetic archive mutations",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaArchiveWriterTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c3e11e78f35afcf56546a9f180bddd71e0882f1ed34466edbcc4c1341c791691",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "revia_web_guest": {
+      "purpose": "Own temporary cwd, canned in-process model server and newly bound WebGuestRuntime listener",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaWebGuestTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "6e64f53382e143f5f4d69ef71eb48c26f1c803e84abfade6b7f02c05b153df82",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "revia_web_guest_privacy": {
+      "purpose": "Own temp cwd and synthetic SQLite private canaries, bound canned model+embedding server. Screen/archive/internet/desktop providers are explicit in-process canary callbacks, never actual observation/tool dispatch.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaWebGuestPrivacyTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c0dc416b2dfe9a1438d45bebd936c66ae6342b9782cec1980ac7e25b6d00d582",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.CliLoaderDeployment": {
+      "purpose": "Fixture stops actual CLI at initial loader breakpoint before application entry, but imported DLL initialization runs in loader phase. This audit has not proved transitive DLL initializer side effects absent, so fake-only eligibility is not claimed.",
+      "prerequisites": [
+        "Fixture stops actual CLI at initial loader breakpoint before application entry, but imported DLL initialization runs in loader phase. This audit has not proved transitive DLL initializer side effects absent, so fake-only eligibility is not claimed."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaCliLoaderGate.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/R_E_V_I_A.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5323ac78643d344eff683b102aaeeb3b8e4ac94a8db16f78ca734ba238a06952",
+        "interpreterArguments": [],
+        "holdReason": "Fixture stops actual CLI at initial loader breakpoint before application entry, but imported DLL initialization runs in loader phase. This audit has not proved transitive DLL initializer side effects absent, so fake-only eligibility is not claimed.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.Foundation": {
+      "purpose": "Aggregate runs many actual owners and unconditionally deletes fixed shared TEMP names",
+      "prerequisites": [
+        "Aggregate runs many actual owners and unconditionally deletes fixed shared TEMP names; containment is not established for this registration."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3de4f3a4f53dffe2786bb7d347a85329f00c6484e5be8b166a131f95b1389869",
+        "interpreterArguments": [],
+        "holdReason": "Aggregate runs many actual owners and unconditionally deletes fixed shared TEMP names; containment is not established for this registration.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.OutputBoundaries": {
+      "purpose": "Fake completion servers plus synthetic UTF-8 documents/archives/journals",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaOutputBoundaryTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d47c4f196a3e604800044766a10486e5f6d4411f5a9ac5c0f33ef51a0ecacd83",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.IdentityFinalSave": {
+      "purpose": "Dedicated final-save dispatch starts/restarts only isolated identity persistence fixture with explicit unavailable LLM and WindowsSapi.",
+      "prerequisites": [
+        "Developer-built registered binary and fresh owned temporary state."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "521a9b768e4d7d225e44f29f9643fcb4bdd811e598fea184056e8ef66592cb70",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.OperatorSession": {
+      "purpose": "Default planner injected, writes confined to fixture roots",
+      "prerequisites": [
+        "Parent/D resolution: synthetic HKCU App Paths registry mutation is outside this campaign. No registry operation or live browser/model/input smoke is authorized."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "1e3018f7b71f250b83f380a49615363447f391d5a57929676fccff611278899f",
+        "interpreterArguments": [],
+        "holdReason": "Parent/D resolution: synthetic HKCU App Paths registry mutation is outside this campaign. No registry operation or live browser/model/input smoke is authorized.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.TerminalInput": {
+      "purpose": "Injects actual console INPUT_RECORDs, may use existing attached console, flushes input and changes console mode.",
+      "prerequisites": [
+        "Injects actual console INPUT_RECORDs, may use existing attached console, flushes input and changes console mode."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a1bf238724de131fb3a24b582fdb770cea7980274994db52096d8977a1390cd9",
+        "interpreterArguments": [],
+        "holdReason": "Injects actual console INPUT_RECORDs, may use existing attached console, flushes input and changes console mode.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.BuildDrivers": {
+      "purpose": "Runs real CMake/CTest/Ninja on generated project(NONE) return-code/sleep fixtures",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Registered build-driver fixture requires real Git provenance. The isolated source snapshot has no .git; both baseline and candidate failed that qualification. Its fixed BuildDriverFixtures output also requires separately owned build storage."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "powershell",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/buildDrivers.test.ps1",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "d4d15432533b9979f15961e2e84342318def5815e1b2ec6348d7f699ac20d929",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "powershell"
+          }
+        ],
+        "holdReason": "Build-driver fixture requires a Git-backed source and writes fixed build/BuildDriverFixtures. A separately owned build-evidence context is required; the isolated archive failed Git provenance.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "unqualified_nongit_provenance_context",
+        "fresh": false
+      }
+    },
+    "Revia.SetupScriptPolicy": {
+      "purpose": "Extracts only build test-phase AST and runs with stub npm/CTest",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/setupScripts.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "0c91b82831dd95db45cffe1f3b3efd715d8425e4ef32d98282aa5e90dc5b3342",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "passed_controlled_comspec_recheck",
+        "fresh": false
+      }
+    },
+    "Revia.BrowserWorkerPolicy": {
+      "purpose": "Tests pure URL/IP/redirect exports",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Browser/browserHost.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "e14fa85836e60562647017f7508306b345e9edc3778d447808003f1fef0bcbe0",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.DiscordVoiceAdapter": {
+      "purpose": "Injected transcription/play functions and synthetic PCM/WAV/IPC",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Presence/DiscordVoice/adapter.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "7d98b92013bc5872d1bec4cc48e6aace6b38c92bbf8cb77602821f558c466e44",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.Live2DBridge": {
+      "purpose": "Fake sockets and mock-loader child runner are fixture-only provided real VTS opt-in is disabled.",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Required ws@8.18.3 cannot load in this isolated source; two files fail before behavioral checks. Keep REVIA_LIVE_VTS absent; no installation is authorized."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/live2dBridge.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/live2dRenderer.live.test.mjs",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tools/Presence/Live2D/node_modules/ws/package.json",
+            "reason": "Required ws@8.18.3 dependency is absent in prior and current isolated snapshots; no install authorized.",
+            "version": "8.18.3"
+          }
+        ],
+        "registrationDigest": "533c2fd3d54c3fde0ab18bf1d10edfcc0d6292ba4e199e6a6c1e3d6c3a50ccb0",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "unqualified_missing_ws_dependency",
+        "fresh": false
+      }
+    },
+    "Revia.MemoryReranker": {
+      "purpose": "Registered Python fixture is dependency-free adversarial transport, not real --live model mode.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryRerankerTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/Fixture/memoryRerankerFixture.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "b5457ddb932832394fc169d5a4e8f9158f2cd2f0fc83dfde4574972255d07815",
+        "interpreterArguments": [
+          {
+            "index": 1,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.MemoryNliWorker": {
+      "purpose": "Native NLI owner runs dependency-free fake probability/receipt worker.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryNliWorkerTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/Fixture/memoryNliFixture.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "953c40275cd6a2102f2a0061d807d5fbc2d3a1375de7567341fe4a88bdf2c916",
+        "interpreterArguments": [
+          {
+            "index": 1,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.MemoryRetrievalPipeline": {
+      "purpose": "Synthetic SQLite rows and fake reranker subprocess exercise shortlist/scope/prompt construction.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaMemoryRetrievalPipelineTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tests/Fixture/memoryRerankerFixture.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "9a2a64275efdd49204452b583071ccc371bf4b194427ce8cb45d32ea2cdff305",
+        "interpreterArguments": [
+          {
+            "index": 1,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.MemoryRerankerWorker": {
+      "purpose": "Actual worker import is lazy",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [],
+        "registrationDigest": "621f15ee55342c1e71799ff2f85cb177d8e335a1f8bb2d4e9d6ca1617f7cef85",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.MemoryNliPythonWorker": {
+      "purpose": "Lazy actual module",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [],
+        "registrationDigest": "64f0b75297442edb6461e56ad60cd12087901e09cfbfd069bab9cbb45f294a8a",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.RetrievalBenchmarkContracts": {
+      "purpose": "NumPy metrics and in-memory SQLite on synthetic data",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Quality/retrievalBenchmarkTests.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "reason": "Existing interpreter NumPy package is required; no import or installation is attempted.",
+            "path": "<INTERPRETER_ROOT:python>/Lib/site-packages/numpy/__init__.py"
+          }
+        ],
+        "registrationDigest": "c121ac14d4ee5b08880176b4408d5b5f1b900c72f060078da861dd0cb6ff3033",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.GuestPreparation": {
+      "purpose": "Generates Sandbox XML/status receipts, never launches Sandbox. Windows tests create fixture-contained junctions.",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/guestSandbox.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "0692f8d19c7c0c8095cb2846fce9a182fea18d3072aaf99577b2e26f8d5f2ec2",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ContextBenchmarkContract": {
+      "purpose": "Actual benchmark helpers run with HTTP,process,GPU sampler/readiness and cleanup functions mocked.",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/contextBenchmark.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "acc273e17e9e48090a9cde732b907555ab05df8955f025f7d2b1c64fc1fda911",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.AnswerGateSessionContract": {
+      "purpose": "Fake campaigns replace OwnedChild/readiness",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Quality/answerGateSessionTests.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "43c3a98181efc18c97b2a63a7e170f39fa26eeeeee1873322f8b8eb3e2ec6340",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.NliDedupBenchmarkContract": {
+      "purpose": "Mock scorer/loader and synthetic manifests",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/nliDedupBenchmark.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "908fac44cfb4fb7dd913836d01c531c94e1a1e003e1b70579153b7d200d3d758",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.QwenTtsServicePolicy": {
+      "purpose": "Not entirely capture-only: real torch import/tensor suites optional on dependency presence, plus an unmocked unload probes CUDA availability.",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation.",
+        "Conservative root campaign hold retained. D found the currently registered minimal interpreter lacks heavy packages and unused optional tensor cases would skip; this campaign does not broaden approval to heavyweight module initialization or claim skipped paths qualified."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/qwenTtsService.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "059c89af5d5212fb0a93a253fc562a9fa2d5077ab95182d734eebc8175c4ceca",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "Conservative root campaign hold retained. D found the currently registered minimal interpreter lacks heavy packages and unused optional tensor cases would skip; this campaign does not broaden approval to heavyweight module initialization or claim skipped paths qualified.",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.ImageServicePolicy": {
+      "purpose": "Lazy actual service uses fake torch/diffusers/pipelines",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/reviaImageService.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "096106e04ea8eec974efb24b79e78919969a008044d5c6825980823e081f07bb",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.VideoServicePolicy": {
+      "purpose": "Synthetic job/byte/PNG contracts",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/reviaVideoWorker.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c314ea757be0cc08d36c74ee0c2df62bad9413d31099a848e5cfd0fa44fe19a7",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.TrainingWorkerPolicy": {
+      "purpose": "FakeBackend covers deterministic and prepared jobs",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/reviaTrainingWorker.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "0b9f3db9db7ab00b4bf32fd79987e6643812bd2922a87199094476df63511f95",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.TrainingAssetInstaller": {
+      "purpose": "Actual installer transfers random~300KB fixture bytes from owned loopback Hub",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/trainingAssetInstaller.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "c524f03429dd76c4265138453b358ae3d6ede5a1dda83348b8ca22e567efc4c9",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.AdapterExportPolicy": {
+      "purpose": "Synthetic candidates/GGUF headers plus deliberate Python exit3 child",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/reviaAdapterExport.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "252231e2b2a7ef88615a152758ef901a0bc05f279e5a255d055c91336010506e",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.AdapterEvaluationPolicy": {
+      "purpose": "Deterministic campaign uses fake ChatServer and generated fake gate/quality Python children",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/reviaAdapterEvaluation.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "44df93465f9e28e0c0c4a114ddcf1331e384fe201ad57969c9e519957b722a97",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit_with_skip_hints",
+        "fresh": false
+      }
+    },
+    "Revia.DatasetCapturePolicy": {
+      "purpose": "Synthetic recorded traffic",
+      "prerequisites": [
+        "Existing CTest-registered interpreter and its reviewed fixture dependencies; no installation."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "python",
+        "cwd": "registered",
+        "environment": {
+          "REVIA_DATASET_EXPORT": "<BUILD_ROOT>/ReviaDatasetExport.exe"
+        },
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tests/datasetCapture.test.py",
+            "reason": "Registered executable, helper or fixture must exist."
+          },
+          {
+            "path": "<BUILD_ROOT>/ReviaDatasetExport.exe",
+            "reason": "Native exporter cases otherwise skip; do not count them as checked."
+          }
+        ],
+        "registrationDigest": "dca3a06ab78b1ea2d8a5a3125ce8b5c9547533e82cbeafc62d11d24d62fac96c",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "python"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.StudioPanels": {
+      "purpose": "Standalone Qt synthetic snapshots/signals, no ReviaSession.Start or optional runtime host.",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaStudioPanelTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5b28668f759431883d9aeeea31599db677604185f40746b5314b55fad538343d",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.DesktopStopPolicy": {
+      "purpose": "Policy aggregate starts real sessions and switches companions. ProfileSave omits backend/other optional defaults",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback.",
+        "Policy aggregate starts real sessions and switches companions. ProfileSave omits backend/other optional defaults; offscreen is not proof all prestart hosts disabled."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "12dcca8b0b6b8914088012cefb1a30496b28e740965fd6fee2024ead98fa9c36",
+        "interpreterArguments": [],
+        "holdReason": "Policy aggregate starts real sessions and switches companions. ProfileSave omits backend/other optional defaults; offscreen is not proof all prestart hosts disabled.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.ProfileVoiceAssignment": {
+      "purpose": "Explicit WindowsSapi before Start, then ConfigureWithoutWorkers and metadata-only presets",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "cfa16a43ff15629c1b3d169c0225189489ac89d6a950cd769ed2d10c85f09b4f",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.VideoPreview": {
+      "purpose": "When tools installed, suite discovers actual FFmpeg encoder, creates four-second synthetic MP4, decodes/plays it. Current scope excludes real media execution.",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback.",
+        "When tools installed, suite discovers actual FFmpeg encoder, creates four-second synthetic MP4, decodes/plays it. Current scope excludes real media execution."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "511ed61db74d06d58adb5f5e6f453fa31ff50108001bbeb159b590a6733e6d9e",
+        "interpreterArguments": [],
+        "holdReason": "When tools installed, suite discovers actual FFmpeg encoder, creates four-second synthetic MP4, decodes/plays it. Current scope excludes real media execution.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.Theme": {
+      "purpose": "Widget/token/contrast/layout tests, no session Start.",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3935c29ac10cae1fe3247ea44672142bf75659633f2718c56f5800947a490c62",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.SettingsDialog": {
+      "purpose": "Never-started session/fake backend",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "5d9b482c308ea85e66b8dedb82c6e984ea13f85b0399f097809f0d367fc6a02e",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.ShellWidgets": {
+      "purpose": "Qt stand-ins/frame math/temp QSettings, no live session.",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "28f7b4fa248eb0337aa84454fcde8dd10997e3cab335fa02c723e738327ece2e",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.SettingsBackend": {
+      "purpose": "Starts real session with speech enabled=true and vision enabled=true",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback.",
+        "Starts real session with speech enabled=true and vision enabled=true; optional-host-disabled prestart condition not met by offscreen alone."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>",
+          "REVIA_THEME": "light"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "9ed31cd92bacc480edf39c2a84a0b7c4dbc274fa1ffc145a7e2b9b1ae80a0a4f",
+        "interpreterArguments": [],
+        "holdReason": "Starts real session with speech enabled=true and vision enabled=true; optional-host-disabled prestart condition not met by offscreen alone.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.TestCatalogSlash": {
+      "purpose": "Local /tests admission, nonblocking dispatch, cancellation and lifecycle seams.",
+      "prerequisites": [
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "REVIA_THEME": "light",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3818fbd08bd0f0b5564b64a06e679a1f9ce6e32cefbf5457b646c4cad298cffd",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "catalog-focused-checkpoint-before-context-extension",
+        "outcome": "passed_focused_checkpoint",
+        "fresh": false
+      }
+    },
+    "Revia.SvgRenderer": {
+      "purpose": "Sanitizes synthetic remote-resource payloads, renders safe red SVG in memory",
+      "prerequisites": [
+        "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
+        "Existing Qt offscreen platform plugin and runtime DLLs; no native window fallback."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaSvgRendererTests.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "3eac3dee432f7718bdd7604a515ca811d0b5cfeaa31e2e24dfb6847f39db47e0",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": true
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "completed_zero_exit",
+        "fresh": false
+      }
+    },
+    "Revia.DesktopSmoke": {
+      "purpose": "Registration requires native windows/show",
+      "prerequisites": [
+        "Registration requires native windows/show; earlier denied foreground operation must not be retried. Offscreen changes registration and is rejected by smoke main."
+      ],
+      "execution": {
+        "approval": "held",
+        "adapter": "native",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "windows"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktop.exe",
+            "reason": "Registered executable, helper or fixture must exist."
+          }
+        ],
+        "registrationDigest": "a9649b600f3f1e9a0948b5016cb0dede286af7d8e48e508f66733722f5a58e32",
+        "interpreterArguments": [],
+        "holdReason": "Registration requires native windows/show; earlier denied foreground operation must not be retried. Offscreen changes registration and is rejected by smoke main.",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+        "outcome": "not_selected",
+        "fresh": false
+      }
+    }
+  }
+}

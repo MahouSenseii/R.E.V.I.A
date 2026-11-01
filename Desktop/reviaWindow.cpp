@@ -689,6 +689,14 @@ void MakePageScrollable(QWidget* page, const char* scrollName = nullptr)
 }
 } // namespace
 
+void ReviaWindow::BuildCanvasPanel()
+{
+    canvasPanel = new CanvasPanel(ui->canvasPage);
+    canvasPanel->SetGeneratedImageResolver(
+        [this](const conversationMediaReference& reference) { return GeneratedMediaPreview(reference); });
+    ui->canvasHostLayout->addWidget(canvasPanel);
+}
+
 void ReviaWindow::BuildInterface()
 {
     // Palette, stylesheet and app font for the light or dark scheme, following Windows unless
@@ -785,10 +793,7 @@ void ReviaWindow::BuildInterface()
     resourcePanel = new ResourcePanel(
         [this](const std::string& device) { return Session().SetPreference("resources.voiceDevice", device); }, ui->resourcePage);
     ui->resourceHostLayout->addWidget(resourcePanel);
-    canvasPanel = new CanvasPanel(ui->canvasPage);
-    canvasPanel->SetGeneratedImageResolver(
-        [this](const conversationMediaReference& reference) { return GeneratedMediaPreview(reference); });
-    ui->canvasHostLayout->addWidget(canvasPanel);
+    BuildCanvasPanel();
     // Hosted by Settings › Permissions (and its internet cards by Settings › Internet) once the
     // dialog exists; the dialog's own page scrolls, so the panel needs no scroll area of its own.
     capabilityPanel = new CapabilityPanel(Session(), [this]() { DiscoverApplicationPermissions(); }, this);
@@ -3761,7 +3766,9 @@ bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
         outError = DisplayName().toStdString() + " is still working on the previous request. Delete this chat once the reply is in.";
         return false;
     }
-    if (!Session().DeleteConversation(id, outError))
+    const auto deletion = Session().DeleteConversation(id);
+    outError = deletion.Succeeded() ? std::string{} : deletion.Message();
+    if (!deletion.archive.rowsDeleted)
         return false;
     if (viewingArchivedChat == id)
         CloseArchivedChat();
@@ -3772,7 +3779,7 @@ bool ReviaWindow::DeleteChat(const std::string& id, std::string& outError)
         attachmentTray->SetStatus(QString());
         ClearTranscript();
     }
-    return true;
+    return deletion.Succeeded();
 }
 
 void ReviaWindow::OpenArchivedChat(const std::string& id)

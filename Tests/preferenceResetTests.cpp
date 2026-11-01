@@ -609,7 +609,17 @@ void AProfileSaveFromSettingsNeverWaitsForATurn()
     Check(session.Start(), "Profile save session did not start.");
     std::optional<revia::runtime::ProfileSummary> active = session.ActiveProfileSummary();
     Check(active.has_value() && !active->memoryEnabled, "The profile fixture did not start with memory off.");
+    const auto profilePath = session.Paths().Resolve("Config/Profiles/fixture.json");
+    const auto before = ReadText(profilePath);
+    const auto origin = session.Stamp();
     active->memoryEnabled = true;
+    active->displayName = "Exact Settings fixture";
+    active->description = "Exact Settings description";
+    active->systemPrompt = "Exact Settings instructions.";
+    active->hasTemperatureOverride = true;
+    active->temperature = 0.5F;
+    active->hasMaxTokensOverride = true;
+    active->maxTokens = 321;
 
     std::promise<void> held;
     std::promise<void> release;
@@ -627,9 +637,18 @@ void AProfileSaveFromSettingsNeverWaitsForATurn()
     const revia::runtime::ProfileOperationResult refused = attempt.get();
     Check(answered && !refused.succeeded && refused.message.find("middle of a turn") != std::string::npos,
         "A profile save from Settings waited for the turn instead of refusing: " + refused.message);
-    Check(!session.ActiveProfileSummary()->memoryEnabled, "A refused profile save changed the profile.");
+    Check(!session.ActiveProfileSummary()->memoryEnabled && ReadText(profilePath) == before && origin.SameSession(session.Stamp()),
+        "A refused profile save changed saved bytes, the profile or its companion/session.");
     Check(session.TrySaveProfile(*active).succeeded && session.ActiveProfileSummary()->memoryEnabled,
         "A profile save from Settings failed once the turn was over.");
+    const auto saved = json::parse(ReadText(profilePath));
+    const auto running = session.ActiveProfileSummary();
+    Check(saved.at("displayName") == "Exact Settings fixture" && saved.at("description") == "Exact Settings description" &&
+              saved.at("systemPrompt") == "Exact Settings instructions." && saved.at("memoryEnabled") == true &&
+              running && running->displayName == "Exact Settings fixture" && running->description == "Exact Settings description" &&
+              running->systemPrompt == "Exact Settings instructions." && running->hasTemperatureOverride && running->temperature == 0.5F &&
+              running->hasMaxTokensOverride && running->maxTokens == 321 && origin.SameSession(session.Stamp()),
+        "The explicit Settings retry did not save exact profile fields under the original companion/session.");
 }
 
 void LivePreferencesReachTheirServices()

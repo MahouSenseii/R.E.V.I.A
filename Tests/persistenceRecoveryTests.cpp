@@ -153,15 +153,17 @@ void TestSessionForgetRollsBackEitherDeleteFailure()
         ExecuteSql(path, "CREATE TRIGGER block_delete BEFORE DELETE ON " + table +
             " BEGIN SELECT RAISE(ABORT, 'synthetic delete failure'); END;");
         const auto removed = archive.ForgetSession("fixture");
-        Check(removed == 0 && archive.TotalTurns() == 2 && archive.RecentSessions().size() == 1 &&
+        Check(!removed.Succeeded() && !removed.rowsDeleted && !removed.error.empty() && removed.turnsRemoved == 0 && archive.TotalTurns() == 2 && archive.RecentSessions().size() == 1 &&
             archive.LoadSession("fixture").size() == 2 && archive.Search("pottery").size() == 2,
             "A failed session deletion reported success or partially removed durable history: " + table);
         ExecuteSql(path, "DROP TRIGGER block_delete;");
-        Check(archive.ForgetSession("fixture") == 2 && archive.TotalTurns() == 0 &&
+        const auto retry = archive.ForgetSession("fixture");
+        Check(retry.Succeeded() && retry.turnsRemoved == 2 && archive.TotalTurns() == 0 &&
             archive.RecentSessions().empty(), "A session could not be forgotten after the write failure cleared.");
         std::string error;
-        Check(archive.BeginSession("empty-session", error) &&
-            archive.ForgetSession("empty-session") == 0 && archive.RecentSessions().empty(),
+        Check(archive.BeginSession("empty-session", error), error);
+        const auto empty = archive.ForgetSession("empty-session");
+        Check(empty.Succeeded() && empty.turnsRemoved == 0 && archive.RecentSessions().empty(),
             "Forgetting an empty session counted its metadata as a removed conversation turn.");
     }
 }
@@ -176,11 +178,13 @@ void TestCompleteForgetRollsBackEitherDeleteFailure()
         Seed(archive);
         ExecuteSql(path, "CREATE TRIGGER block_delete BEFORE DELETE ON " + table +
             " BEGIN SELECT RAISE(ABORT, 'synthetic delete failure'); END;");
-        Check(archive.Forget() == 0 && archive.TotalTurns() == 2 && archive.RecentSessions().size() == 1 &&
+        const auto failed = archive.Forget();
+        Check(!failed.Succeeded() && !failed.rowsDeleted && !failed.error.empty() && failed.turnsRemoved == 0 && archive.TotalTurns() == 2 && archive.RecentSessions().size() == 1 &&
             archive.Search("pottery").size() == 2,
             "A failed full deletion partially removed durable conversation history: " + table);
         ExecuteSql(path, "DROP TRIGGER block_delete;");
-        Check(archive.Forget() == 2 && archive.TotalTurns() == 0 && archive.RecentSessions().empty(),
+        const auto retry = archive.Forget();
+        Check(retry.Succeeded() && retry.turnsRemoved == 2 && archive.TotalTurns() == 0 && archive.RecentSessions().empty(),
             "The archive could not be forgotten after the write failure cleared.");
     }
 }
@@ -201,10 +205,35 @@ void TestRetentionDoesNotCountFailedDeletion()
         archive.Counters().prunedSessions == 0 && archive.LoadSession("fixture").size() == 2,
         "Retention reported an old session pruned even though its deletion failed.");
 }
+
+void TestForgetReportsCommittedRowsWhenCheckpointIsBlocked()
+{
+    ScopedTestDirectory directory;
+    const auto path = (directory.root / "archive.sqlite").string();
+    ConversationArchive archive(path);
+    Seed(archive);
+    sqlite3* reader = nullptr;
+    Check(sqlite3_open(path.c_str(), &reader) == SQLITE_OK, "Archive cleanup reader could not be opened.");
+    const int read = sqlite3_exec(reader, "BEGIN; SELECT * FROM conversation_turns;", nullptr, nullptr, nullptr);
+    if (read != SQLITE_OK)
+    {
+        sqlite3_close(reader);
+        Check(false, "Archive cleanup reader could not retain its snapshot.");
+    }
+    const auto partial = archive.Forget();
+    sqlite3_exec(reader, "ROLLBACK;", nullptr, nullptr, nullptr);
+    sqlite3_close(reader);
+    Check(partial.rowsDeleted && partial.turnsRemoved == 2 && !partial.cleanupCompleted && !partial.error.empty() &&
+              archive.TotalTurns() == 0,
+        "A blocked checkpoint lost committed deletion counts or claimed complete cleanup.");
+    const auto retry = archive.Forget();
+    Check(retry.Succeeded() && retry.turnsRemoved == 0, "Committed archive cleanup could not be retried.");
+}
 }
 
 void RunPersistenceRecoveryTests()
 {
+    TestForgetReportsCommittedRowsWhenCheckpointIsBlocked();
     const std::pair<const char*, void(*)()> cases[] = {
         {"numeric preferences", TestPreferenceNumbersRejectNonFiniteAndFractionalIntegers},
         {"persisted preference validation", TestPersistedPreferencesValidateBeforeApplication},

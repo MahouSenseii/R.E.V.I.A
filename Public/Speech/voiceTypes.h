@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -59,6 +60,13 @@ struct VoicePreset
     std::string createdAt;
 };
 
+struct VoiceAssignmentSnapshot
+{
+    std::string profileId;
+    std::string presetId;
+    std::string presetName;
+};
+
 struct VoiceOperationResult
 {
     VoiceOperationResult() = default;
@@ -78,6 +86,8 @@ struct VoiceOperationResult
 
     bool succeeded = false;
     std::string message;
+    // Only a successful persisted assignment supplies display metadata.
+    std::optional<VoiceAssignmentSnapshot> assignment;
     std::string outputPath;
     double elapsedMilliseconds = -1.0;
     std::string device;

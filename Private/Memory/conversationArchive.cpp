@@ -1330,56 +1330,80 @@ bool ConversationArchive::SaveEmbedding(const ArchivedTurn& expectedTurn, const 
     return admitted() && transaction.Commit();
 }
 
-std::size_t ConversationArchive::Forget()
+namespace
 {
-    sqlite3* const database = Acquire();
-    if (database == nullptr)
-    {
-        return 0;
-    }
-    std::lock_guard writeLock(connectionMutex);
-    ArchiveTransaction transaction(database);
-    if (!transaction.IsActive() || !Execute(database, "DELETE FROM conversation_turns;"))
-    {
-        return 0;
-    }
-    const auto removed = static_cast<std::size_t>(sqlite3_changes64(database));
-    if (!Execute(database, "DELETE FROM conversation_sessions;")) return 0;
-    // The search index is not emptied by the deletes above. Each one only appends a
-    // tombstone, and every forgotten word -- with its position, which is enough to put
-    // the sentence back together -- stays in the index segments until a merge happens to
-    // reach them. With the content table now empty, clearing the index outright is exact.
-    if (!Execute(database,
-            "INSERT INTO conversation_search(conversation_search) VALUES('delete-all');") ||
-        !transaction.Commit()) return 0;
-    // Reclaims the pages rather than leaving the text sitting in free space where a
-    // forget the user asked for would still be recoverable from the file.
-    Execute(database, "VACUUM;");
-    // The write-ahead log is a second file. It still holds every frame written since the
-    // last checkpoint -- the forgotten turns among them -- and a checkpoint alone copies
-    // the vacuumed pages back without shrinking the log. Truncating it is what makes the
-    // forget reach the disk rather than just the tables.
-    Execute(database, "PRAGMA wal_checkpoint(TRUNCATE);");
-    return removed;
+bool TruncateArchiveLog(sqlite3* database)
+{
+    sqlite3_stmt* raw = nullptr;
+    if (sqlite3_prepare_v2(database, "PRAGMA wal_checkpoint(TRUNCATE);", -1, &raw, nullptr) != SQLITE_OK)
+        return false;
+    Statement statement(raw);
+    return sqlite3_step(statement.get()) == SQLITE_ROW && sqlite3_column_int(statement.get(), 0) == 0;
 }
 
-std::size_t ConversationArchive::ForgetSession(const std::string& sessionId)
+std::string ForgetDatabaseError(sqlite3* database, const char* step)
 {
+    return std::string(step) + ": " + std::string(sqlite3_errmsg(database)).substr(0, 240);
+}
+}
+
+ArchiveForgetResult ConversationArchive::Forget()
+{
+    ArchiveForgetResult result;
     sqlite3* const database = Acquire();
     if (database == nullptr)
     {
-        return 0;
+        result.error = "The conversation archive could not be opened.";
+        return result;
     }
     std::lock_guard writeLock(connectionMutex);
-    std::size_t removed = 0;
-    if (!DeleteSession(database, sessionId, removed))
-        return 0;
-    // A delete the user asked for reaches the search index and the log too. The deletes
-    // above only add tombstones to the index, and the log still holds the old frames;
-    // without these two steps the words stay recoverable from the files.
-    Execute(database, "INSERT INTO conversation_search(conversation_search) VALUES('optimize');");
-    Execute(database, "PRAGMA wal_checkpoint(TRUNCATE);");
-    return removed;
+    {
+        ArchiveTransaction transaction(database);
+        if (!transaction.IsActive() || !Execute(database, "DELETE FROM conversation_turns;"))
+        {
+            result.error = ForgetDatabaseError(database, "Archive deletion failed");
+            return result;
+        }
+        const auto removed = static_cast<std::size_t>(sqlite3_changes64(database));
+        if (!Execute(database, "DELETE FROM conversation_sessions;") ||
+            !Execute(database, "INSERT INTO conversation_search(conversation_search) VALUES('delete-all');") || !transaction.Commit())
+        {
+            result.error = ForgetDatabaseError(database, "Archive deletion failed");
+            return result;
+        }
+        result.rowsDeleted = true;
+        result.turnsRemoved = removed;
+    }
+    const bool vacuumed = Execute(database, "VACUUM;");
+    const bool checkpointed = TruncateArchiveLog(database);
+    result.cleanupCompleted = vacuumed && checkpointed;
+    if (!result.cleanupCompleted)
+        result.error = "Archive rows were deleted, but database cleanup did not complete. Retry forgetting after the storage problem is resolved.";
+    return result;
+}
+
+ArchiveForgetResult ConversationArchive::ForgetSession(const std::string& sessionId)
+{
+    ArchiveForgetResult result;
+    sqlite3* const database = Acquire();
+    if (database == nullptr)
+    {
+        result.error = "The conversation archive could not be opened.";
+        return result;
+    }
+    std::lock_guard writeLock(connectionMutex);
+    if (!DeleteSession(database, sessionId, result.turnsRemoved))
+    {
+        result.error = ForgetDatabaseError(database, "Conversation deletion failed");
+        return result;
+    }
+    result.rowsDeleted = true;
+    const bool optimized = Execute(database, "INSERT INTO conversation_search(conversation_search) VALUES('optimize');");
+    const bool checkpointed = TruncateArchiveLog(database);
+    result.cleanupCompleted = optimized && checkpointed;
+    if (!result.cleanupCompleted)
+        result.error = "Conversation rows were deleted, but database cleanup did not complete. Retry deleting this conversation after the storage problem is resolved.";
+    return result;
 }
 
 bool ConversationArchive::HasSession(const std::string& sessionId) const

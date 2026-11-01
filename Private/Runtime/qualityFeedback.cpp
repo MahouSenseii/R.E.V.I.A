@@ -211,30 +211,26 @@ bool ReviaSession::CaptureJudgedTurn(
     return true;
 }
 
-std::string ReviaSession::WithdrawLiveCaptures(const std::string& source)
+learning::CaptureWithdrawalResult ReviaSession::WithdrawLiveCaptures(const std::string& source)
 {
-    std::size_t removed = 0;
-    std::string error;
+    learning::CaptureWithdrawalResult result;
     {
         std::lock_guard heldLock(deliveredRepliesMutex);
         std::erase_if(deliveredReplies,
             [&source](const learning::DeliveredReply& reply)
             { return source.empty() || source == "conversation:" + reply.conversationId || source == "participant:" + reply.participantId; });
         const auto store = CaptureStore();
-        if (!(source.empty() ? store.WithdrawAll(removed, error) : store.Withdraw(source, removed, error)))
-            error = "The kept dataset captures could not be withdrawn: " + error;
+        result = source.empty() ? store.WithdrawAll() : store.Withdraw(source);
     }
     InvalidateLiveCaptureIndex();
-    if (!error.empty())
+    if (!result.succeeded)
     {
-        // Logged as well: a caller whose own operation succeeded may not show it.
-        appLogger.Warning(error);
-        return error;
+        result.error = "The kept dataset captures could not be withdrawn: " + result.error;
+        appLogger.Warning(result.error);
     }
-    if (removed > 0)
-        appLogger.Log("Withdrew " + std::to_string(removed) + " kept dataset capture" + (removed == 1 ? "" : "s") + " with " +
-                      (source.empty() ? std::string("every conversation") : source) + ".");
-    return {};
+    if (result.capturesRemoved > 0)
+        appLogger.Log("Withdrew " + std::to_string(result.capturesRemoved) + " kept dataset capture(s).");
+    return result;
 }
 
 learning::LiveCaptureStore ReviaSession::CaptureStore() const

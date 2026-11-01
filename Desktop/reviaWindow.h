@@ -113,6 +113,7 @@ class ReviaWindow final : public QMainWindow
   private:
     friend struct ReviaWindowStopTests;
     void BuildInterface();
+    void BuildCanvasPanel();
     revia::runtime::ReviaSession& Session();
     const revia::runtime::ReviaSession& Session() const;
     void BindSession();

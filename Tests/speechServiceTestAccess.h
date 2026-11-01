@@ -123,6 +123,22 @@ struct SpeechServiceTestAccess
         service.enabled.store(true);
     }
 
+    static void ObserveEvents(SpeechService& service, SpeechService::EventHandler observer)
+    {
+        std::lock_guard lock(service.mutex);
+        service.eventHandler = [original = std::move(service.eventHandler), observer = std::move(observer)](const SpeechEvent& event)
+        {
+            if (original)
+                original(event);
+            observer(event);
+        };
+    }
+
+    static bool HasNoWorkers(SpeechService& service)
+    {
+        return !service.worker.joinable() && service.generationWorkers.empty() && service.qwenPool.WorkerCount() == 0;
+    }
+
     static void ConfigureSynthesisWithoutWorkers(
         SpeechService& service, const speechSettings& settings, VoicePreset preset, SpeechService::EventHandler handler)
     {

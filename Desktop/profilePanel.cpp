@@ -514,7 +514,7 @@ void ProfilePanel::Save()
         return;
     }
 
-    const revia::runtime::ProfileOperationResult result = session.SaveProfile(definition);
+    const revia::runtime::ProfileOperationResult result = session.TrySaveProfile(definition);
     if (!result.succeeded)
     {
         SetStatus(QString::fromStdString(result.message), true);
@@ -573,8 +573,40 @@ void ProfilePanel::AssignVoice(const bool useWindowsFallback)
     }
     const revia::speech::VoiceOperationResult result =
         session.AssignVoice(profileId, presetId);
-    Refresh();
-    SetStatus(QString::fromStdString(result.message), !result.succeeded);
+    if (!result.succeeded)
+    {
+        SetStatus(QString::fromStdString(result.message), true);
+        return;
+    }
+    // The owner confirmed persistence and metadata under its existing voice lock.
+    // A full refresh could wait on another owner and would discard unrelated edits.
+    if (result.assignment)
+    {
+        const auto& assigned = *result.assignment;
+        for (auto& profile : snapshot.profiles)
+        {
+            if (profile.id == assigned.profileId)
+            {
+                profile.voicePresetId = assigned.presetId;
+                profile.voicePresetName = assigned.presetName;
+                const int index = profileCombo->findData(QString::fromStdString(assigned.profileId));
+                if (index >= 0)
+                    profileCombo->setItemText(index, ProfileLabel(profile));
+                break;
+            }
+        }
+        const QSignalBlocker blocker(voiceCombo);
+        const int index = voiceCombo->findData(QString::fromStdString(assigned.presetId));
+        if (index >= 0)
+        {
+            if (!assigned.presetId.empty())
+                voiceCombo->setItemText(index, QString::fromStdString(
+                    assigned.presetName.empty() ? assigned.presetId : assigned.presetName));
+            voiceCombo->setCurrentIndex(index);
+        }
+        UpdateBanner();
+    }
+    SetStatus(QString::fromStdString(result.message));
 }
 
 void ProfilePanel::SetStatus(const QString& text, const bool error)
