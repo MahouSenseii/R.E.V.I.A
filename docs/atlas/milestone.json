@@ -1,14 +1,16 @@
 {
-  "schema_version": 1,
-  "milestone": "Controlled regression checkpoint",
-  "recorded_utc": "2026-11-01T12:09:27.263406+00:00",
+  "schema_version": 2,
+  "milestone": "Reusable test selection and reliability review",
+  "recorded_utc": "2026-11-01T18:00:26.609940+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "base_commit": "3514b38a3ba6637b643c4f8731822ce971b964ee",
-    "source_files": 1395,
-    "source_sha256": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
-    "cumulative_changed_paths": 59
+    "state": "Verified review branch uploaded; application changes unmerged and undeployed",
+    "source_files": 1402,
+    "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
+    "cumulative_changed_paths": 67,
+    "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "product_delivery": "Isolated review copy; application fixes are not merged or deployed",
   "counts": {
@@ -21,7 +23,7 @@
     "not_run_build_blocked": 5,
     "not_selected_safety": 22
   },
-  "interpretation": "124 passing controlled results combine the original run and separate corrected-context rechecks. This is not a clean all-tests pass or real-model/release qualification.",
+  "interpretation": "The historical 124 passing controlled results combine separate contexts. Current catalog discovery, fresh scoped runs and reused results are recorded separately; no clean full-suite or real-model/release qualification is claimed.",
   "changes": [
     {
       "id": "MEM-1",
@@ -78,6 +80,13 @@
       "implementation": "Tool implemented; live qualification still open",
       "checks": "30 protocol tests pass; synthetic restart passes and five controls reject false success. Real-model check not run.",
       "next_step": "Use the reviewed tool for a separately authorized model check; keep wider qualification open."
+    },
+    {
+      "id": "TEST-CATALOG",
+      "name": "Choose and run existing checks",
+      "implementation": "Implemented in draft PR 10; installed app unchanged",
+      "checks": "7 fresh scoped CLI results passed. Resume recheck reused 4 unchanged results; an earlier discovery setup timeout remains unexplained.",
+      "next_step": "Review the draft PR and qualify later cancellation work separately."
     }
   ],
   "capabilities": [
@@ -384,44 +393,173 @@
   ],
   "remaining": [
     {
-      "name": "Build-driver source identity",
-      "state": "Setup qualification open",
-      "detail": "The candidate and unchanged baseline reproduce a Git-provenance failure in nongit source snapshots. No Git identity was fabricated."
+      "name": "Current prerequisite gaps",
+      "state": "6 blocked registrations",
+      "detail": "Five registered checks have unbuilt executables; one lacks existing ws package metadata. No dependency installation is implied."
     },
     {
-      "name": "Live2D bridge checks",
-      "state": "Existing dependency unavailable",
-      "detail": "The required ws package could not load, so two test files did not reach behavioral checks. No dependency was installed."
+      "name": "Intermittent discovery setup",
+      "state": "Known qualification gap",
+      "detail": "A same-configuration resume recheck reused 4 prior results successfully. The earlier 15.036-second discovery timeout before any test module remains unexplained and unfixed."
     },
     {
-      "name": "Five helper-dependent checks",
-      "state": "Build blocked",
-      "detail": "Three static helper executables could not link with the available MinGW runtime. A full baseline native build was not performed."
+      "name": "Historical build and setup gaps",
+      "state": "Retained; not requalified here",
+      "detail": "Earlier static-helper links, source-provenance context and unavailable Live2D dependency remain recorded. The old 153-test coverage counts are not current catalog admission totals."
     },
     {
-      "name": "22 safety-held registrations",
-      "state": "Not run",
-      "detail": "Held for foreground/input, real media, source or registry mutation, uncertain service ownership, or optional-host isolation. They are not passes or skips."
+      "name": "Failures and interruptions",
+      "state": "Original evidence retained",
+      "detail": "The earlier baseline wording assertion and interrupted regression phases remain retained. Historical mixed-context results are separate from the current scoped catalog runs."
     },
     {
-      "name": "Earlier combined checks",
-      "state": "Historical failure retained",
-      "detail": "A previous 23/24 run retained a baseline wording assertion failure. That aggregate was not rerun without sufficient service-isolation evidence."
-    },
-    {
-      "name": "Real-use and release checks",
+      "name": "Real use and release",
       "state": "Open",
-      "detail": "Actual-model recall, physical desktop, voice/media/GPU, integration, release and deployment remain unqualified. No performance improvement is claimed."
+      "detail": "Actual-model recall, physical desktop, real voice/media/GPU, integration, release and deployment remain unqualified. No performance improvement is claimed."
     }
   ],
   "next": {
     "sequence": [
-      "/tests selector",
-      "UI-4 cancellation before cleanup"
+      "Review draft PR10",
+      "Qualify responsive Stop cancellation separately"
     ],
-    "name": "Test selector, then responsive Stop cancellation",
-    "state": "Planned; neither change is implemented",
-    "detail": "First add a nonblocking, cancellable /tests selector that reuses existing tests, defaults to quick isolated checks and explains when developer binaries are required. Then reproduce and repair cancellation before cleanup, with independent review and before/after checks."
+    "name": "Review the draft, then continue cancellation reliability",
+    "state": "Draft PR open; application not merged or deployed",
+    "detail": "Review the published candidate and its qualification limits. Later UI-4 work stays separate from this 67-file change."
   },
-  "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded."
+  "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
+  "finalization_state": "review_branch_uploaded_draft_pr_open_application_unmerged",
+  "review_refs": {
+    "branch": {
+      "name": "codex/revia-reliability-test-catalog-20261101",
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/tree/codex/revia-reliability-test-catalog-20261101",
+      "head_sha": "f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6"
+    },
+    "commit": {
+      "sha": "f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6",
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/commit/f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6",
+      "tree_sha": "f8c5b60b1559a53a8f672a9190545daf43c9e52b"
+    },
+    "pull_request": {
+      "number": 10,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/10",
+      "draft": true,
+      "state": "open",
+      "merged": false
+    }
+  },
+  "historical_source": {
+    "base_commit": "3514b38a3ba6637b643c4f8731822ce971b964ee",
+    "source_files": 1395,
+    "source_sha256": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
+    "cumulative_changed_paths": 59
+  },
+  "counts_scope": "Historical 153-registration controlled checkpoint; not the current 155-registration catalog projection",
+  "historical_checkpoint_utc": "2026-11-01T12:09:27.263406+00:00",
+  "catalog": {
+    "discovered_registrations": 155,
+    "policy_state": "Independent review accepted the draft with the retained intermittent discovery setup gap",
+    "developer_binaries": "Installed application packages may not contain developer test binaries; prerequisites must be reported honestly",
+    "gpu_measurement": "Existing manual measurement tools remain separate; no newly enabled GPU benchmark mode",
+    "initial_cli_failure": "The intermittent CTest re-discovery timeout was reproduced during final-source resume. The discovery child started but produced no stdout or stderr within the 15-second setup budget. No test module executed; the CLI returned setup failure and owned cleanup was clean. Cause remains unresolved; no root-cause fix is claimed.",
+    "inventory_counts": {
+      "discovered": 155,
+      "policy_admitted": 132,
+      "held": 23,
+      "runnable_with_current_prerequisites": 126,
+      "blocked": 6,
+      "blocked_registered_not_built": 5,
+      "blocked_missing_existing_ws_package_metadata": 1
+    },
+    "inventory_count_scope": "Fresh final-source CLI inventory availability, not executed tests or passes",
+    "historical_prepolicy_scoped_runs": [
+      {
+        "selection": "quick",
+        "passed": 4,
+        "fresh": true,
+        "scope": "Reported pre-policy-expansion candidate; final source correspondence pending"
+      },
+      {
+        "selection": "response",
+        "passed": 1,
+        "fresh": true,
+        "synthetic": true,
+        "scope": "Controlled synthetic provider; not real-model quality"
+      },
+      {
+        "selection": "resume",
+        "reused_results": 4,
+        "fresh": false,
+        "aggregate_junit_skipped": 4,
+        "scope": "Retained timestamps and digests; no rerun claimed"
+      }
+    ],
+    "latest_reported_scoped_runs": [
+      {
+        "selection": "quick",
+        "passed": 4,
+        "fresh": true,
+        "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385"
+      },
+      {
+        "selection": "response",
+        "passed": 1,
+        "fresh": true,
+        "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
+        "synthetic": true
+      },
+      {
+        "selection": "python_contract",
+        "passed": 1,
+        "fresh": true,
+        "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385"
+      },
+      {
+        "selection": "qt_panels",
+        "passed": 1,
+        "fresh": true,
+        "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385"
+      }
+    ],
+    "final_source_focused_checks": {
+      "native_targets_built": 3,
+      "core_registered_checks_passed": 1,
+      "slash_fixture_exit_code": 0,
+      "scope": "Focused fixtures and 7 fresh CLI module results; not all 155 executions or real-runtime/release qualification"
+    },
+    "final_source_fresh_passed_module_results": 7,
+    "final_source_resume": {
+      "state": "setup_failed_before_module_execution",
+      "exit_code": 2,
+      "discovery_timeout_seconds": 15,
+      "child_started": true,
+      "stdout_bytes": 0,
+      "stderr_bytes": 0,
+      "owned_cleanup": "clean",
+      "cause": "unresolved",
+      "prior_prepolicy_resume": "Historical evidence only; not current final-source proof",
+      "observed_discovery_seconds": 15.036,
+      "recheck": {
+        "schema_version": 2,
+        "same_configuration": true,
+        "exit_code": 0,
+        "reused_records": 4,
+        "fresh": false,
+        "original_times_and_digests_preserved": true,
+        "aggregate_junit_skipped": 4,
+        "owned_cleanup": "clean"
+      }
+    },
+    "status_result_reads": {
+      "exit_code": 0,
+      "owned_cleanup": "clean",
+      "new_test_execution": false
+    }
+  },
+  "ci": {
+    "commit_skip_ci": true,
+    "observed_remote_workflow_runs": 0,
+    "qualification": "Remote CI is not run/green; scoped local results are recorded separately"
+  },
+  "excluded_later_work": "Separate UI-4 source/test work is not part of this 67-file commit"
 }
