@@ -1,18 +1,27 @@
 {
   "schema_version": 2,
-  "milestone": "Reusable test selection and reliability review",
-  "recorded_utc": "2026-11-01T20:17:34.482Z",
+  "milestone": "Nine reliability repairs integrated into GitHub main",
+  "recorded_utc": "2026-11-01T20:50:48.434Z",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
-    "base_commit": "3514b38a3ba6637b643c4f8731822ce971b964ee",
-    "state": "Verified review branch uploaded; application changes unmerged and undeployed",
-    "source_files": 1402,
-    "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
-    "cumulative_changed_paths": 67,
-    "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
+    "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+    "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
+    "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+    "source_files": 1403,
+    "raw_source_sha256": "7a60cf2d461f0395387e7db255d85d6d981de3b23f4e15793782fc4c15fed2a6",
+    "git_lf_source_sha256": "7e86722164d4769e57e165074728422441339e8d8c7b334a636b03b1d5428f39",
+    "incremental_changed_paths": [
+      67,
+      8,
+      5
+    ],
+    "reliability_repairs": 9,
+    "installed_app_updated": false,
+    "release_qualified": false,
+    "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
   },
-  "product_delivery": "Isolated review copy; application fixes are not merged or deployed",
+  "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "counts": {
     "registered": 153,
     "executed_unique": 126,
@@ -28,65 +37,65 @@
     {
       "id": "MEM-1",
       "name": "Protect Revia's identity after a damaged file",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Sample identity-file checks passed; real-model recall after restart is untested.",
       "next_step": "Check recall after a real restart."
     },
     {
       "id": "MEM-2",
       "name": "Report what was actually forgotten",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Test-data cleanup checks passed; live app use still needs checking.",
       "next_step": "Check forgetting in a real session."
     },
     {
       "id": "ACT-1",
       "name": "Do not report success after only part of a task",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Task logic tests passed; live desktop checks are blocked (0 of 6).",
       "next_step": "Complete the desktop checks in an authorized session."
     },
     {
       "id": "RUN-3",
       "name": "Require a valid reply ending",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Reply-ending checks passed; installed models still need checking.",
       "next_step": "Check the installed model connections."
     },
     {
       "id": "UI-2",
       "name": "Keep profile saving responsive when busy",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Focused interface checks passed; live app use still needs checking.",
       "next_step": "Check profile saving during an actual chat session."
     },
     {
       "id": "UI-1",
       "name": "Keep generated images usable after changing companions",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "CPU image-switch and privacy checks passed; real generated outputs still need checking.",
       "next_step": "Check generated images in a running companion session."
     },
     {
       "id": "UI-3",
       "name": "Keep voice assignment responsive when busy",
-      "implementation": "Implemented in review copy",
+      "implementation": "Merged into GitHub main; installed app unchanged",
       "checks": "Button, Stop, retry and companion-isolation fixtures passed; live voice and disk stalls remain untested.",
       "next_step": "Check voice selection and playback in an authorized running session."
     },
     {
       "id": "QUAL-1",
       "name": "Check memory across a real restart",
-      "implementation": "Tool implemented; live qualification still open",
+      "implementation": "Tooling merged into main; live qualification open",
       "checks": "30 protocol tests pass; synthetic restart passes and five controls reject false success. Real-model check not run.",
       "next_step": "Use the reviewed tool for a separately authorized model check; keep wider qualification open."
     },
     {
       "id": "TEST-CATALOG",
       "name": "Choose and run existing checks",
-      "implementation": "Implemented in draft PR 10; installed app unchanged",
-      "checks": "7 fresh scoped CLI results passed. Resume recheck reused 4 unchanged results; an earlier discovery setup timeout remains unexplained.",
-      "next_step": "Review the draft PR and qualify later cancellation work separately."
+      "implementation": "Merged into GitHub main; installed app unchanged",
+      "checks": "Historical PR 10 context: 7 fresh scoped CLI results passed; resume recheck reused 4 unchanged results. Earlier discovery setup timeout remains unexplained.",
+      "next_step": "Qualify integrated test selection and cancellation in live use."
     }
   ],
   "capabilities": [
@@ -393,8 +402,8 @@
   ],
   "remaining": [
     {
-      "name": "Current prerequisite gaps",
-      "state": "6 blocked registrations",
+      "name": "Historical PR 10 prerequisite gaps",
+      "state": "6 blocks in historical availability snapshot",
       "detail": "Five registered checks have unbuilt executables; one lacks existing ws package metadata. No dependency installation is implied."
     },
     {
@@ -420,15 +429,15 @@
   ],
   "next": {
     "sequence": [
-      "Review draft PR10",
-      "Qualify responsive Stop cancellation separately"
+      "Qualify live native-browser integration and Stop behavior",
+      "Qualify real-model, voice/media/GPU and normal-app behavior before release"
     ],
-    "name": "Review the draft, then continue cancellation reliability",
-    "state": "Draft PR open; application not merged or deployed",
-    "detail": "Review the published candidate and its qualification limits. Later UI-4 work stays separate from this 67-file change."
+    "name": "Qualify the integrated source in live use",
+    "state": "Source merged; installed app unchanged; runtime/release qualification open",
+    "detail": "Retain scoped evidence and unresolved setup gaps. Source integration is not application deployment or a new full-suite pass."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
-  "finalization_state": "review_branch_uploaded_draft_pr_open_application_unmerged",
+  "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
   "review_refs": {
     "branch": {
       "name": "codex/revia-reliability-test-catalog-20261101",
@@ -443,10 +452,12 @@
     "pull_request": {
       "number": 10,
       "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/10",
-      "draft": true,
-      "state": "open",
-      "merged": false
-    }
+      "draft": false,
+      "state": "closed",
+      "merged": true,
+      "merge_commit": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b"
+    },
+    "scope": "PR 10 source head and merged PR; integrated main is recorded in source.main_commit"
   },
   "historical_source": {
     "base_commit": "3514b38a3ba6637b643c4f8731822ce971b964ee",
@@ -454,11 +465,11 @@
     "source_sha256": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
     "cumulative_changed_paths": 59
   },
-  "counts_scope": "Historical 153-registration controlled checkpoint; not the current 155-registration catalog projection",
+  "counts_scope": "Historical 153-registration controlled checkpoint; not current integrated 157-registration availability or pass totals",
   "historical_checkpoint_utc": "2026-11-01T12:09:27.263406+00:00",
   "catalog": {
     "discovered_registrations": 155,
-    "policy_state": "Independent review accepted the draft with the retained intermittent discovery setup gap",
+    "policy_state": "Historical PR 10 admission review retained with unexplained intermittent discovery setup gap",
     "developer_binaries": "Installed application packages may not contain developer test binaries; prerequisites must be reported honestly",
     "gpu_measurement": "Existing manual measurement tools remain separate; no newly enabled GPU benchmark mode",
     "initial_cli_failure": "The intermittent CTest re-discovery timeout was reproduced during final-source resume. The discovery child started but produced no stdout or stderr within the 15-second setup budget. No test module executed; the CLI returned setup failure and owned cleanup was clean. Cause remains unresolved; no root-cause fix is claimed.",
@@ -471,7 +482,7 @@
       "blocked_registered_not_built": 5,
       "blocked_missing_existing_ws_package_metadata": 1
     },
-    "inventory_count_scope": "Fresh final-source CLI inventory availability, not executed tests or passes",
+    "inventory_count_scope": "Historical PR 10 final-source CLI inventory availability; not executed passes or current integrated availability",
     "historical_prepolicy_scoped_runs": [
       {
         "selection": "quick",
@@ -554,24 +565,28 @@
       "exit_code": 0,
       "owned_cleanup": "clean",
       "new_test_execution": false
-    }
+    },
+    "scope": "Historical PR 10 availability and scoped-run checkpoint; not current integrated availability",
+    "current_source_expected_windows_registrations": 157,
+    "current_runnability_remeasured": false
   },
   "ci": {
     "commit_skip_ci": true,
     "observed_remote_workflow_runs": 0,
-    "qualification": "Remote CI is not run/green; scoped local results are recorded separately"
+    "qualification": "Application CI has not run; no CI pass is claimed. Broad autoBuild real-browser paths remain deferred and unqualified; retained local results are scoped evidence",
+    "scope": "Application source CI only; excludes static Atlas Pages publishing"
   },
-  "excluded_later_work": "Separate UI-4 source/test work is not part of this 67-file commit",
+  "excluded_later_work": "Only the reviewed PR 10, PR 11 and PR 12 source changes are integrated; later local work is excluded",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
-    "code": "Published for review in draft PR 11; separate from PR 10",
+    "code": "Merged through PR 11 after PR 10; installed app unchanged",
     "checks": "3 selected checks passed with offscreen UI and finite fake worker; real-browser use untested",
-    "next_step": "Review PR 10 first, then the eight-file stacked PR 11 before integration",
+    "next_step": "Qualify Stop cancellation in live native-browser use",
     "changed_paths": 8,
     "source_base_raw_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
     "local_source_raw_sha256": "efe12c5433c46f9105f024c53e4fdbe6447739f5f09d9313f72d96fb7f362319",
-    "code_publication": "Published for review in stacked draft PR 11; not in PR 10 or f0068a4",
+    "code_publication": "Merged through PR 11; original eight-file delta separate from PR 10",
     "included_in_published_67_file_payload": false,
     "independent_code_and_result_review": "GO for the reviewed eight-path delta and controlled test results",
     "local_catalog": {
@@ -580,7 +595,7 @@
       "reused": 0,
       "failures": 0,
       "skipped": 0,
-      "scope": "Three selected registrations only; no full 156 rerun or replacement of the published 155-entry availability snapshot"
+      "scope": "Historical UI4 checkpoint: three selected registrations only; no full 156 rerun or current 157-registration availability measurement"
     },
     "selected_checks": [
       {
@@ -612,26 +627,32 @@
       "scope": "Logical barrier observations only; no latency or performance comparison"
     },
     "runtime_scope": "Offscreen controlled fixture and finite Node standard-library fake worker; no actual browser, model, voice/media/GPU, physical desktop, normal-app or release qualification",
-    "merged_installed_or_deployed": false,
     "review_refs": {
       "branch": "codex/revia-stop-cleanup-20261101",
       "commit": "6d65d44e3afe8ba0a8d8f7043fa122dad234c75f",
       "pull_request": 11,
       "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/11",
-      "draft": true,
-      "base_branch": "codex/revia-reliability-test-catalog-20261101",
-      "base_commit": "f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6",
+      "draft": false,
+      "base_branch": "main",
       "depends_on_pull_request": 10,
-      "merged": false
+      "merged": true,
+      "state": "closed",
+      "original_stack_base_branch": "codex/revia-reliability-test-catalog-20261101",
+      "merge_commit": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+      "original_source_parent_commit": "f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6",
+      "merge_first_parent_commit": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b"
     },
     "git_lf_source_sha256": "6510ed2848313636c0c6c6197712159bfcaf1b157b91022d64d8e5d6c44c4409",
-    "ci": "Commit uses [skip ci]; remote CI is not claimed to have passed"
+    "ci": "Commit uses [skip ci]; remote CI is not claimed to have passed",
+    "merged": true,
+    "installed": false,
+    "application_deployed": false
   },
   "browser_budget_follow_on": {
     "id": "ACT-3",
     "name": "Keep browser observation receipts within the native limit",
-    "code": "Locally reviewed five-file candidate; source publication is blocked/pending",
-    "source_publication": "No ACT3 source commit, branch or PR has been published",
+    "code": "Merged through PR 12 after PR 11; installed app unchanged",
+    "source_publication": "Five-file reviewed ACT3 source merged into GitHub main",
     "changed_paths": 5,
     "base_commit": "6d65d44e3afe8ba0a8d8f7043fa122dad234c75f",
     "depends_on_pull_request": 11,
@@ -664,6 +685,49 @@
       "No full suite, actual browser/model/voice/media/GPU, normal-app or release qualification"
     ],
     "ci": "Broad autoBuild real-browser paths explicitly deferred and not qualified; no remote CI pass claim",
-    "merged_installed_or_deployed": false
+    "review_refs": {
+      "branch": "codex/revia-browser-budget-20261101",
+      "commit": "5a0337e85c4cb06037794d591bb5c7d3f5d14756",
+      "pull_request": 12,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/12",
+      "draft": false,
+      "state": "closed",
+      "base_branch": "main",
+      "original_stack_base_branch": "codex/revia-stop-cleanup-20261101",
+      "merged": true,
+      "merge_commit": "0b908ef779ea10564d7746834065adcf02abb07c"
+    },
+    "merged": true,
+    "installed": false,
+    "application_deployed": false
+  },
+  "historical_review_source": {
+    "recorded_utc": "2026-11-01T20:17:34.482Z",
+    "scope": "Earlier PR 10 review checkpoint; historical source state only",
+    "base_commit": "3514b38a3ba6637b643c4f8731822ce971b964ee",
+    "state": "Verified review branch uploaded; application changes unmerged and undeployed",
+    "source_files": 1402,
+    "source_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
+    "cumulative_changed_paths": 67,
+    "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
+  },
+  "integration": {
+    "main_commit": "0b908ef779ea10564d7746834065adcf02abb07c",
+    "main_tree": "c62f9607d0305d5ba64386fc9f3dc9a633fddb7d",
+    "merge_order": [
+      10,
+      11,
+      12
+    ],
+    "merge_commits": {
+      "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+      "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+      "12": "0b908ef779ea10564d7746834065adcf02abb07c"
+    },
+    "method": "normal merge commits; reviewed source heads preserved",
+    "merge_commit_skip_ci": true,
+    "application_ci_run": false,
+    "installed_app_updated": false,
+    "runtime_release_qualified": false
   }
 }
