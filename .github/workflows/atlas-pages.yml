@@ -48,7 +48,18 @@ jobs:
           counts = record['counts']
           assert sum(counts[key] for key in ['passing_controlled_evidence_after_rechecks', 'remaining_setup_qualifications', 'not_run_build_blocked', 'not_selected_safety']) == counts['registered']
           assert counts['raw_zero_exit'] + counts['raw_failed'] == counts['executed_unique']
-          assert record['product_delivery'] == 'Isolated review copy; application fixes are not merged or deployed'
+          delivery = record['product_delivery']
+          legacy_delivery = 'Isolated review copy; application fixes are not merged or deployed'
+          merged_delivery = 'Merged source on GitHub main; installed app unchanged; no application deployment'
+          assert delivery in {legacy_delivery, merged_delivery}
+          integration = record.get('integration')
+          if delivery == merged_delivery:
+              assert isinstance(integration, dict)
+              assert record['source']['installed_app_updated'] is False
+              assert record['source']['release_qualified'] is False
+          if integration is not None:
+              assert integration['installed_app_updated'] is False
+              assert integration['runtime_release_qualified'] is False
           print('Public Atlas artifact boundary and status totals verified.')
       - name: Read existing Pages configuration
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
