@@ -58,11 +58,11 @@ enum class CaptureDepth
 struct CaptureConsent
 {
     // The one application this session may record. Empty records nothing: a capture
-    // session with no named window is a request to record the whole desktop, which is
+    // session with no named application is a request to record the whole desktop, which is
     // not something this type will express.
     std::string application;
-    // Narrowed further when the window matters -- one conversation rather than every
-    // conversation.
+    // Window-specific capture is unsupported. Begin refuses any nonempty value rather
+    // than widening it to application-wide consent.
     std::string windowTitle;
     CaptureDepth depth = CaptureDepth::Structure;
     // What the records in this session are evidence of. Set when the session is opened,
@@ -223,8 +223,8 @@ public:
     ComputerExperienceRecorder(const ComputerExperienceRecorder&) = delete;
     ComputerExperienceRecorder& operator=(const ComputerExperienceRecorder&) = delete;
 
-    // Open a capture session. Refused unless the consent names an application and says
-    // what the records will be evidence of.
+    // Open an application-scoped capture session with known provenance. A refused
+    // request leaves any existing session unchanged.
     [[nodiscard]] bool Begin(CaptureConsent consent);
     // Close it. Idempotent, because a stop that arrives twice is a stop.
     void End();
