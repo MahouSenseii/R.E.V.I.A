@@ -96,6 +96,83 @@ void TestACaptureSessionMustNameItsScopeAndItsMeaning()
         "An opened session did not report itself as capturing.");
 }
 
+void TestWindowSpecificConsentIsRefusedBeforeCreatingADataset()
+{
+    for (const auto depth : {CaptureDepth::Structure, CaptureDepth::ControlValues})
+    {
+        for (const auto& title : {std::string("Only this fixture document"), std::string(" ")})
+        {
+            revia::tests::ScopedTestDirectory directory;
+            const auto dataset = directory.root / "dataset";
+            ComputerExperienceRecorder recorder(dataset);
+            auto consent = Consent(ExperienceProvenance::HumanDemonstration, depth);
+            consent.windowTitle = title;
+
+            Check(!recorder.Begin(consent),
+                "Unsupported window-specific consent was accepted as application-wide recording.");
+            const auto status = recorder.Status();
+            Check(!status.capturing && status.sessionId.empty() && status.recorded == 0 && status.refused == 0,
+                "Refusing window-specific consent altered capture state or record counts.");
+            Check(!std::filesystem::exists(dataset),
+                "Refusing unsupported window consent created a dataset directory.");
+            auto record = Row();
+            record.candidates.push_back(Candidate("Message", "dinner at eight"));
+            Check(!recorder.Record(record) && recorder.Sessions().empty() && !std::filesystem::exists(dataset),
+                "A refused window-specific session still persisted a fixture row.");
+        }
+    }
+}
+
+void TestRefusedWindowConsentPreservesTheActiveApplicationSession()
+{
+    for (const auto depth : {CaptureDepth::Structure, CaptureDepth::ControlValues})
+    {
+        revia::tests::ScopedTestDirectory directory;
+        ComputerExperienceRecorder recorder(directory.root / "dataset");
+        auto original = Consent(ExperienceProvenance::HumanDemonstration, depth);
+        original.maximumRecords = 2;
+        Check(recorder.Begin(original), "The original application-scoped session did not open.");
+        auto first = Row();
+        first.candidates.push_back(Candidate("Message", "dinner at eight"));
+        Check(recorder.Record(first), "The original session did not keep its first fixture row.");
+        const auto before = recorder.Status();
+
+        auto narrowed = Consent(ExperienceProvenance::TeacherProposal,
+            depth == CaptureDepth::Structure ? CaptureDepth::ControlValues : CaptureDepth::Structure);
+        narrowed.application = "calculator.exe";
+        narrowed.windowTitle = "Only this fixture document";
+        narrowed.maximumRecords = 99;
+        narrowed.maximumDurationMs = 1;
+        Check(!recorder.Begin(narrowed), "An unsupported window scope replaced an active capture session.");
+        const auto after = recorder.Status();
+        Check(after.capturing && after.sessionId == before.sessionId && after.application == before.application &&
+                after.depth == before.depth && after.provenance == before.provenance &&
+                after.recorded == before.recorded && after.refused == before.refused &&
+                after.bytesWritten == before.bytesWritten && after.startedAtMs == before.startedAtMs &&
+                after.expiresAtMs == before.expiresAtMs,
+            "Refusing an unsupported replacement changed the prior session or its consent.");
+        Check(!recorder.Record(Row("calculator.exe")) &&
+                recorder.Status().lastRefusal == CaptureRefusal::OutsideConsentedWindow,
+            "The refused replacement widened the original application consent.");
+        auto second = Row();
+        second.candidates.push_back(Candidate("Message", "lunch at noon"));
+        Check(recorder.Record(second), "The original application session stopped after the replacement refusal.");
+        const auto rows = recorder.Read(before.sessionId);
+        Check(rows.size() == 2 && recorder.Sessions().size() == 1 &&
+                rows[0].provenance == ExperienceProvenance::HumanDemonstration &&
+                rows[1].provenance == ExperienceProvenance::HumanDemonstration,
+            "The refused replacement lost rows, created a second session or changed their provenance.");
+        Check(rows[0].candidates.size() == 1 && rows[1].candidates.size() == 1,
+            "The original session lost its fixture candidates.");
+        Check(depth == CaptureDepth::Structure
+                ? rows[0].candidates[0].value.empty() && rows[1].candidates[0].value.empty()
+                : rows[0].candidates[0].value == "dinner at eight" && rows[1].candidates[0].value == "lunch at noon",
+            "The refused replacement changed the original depth or redaction contract.");
+        Check(!recorder.Record(Row()) && recorder.Status().lastRefusal == CaptureRefusal::QuotaReached,
+            "The refused replacement reset the original record quota.");
+    }
+}
+
 // The window the session was opened for, and nothing else.
 void TestRecordingStaysInsideTheConsentedApplication()
 {
@@ -404,6 +481,8 @@ void RunExperienceRecorderTests()
 {
     TestNothingIsRecordedWithoutACaptureSession();
     TestACaptureSessionMustNameItsScopeAndItsMeaning();
+    TestWindowSpecificConsentIsRefusedBeforeCreatingADataset();
+    TestRefusedWindowConsentPreservesTheActiveApplicationSession();
     TestRecordingStaysInsideTheConsentedApplication();
     TestEnablingRecordingDoesNotCaptureWhatCameBefore();
     TestControlValuesNeedTheirOwnOptIn();

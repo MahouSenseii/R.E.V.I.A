@@ -279,11 +279,10 @@ std::filesystem::path ComputerExperienceRecorder::Root() const
 
 bool ComputerExperienceRecorder::Begin(CaptureConsent newConsent)
 {
-    if (!newConsent.Usable())
+    if (!newConsent.Usable() || !newConsent.windowTitle.empty())
     {
-        // A capture session with no named application is a request to record the whole
-        // desktop, and a capture session that cannot say what its rows are evidence of
-        // produces rows no pipeline may use. Neither is expressible here.
+        // The record format cannot enforce a window-title restriction. Refuse it before
+        // creating output or replacing an existing session.
         return false;
     }
 
