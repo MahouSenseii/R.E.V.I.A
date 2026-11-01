@@ -1,0 +1,78 @@
+name: Revia public Atlas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/atlas/**'
+      - '.github/workflows/atlas-pages.yml'
+  workflow_dispatch:
+
+# No product build, models, private evidence or dependency installation.
+permissions:
+  contents: read
+
+concurrency:
+  group: revia-atlas-pages
+  cancel-in-progress: false
+
+jobs:
+  public-artifact:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Check out only the public Atlas
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/atlas
+      - name: Check the exact public artifact boundary
+        shell: python
+        run: |
+          from pathlib import Path
+          import json, re
+          root = Path('docs/atlas')
+          allowed = {'index.html', 'atlas.css', 'public.css', 'atlas.js', 'milestone.json'}
+          files = [p for p in root.rglob('*') if p.is_file()]
+          assert {p.relative_to(root).as_posix() for p in files} == allowed
+          assert not any(p.is_symlink() for p in root.rglob('*'))
+          assert sum(p.stat().st_size for p in files) < 500_000
+          denied = re.compile(r'(?i)([a-z]:[\\/](?:Users|Windows|Program Files)|/home/|/Users/|libfile_|file_00000000|https?://localhost|https?://127\.0\.0\.1|BEGIN [A-Z ]*PRIVATE KEY|(?:api[_-]?key|access[_-]?token)\s*[=:])')
+          for path in files:
+              assert not denied.search(path.read_text('utf-8')), 'Private or local content rejected: ' + path.name
+          record = json.loads((root / 'milestone.json').read_text('utf-8'))
+          counts = record['counts']
+          assert sum(counts[key] for key in ['passing_controlled_evidence_after_rechecks', 'remaining_setup_qualifications', 'not_run_build_blocked', 'not_selected_safety']) == counts['registered']
+          assert counts['raw_zero_exit'] + counts['raw_failed'] == counts['executed_unique']
+          assert record['product_delivery'] == 'Isolated review copy; application fixes are not merged or deployed'
+          print('Public Atlas artifact boundary and status totals verified.')
+      - name: Read existing Pages configuration
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        with:
+          enablement: false
+      - name: Upload only the public Atlas
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: docs/atlas
+          retention-days: 1
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: public-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the reviewed public artifact
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
