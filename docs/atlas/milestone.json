@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "milestone": "Reusable test selection and reliability review",
-  "recorded_utc": "2026-11-01T18:00:26.609940+00:00",
+  "recorded_utc": "2026-11-01T19:09:32.965612+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
@@ -561,5 +561,70 @@
     "observed_remote_workflow_runs": 0,
     "qualification": "Remote CI is not run/green; scoped local results are recorded separately"
   },
-  "excluded_later_work": "Separate UI-4 source/test work is not part of this 67-file commit"
+  "excluded_later_work": "Separate UI-4 source/test work is not part of this 67-file commit",
+  "local_follow_on": {
+    "id": "UI-4",
+    "name": "Keep Stop responsive while browser cleanup waits",
+    "code": "Published for review in draft PR 11; separate from PR 10",
+    "checks": "3 selected checks passed with offscreen UI and finite fake worker; real-browser use untested",
+    "next_step": "Review PR 10 first, then the eight-file stacked PR 11 before integration",
+    "changed_paths": 8,
+    "source_base_raw_sha256": "86675ffaf6279bdcf21574fb29b53b74ddca54265c4a6a514d34cc7c88ad1385",
+    "local_source_raw_sha256": "efe12c5433c46f9105f024c53e4fdbe6447739f5f09d9313f72d96fb7f362319",
+    "code_publication": "Published for review in stacked draft PR 11; not in PR 10 or f0068a4",
+    "included_in_published_67_file_payload": false,
+    "independent_code_and_result_review": "GO for the reviewed eight-path delta and controlled test results",
+    "local_catalog": {
+      "discovered_registrations": 156,
+      "fresh_selected_passes": 3,
+      "reused": 0,
+      "failures": 0,
+      "skipped": 0,
+      "scope": "Three selected registrations only; no full 156 rerun or replacement of the published 155-entry availability snapshot"
+    },
+    "selected_checks": [
+      {
+        "name": "ReviaBrowserContractTests",
+        "fresh": true,
+        "outcome": "passed"
+      },
+      {
+        "name": "Revia.TestCatalogSlash",
+        "fresh": true,
+        "outcome": "passed"
+      },
+      {
+        "name": "Revia.StopCleanup",
+        "fresh": true,
+        "outcome": "passed"
+      }
+    ],
+    "controlled_before_after": {
+      "five_logical_barrier_flags": {
+        "before": 0,
+        "after": 1,
+        "count": 5
+      },
+      "watchdog_required": {
+        "before": true,
+        "after": false
+      },
+      "scope": "Logical barrier observations only; no latency or performance comparison"
+    },
+    "runtime_scope": "Offscreen controlled fixture and finite Node standard-library fake worker; no actual browser, model, voice/media/GPU, physical desktop, normal-app or release qualification",
+    "merged_installed_or_deployed": false,
+    "review_refs": {
+      "branch": "codex/revia-stop-cleanup-20261101",
+      "commit": "6d65d44e3afe8ba0a8d8f7043fa122dad234c75f",
+      "pull_request": 11,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/11",
+      "draft": true,
+      "base_branch": "codex/revia-reliability-test-catalog-20261101",
+      "base_commit": "f0068a4e37fcc472ff3f5efe3a57916a2a58c3a6",
+      "depends_on_pull_request": 10,
+      "merged": false
+    },
+    "git_lf_source_sha256": "6510ed2848313636c0c6c6197712159bfcaf1b157b91022d64d8e5d6c44c4409",
+    "ci": "Commit uses [skip ci]; remote CI is not claimed to have passed"
+  }
 }
