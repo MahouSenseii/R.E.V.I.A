@@ -96,9 +96,10 @@ public:
     // to take custody of extracted content before any model planning.
     [[nodiscard]] PayloadReference HoldPayload(std::string value, std::string kind);
 
-    // BeginTask takes custody of exact content before planning. EndTask clears
+    // BeginTask binds the original admitted request separately from exact content.
+    // An omitted request leaves whole-task acceptance unresolved. EndTask clears
     // payloads, the previous observation, and the subgoal regardless of outcome.
-    void BeginTask(const std::string& goalId, RequestOrigin origin, TaskContent content = {});
+    void BeginTask(const std::string& goalId, RequestOrigin origin, TaskContent content = {}, const std::string& request = {});
     // Ends the task and writes the last decision's record, now that the run is over and
     // its outcome is known. Called with the finished goal; `EndTask` is the same thing
     // for a caller that has no goal to hand back.
@@ -177,6 +178,7 @@ private:
     computerControlSettings configured;
 
     std::string activeGoalId;
+    TaskAcceptanceContract acceptance;
     RequestOrigin activeOrigin = RequestOrigin::Unknown;
     PayloadReference activePayload;
     // What the content gate last had to say, for the activity feed. A substitution that

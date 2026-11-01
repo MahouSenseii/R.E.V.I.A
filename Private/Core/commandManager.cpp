@@ -155,6 +155,7 @@ commandOutput commandManager::BuildHelpOutput() const
     stream << "/models   - Show the exact active model roles, files, and residency\n";
     stream << "/quality  - Conversation-quality counters for this session's real turns\n";
     stream << "/eval [list|last] - Run the conversation contract corpus against the model\n";
+    stream << "/tests [quick|response|status|details|cancel] - Local developer CTest catalog (explicit setup required)\n";
     stream << "/internet [on|off|auto|manual] - Set internet lookup behavior\n";
     stream << "/cloud [on|off|status] - Optional cloud model for this session (off unless set up)\n";
     stream << "/cloud ask [--screen] [--clipboard] [--memory] <question> - Ask the cloud model once\n";

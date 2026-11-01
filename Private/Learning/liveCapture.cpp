@@ -114,6 +114,14 @@ std::optional<LearningDecision> ParseDecision(const std::string& value)
     return std::nullopt;
 }
 
+// NUL is outside permanent source identifier grammar; JSON preserves it by length.
+const std::string PendingCleanupPrefix = std::string(1, '\0') + "revia-live-capture-cleanup-v1:";
+
+std::string PendingCleanup(const std::string& captureId)
+{
+    return PendingCleanupPrefix + captureId;
+}
+
 bool CaptureId(const std::string& value)
 {
     return value.size() == 16 &&
@@ -155,16 +163,17 @@ bool WriteReplacing(const std::filesystem::path& target, const std::string& byte
     return core::ReplaceFileAtomically(target, partial, error);
 }
 
-bool RemoveCorrection(const std::filesystem::path& directory, const std::string& captureId)
+bool RemoveCorrection(const std::filesystem::path& directory, const std::string& captureId, std::size_t& removed)
 {
-    bool removed = true;
+    bool completed = true;
     for (const char* suffix : {".json", ".json.bak", ".json.partial"})
     {
         std::error_code error;
-        std::filesystem::remove(directory / (captureId + suffix), error);
-        removed = removed && !error;
+        if (std::filesystem::remove(directory / (captureId + suffix), error))
+            ++removed;
+        completed = completed && !error;
     }
-    return removed;
+    return completed;
 }
 
 bool Build(const DeliveredReply& reply, const QualityFeedback& judgment, LiveCapture& outCapture, std::string& outError)
@@ -508,24 +517,14 @@ bool LiveCaptureStore::Correct(const std::string& captureId, const LearningDecis
 bool LiveCaptureStore::Discard(const std::string& captureId, std::string& outError) const
 {
     outError.clear();
-    std::error_code error;
-    const auto capturePath = LiveDirectory() / (captureId + ".json");
-    if (!CaptureId(captureId) || !std::filesystem::exists(capturePath, error))
+    if (!CaptureId(captureId))
         return Refuse(outError, "That capture is no longer kept.");
-    std::string target;
-    try
-    {
-        target = json::parse(ReadText(capturePath)).at("judgment").at("targetId").get<std::string>();
-    }
-    catch (const std::exception&)
-    {
-    }
-    if (target.empty())
-        return Refuse(outError, "The capture could not be read, so it was not deleted.");
-    std::size_t removed = 0;
-    if (!WithdrawMatching(&target, &captureId, removed, outError))
+    const auto result = WithdrawMatching(nullptr, &captureId);
+    outError = result.error;
+    if (!result.succeeded)
         return false;
-    return removed == 1 || Refuse(outError, "The capture was listed as withdrawn but not found to delete.");
+    return result.pendingCleanupCompleted || result.capturesRemoved > 0 || result.correctionsRemoved > 0 ||
+           Refuse(outError, "That capture is no longer kept.");
 }
 
 bool LiveCaptureStore::Keep(const LiveCapture& capture, std::string& outError) const
@@ -537,6 +536,21 @@ bool LiveCaptureStore::Keep(const LiveCapture& capture, std::string& outError) c
     {
         outError = "The capture has no identity or content.";
         return false;
+    }
+    try
+    {
+        std::error_code inspection;
+        const bool listed = std::filesystem::exists(WithdrawnList(), inspection);
+        if (inspection)
+            return Refuse(outError, "The withdrawal list could not be inspected, so the capture was not kept.");
+        if (listed)
+            for (const auto& name : json::parse(ReadText(WithdrawnList())).get<std::vector<std::string>>())
+                if (name == PendingCleanup(capture.captureId))
+                    return Refuse(outError, "This capture has cleanup pending. Retry its withdrawal before keeping it again.");
+    }
+    catch (const std::exception&)
+    {
+        return Refuse(outError, "The withdrawal list could not be read, so the capture was not kept.");
     }
     std::error_code error;
     std::filesystem::create_directories(LiveDirectory(), error);
@@ -571,95 +585,148 @@ bool LiveCaptureStore::Keep(const LiveCapture& capture, std::string& outError) c
     return true;
 }
 
-bool LiveCaptureStore::Withdraw(const std::string& source, std::size_t& outRemoved, std::string& outError) const
+CaptureWithdrawalResult LiveCaptureStore::Withdraw(const std::string& source) const
 {
-    return WithdrawMatching(&source, nullptr, outRemoved, outError);
+    if (source.find('\0') != std::string::npos)
+    {
+        CaptureWithdrawalResult result;
+        result.succeeded = false;
+        result.error = "A withdrawal source cannot contain operational cleanup metadata.";
+        return result;
+    }
+    return WithdrawMatching(&source, nullptr);
 }
 
-bool LiveCaptureStore::WithdrawAll(std::size_t& outRemoved, std::string& outError) const
+CaptureWithdrawalResult LiveCaptureStore::WithdrawAll() const
 {
-    return WithdrawMatching(nullptr, nullptr, outRemoved, outError);
+    return WithdrawMatching(nullptr, nullptr);
 }
 
-bool LiveCaptureStore::WithdrawMatching(
-    const std::string* source, const std::string* onlyCapture, std::size_t& outRemoved, std::string& outError) const
+CaptureWithdrawalResult LiveCaptureStore::WithdrawMatching(const std::string* source, const std::string* onlyCapture) const
 {
-    outRemoved = 0;
-    outError.clear();
+    CaptureWithdrawalResult result;
+    const auto fail = [&result](const std::string& error)
+    {
+        result.succeeded = false;
+        result.error = error.substr(0, 384);
+        return result;
+    };
     std::error_code error;
-    if (!std::filesystem::exists(root, error))
-        return true;
+    const bool present = std::filesystem::exists(root, error);
+    if (error)
+        return fail("The kept capture store could not be inspected.");
+    if (!present)
+        return result;
     std::set<std::string> withdrawn;
     const auto list = WithdrawnList();
     try
     {
-        if (std::filesystem::exists(list, error))
-        {
-            std::ifstream stream(list, std::ios::binary);
-            const std::string bytes{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
-            for (const auto& item : json::parse(bytes).get<std::vector<std::string>>())
+        const bool listed = std::filesystem::exists(list, error);
+        if (error)
+            return fail("The withdrawal list could not be inspected; nothing was withdrawn.");
+        if (listed)
+            for (const auto& item : json::parse(ReadText(list)).get<std::vector<std::string>>())
                 withdrawn.insert(item);
-        }
+        std::set<std::string> matched;
+        // These exact IDs were durably withdrawn before a previous deletion attempt.
+        for (const auto& name : withdrawn)
+            if (name.starts_with(PendingCleanupPrefix))
+            {
+                const auto id = name.substr(PendingCleanupPrefix.size());
+                if (CaptureId(id) && (!onlyCapture || id == *onlyCapture))
+                    matched.insert(id);
+            }
+        const bool hadPendingCleanup = !matched.empty();
         if (source)
             withdrawn.insert(*source);
-        std::vector<std::filesystem::path> matched;
-        if (std::filesystem::is_directory(LiveDirectory(), error))
+        const bool live = std::filesystem::exists(LiveDirectory(), error);
+        if (error || (live && !std::filesystem::is_directory(LiveDirectory())))
+            return fail("The kept captures could not be inspected; nothing was withdrawn.");
+        if (live)
             for (const auto& entry : std::filesystem::directory_iterator(LiveDirectory()))
             {
                 if (entry.path().extension() != ".json")
                     continue;
-                if (onlyCapture && entry.path().stem().string() != *onlyCapture)
+                const auto id = entry.path().stem().string();
+                if (onlyCapture && id != *onlyCapture)
                     continue;
                 const auto record = json::parse(ReadText(entry.path()));
+                if (!CaptureId(id) || record.at("captureId") != id)
+                    return fail("A kept capture has an invalid identity; nothing was withdrawn.");
                 const auto sources = record.at("sources").get<std::vector<std::string>>();
-                // A forgotten speaker is matched against the speaker each capture recorded.
                 const bool named = source && (source->starts_with("participant:")
-                                                     ? "participant:" + record.at("source").value("participantId", "") == *source
-                                                     : std::find(sources.begin(), sources.end(), *source) != sources.end());
-                if (!onlyCapture && source && !named)
+                    ? "participant:" + record.at("source").value("participantId", "") == *source
+                    : std::find(sources.begin(), sources.end(), *source) != sources.end());
+                if (!onlyCapture && source && !named && !matched.contains(id))
                     continue;
-                // Each capture's own judged reply, which no other capture shares, and for a withdrawal
-                // of everything its conversation too. Neither its request, which a regenerated reply
-                // can share, nor its speaker, whose other conversations stay kept, is added.
-                withdrawn.insert(record.at("judgment").at("targetId").get<std::string>());
-                if (!source)
+                const auto target = record.at("judgment").at("targetId").get<std::string>();
+                if (target.find('\0') != std::string::npos)
+                    return fail("A capture has an invalid withdrawal source; cleanup was not started.");
+                withdrawn.insert(target);
+                withdrawn.insert(PendingCleanup(id));
+                if (!source && !onlyCapture)
                     for (const auto& name : sources)
                         if (name.starts_with("conversation:"))
                             withdrawn.insert(name);
-                matched.push_back(entry.path());
+                matched.insert(id);
             }
-        // The list is written first, so a crash between the two leaves a capture that is already refused.
+        const bool corrections = std::filesystem::exists(CorrectionsDirectory(), error);
+        if (error || (corrections && !std::filesystem::is_directory(CorrectionsDirectory())))
+            return fail("The kept corrections could not be inspected; nothing was withdrawn.");
+        if (corrections)
+            for (const auto& entry : std::filesystem::directory_iterator(CorrectionsDirectory()))
+            {
+                const auto name = entry.path().filename().string();
+                std::string id;
+                for (const std::string suffix : {".json", ".json.bak", ".json.partial"})
+                    if (name.ends_with(suffix))
+                        id = name.substr(0, name.size() - suffix.size());
+                if (!CaptureId(id) || (onlyCapture && id != *onlyCapture))
+                    continue;
+                const bool capturePresent = std::filesystem::exists(LiveDirectory() / (id + ".json"));
+                if (matched.contains(id) || (!source && (!capturePresent || onlyCapture)))
+                {
+                    matched.insert(id);
+                    withdrawn.insert(PendingCleanup(id));
+                }
+                else if (!capturePresent && source)
+                    return fail("A correction without its original capture has unconfirmed source scope. Explicit forget-all can remove it; targeted withdrawal left it intact.");
+            }
+        // Publish every withdrawal and retry identity before removing any private bytes.
         auto partial = list;
         partial += ".partial";
         {
             std::ofstream stream(partial, std::ios::binary | std::ios::trunc);
             stream << json(std::vector<std::string>(withdrawn.begin(), withdrawn.end())).dump(2) << '\n';
             if (!stream.flush())
-                throw std::runtime_error("the withdrawal list could not be written");
+                return fail("The withdrawal list could not be written; no captures or corrections were deleted.");
         }
-        if (!core::ReplaceFileAtomically(list, partial, outError))
-            return false;
-        for (const auto& path : matched)
+        std::string replacementError;
+        if (!core::ReplaceFileAtomically(list, partial, replacementError))
+            return fail("The withdrawal list could not be published; no captures or corrections were deleted. " + replacementError);
+        result.withdrawalRecorded = true;
+        for (const auto& id : matched)
         {
-            if (!std::filesystem::remove(path, error) || error)
-            {
-                outError = "A withdrawn capture could not be deleted; it is already listed as withdrawn.";
-                return false;
-            }
-            ++outRemoved;
-            // The owner's correction goes with it: it was written about that private exchange.
-            if (!RemoveCorrection(CorrectionsDirectory(), path.stem().string()))
-            {
-                outError = "A withdrawn capture's correction could not be deleted; the capture is listed as withdrawn.";
-                return false;
-            }
+            error.clear();
+            if (std::filesystem::remove(LiveDirectory() / (id + ".json"), error))
+                ++result.capturesRemoved;
+            if (error)
+                return fail("Withdrawn capture " + id + " could not be deleted; its withdrawal is recorded. Retry the same withdrawal.");
+            if (!RemoveCorrection(CorrectionsDirectory(), id, result.correctionsRemoved))
+                return fail("Withdrawn capture " + id + " has a correction that could not be deleted; its withdrawal is recorded. Retry the same withdrawal.");
         }
-        return true;
+        for (const auto& id : matched)
+            withdrawn.erase(PendingCleanup(id));
+        if (!matched.empty() && !WriteReplacing(list, json(std::vector<std::string>(withdrawn.begin(), withdrawn.end())).dump(2) + '\n', replacementError))
+            return fail("Capture and correction deletion completed, but cleanup finalization is pending. Retry the same withdrawal.");
+        result.pendingCleanupCompleted = hadPendingCleanup;
+        return result;
     }
     catch (const std::exception&)
     {
-        outError = "The kept captures or their withdrawal list could not be read, so nothing was withdrawn.";
-        return false;
+        return fail(result.withdrawalRecorded
+            ? "Withdrawal was recorded, but capture/correction cleanup did not complete. Retry the same withdrawal."
+            : "The kept captures or their withdrawal list could not be read, so nothing was withdrawn.");
     }
 }
 

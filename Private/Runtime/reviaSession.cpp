@@ -797,6 +797,7 @@ bool ReviaSession::Start()
         conversationRuntime.ResetResponseLatency(origin);
         turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     }
+    OpenTestCommands();
     if (!foregroundLease.TryAcquire(sessionIdentity.Stamp()))
     {
         SetState(RuntimeState::Blocked, "Another companion owns the foreground model and device runtime.");
@@ -3684,22 +3685,22 @@ std::vector<memory::ArchivedSession> ReviaSession::RecentConversations(const std
     return conversationArchive.RecentSessions(maxSessions);
 }
 
-std::size_t ReviaSession::ForgetConversations()
+ConversationForgetResult ReviaSession::ForgetConversations()
 {
-    const std::size_t removed = conversationArchive.Forget();
-    // The live context is cleared too. Forgetting the file while the current prompt still
-    // carries the same turns would be a forget in name only.
-    context.Clear();
-    // So are the exchanges kept from those chats for training review.
-    static_cast<void>(WithdrawLiveCaptures({}));
+    ConversationForgetResult result;
+    result.retryTarget = "/history forget";
+    result.archive = conversationArchive.Forget();
+    conversationRuntime.ResetParticipantContinuity();
+    lastExchange.reset();
+    result.contextCleared = true;
+    result.captures = WithdrawLiveCaptures({});
     conversationEpoch.fetch_add(1);
-    if (!conversationSessionId.empty())
+    if (result.archive.rowsDeleted && !conversationSessionId.empty())
     {
-        std::string error;
-        conversationArchive.BeginSession(conversationSessionId, error);
+        result.newSessionStarted = conversationArchive.BeginSession(conversationSessionId, result.sessionError);
     }
-    appLogger.Log("Conversation history cleared: " + std::to_string(removed) + " turns removed.");
-    return removed;
+    appLogger.Log(result.Message());
+    return result;
 }
 
 core::PreferenceResult ReviaSession::SetPreference(const std::string& name, const std::string& value)
@@ -4502,6 +4503,9 @@ SessionResult ReviaSession::SubmitTurn(const std::string& input, const agents::I
         denied.text = denied.reason = "The original conversation context changed before replay.";
         return denied;
     }
+    SessionResult testResult;
+    if (TryHandleTestInput(input, source, testResult, !files.empty() || !replayMedia.empty()))
+        return testResult;
     if (auto guest = webGuestRuntime.load())
         guest->Preempt();
     if (auto api = localApiRuntime.load())
@@ -4743,6 +4747,9 @@ SessionResult ReviaSession::RunTurnLocked(const agents::InputBatch& batch, std::
         denied.reason = "The queued speaker or audience context changed.";
         return denied;
     }
+    SessionResult testResult;
+    if (TryHandleTestInput(batch.text, batch.source, testResult, !files.empty() || !replayMedia.empty()))
+        return testResult;
     auto admittedBatch = batch;
     SessionResult result = GuardTurn(
         [this, &admittedBatch, &files, &replayMedia, &originAdmission]()
@@ -5407,6 +5414,7 @@ void ReviaSession::PollBackgroundEvents()
 
 void ReviaSession::RequestStop()
 {
+    testRunRuntime.Cancel();
     if (interactiveBrowser)
         interactiveBrowser->Stop();
     imageGenerator.Cancel();
@@ -5447,6 +5455,7 @@ void ReviaSession::RequestStop()
 
 void ReviaSession::Stop()
 {
+    StopTestCommands();
     {
         // Closes the live appliers first. Once this lock is held no applier is running, and
         // later ones leave workers and services alone, so nothing below races one of them.
@@ -6827,7 +6836,11 @@ speech::VoiceOperationResult ReviaSession::PreviewVoice(const std::string& prese
 
 speech::VoiceOperationResult ReviaSession::AssignVoice(const std::string& profileId, const std::string& presetId)
 {
-    std::lock_guard lock(voiceStudioMutex);
+    std::unique_lock lock(voiceStudioMutex, std::try_to_lock);
+    if (!lock.owns_lock())
+    {
+        return {false, "Voice Studio is busy. Wait for the current voice operation to finish, then try again.", {}, -1.0};
+    }
     speech::VoiceOperationResult result = speechService.AssignVoice(profileId, presetId);
     if (result.succeeded)
     {
@@ -8908,7 +8921,7 @@ goals::Goal ReviaSession::ExecuteOperate(
 
     // Freeze provider mode for the run; task cleanup discards captured content on every exit.
     // Extract exact user text before involving the model.
-    computerTasks.BeginTask(goal.id, computer::RequestOrigin::UserDirected, computer::ExtractTaskContent(request));
+    computerTasks.BeginTask(goal.id, computer::RequestOrigin::UserDirected, computer::ExtractTaskContent(request), request);
     struct TaskScope
     {
         computer::ComputerTaskCoordinator& tasks;
@@ -10501,12 +10514,12 @@ bool ReviaSession::TryHandleActionInput(const std::string& input, SessionResult&
         const std::string argument = input.size() > 9 ? Trim(input.substr(9)) : std::string();
         if (argument == "forget")
         {
-            const std::size_t removed = ForgetConversations();
-            result.text = removed == 0 ? "There was nothing archived to forget."
-                                       : "Forgot " + std::to_string(removed) +
-                                             " archived turns and cleared the current context. Nothing is kept "
-                                             "behind it.";
-            SetState(RuntimeState::Idle);
+            const auto forgotten = ForgetConversations();
+            result.succeeded = forgotten.Succeeded();
+            result.text = forgotten.Message();
+            if (!result.succeeded)
+                result.reason = result.text;
+            SetState(result.succeeded ? RuntimeState::Idle : RuntimeState::Blocked, result.reason);
             return true;
         }
         if (argument.empty())

@@ -113,6 +113,7 @@ bool RelationshipRegistry::Load(std::string& outError)
     std::lock_guard lock(mutex);
     if (!store.Load(snapshot, outError))
     {
+        persistenceBlocked = true;
         return false;
     }
     preferences.Replace(snapshot.preferences);
@@ -131,7 +132,17 @@ bool RelationshipRegistry::Load(std::string& outError)
 bool RelationshipRegistry::Save(std::string& outError) const
 {
     std::lock_guard lock(mutex);
+    if (!CanPersistLocked(outError))
+        return false;
     return store.Save(snapshot, outError);
+}
+
+bool RelationshipRegistry::CanPersistLocked(std::string& outError) const
+{
+    if (!persistenceBlocked)
+        return true;
+    outError = "Identity persistence is blocked after a failed load; live changes are not saved and the original file is preserved.";
+    return false;
 }
 
 Preference RelationshipRegistry::ReinforcePreference(const std::string& subject, const bool positive, const PreferenceSource source)
@@ -638,6 +649,8 @@ bool RelationshipRegistry::SaveConsentedSpeakerSample(
     const std::string& entityId, const speech::SpeakerFeatures& features, const std::function<bool()>& admission, std::string& outError)
 {
     std::lock_guard lock(mutex);
+    if (!CanPersistLocked(outError))
+        return false;
     const auto admitted = [&]
     {
         try

@@ -204,6 +204,50 @@ void TestSpeakerEvidenceNeedsCurrentConsentAndSeparation()
     recognition.Forget("sam");
     Check(!registry.RecognitionConsentRevision("sam") && registry.Find("sam"), "Forget failed to revoke or erased social history.");
 }
+
+void TestUnreadableIdentitySurvivesEveryPlainSocialSave()
+{
+    for (const std::string& original : {std::string("{ unreadable earned identity"),
+             std::string(R"({"schemaVersion":999,"earnedState":"preserve me"})")})
+    {
+        for (const std::string operation : {"automatic", "alias", "correction", "forget"})
+        {
+            revia::tests::ScopedTestDirectory directory;
+            const auto path = directory.root / "identity.json";
+            std::ofstream(path, std::ios::binary) << original;
+            revia::identity::RelationshipRegistry registry(path);
+            std::string error;
+            Check(!registry.Load(error), "The plain-save unreadable fixture unexpectedly loaded.");
+            (void)registry.Get("sam");
+            if (operation == "alias")
+                Check(registry.SetAudienceAlias("sam", "room", "pat", "Colleague", error), error);
+            if (operation == "correction")
+            {
+                revia::identity::RelationshipEvent event;
+                event.entityId = "sam";
+                event.evidenceId = "misattributed";
+                event.positiveInteraction = 0.5F;
+                registry.Apply(event);
+                Check(registry.CorrectEvidence("misattributed", "pat", error), error);
+            }
+            if (operation == "forget")
+            {
+                Check(registry.GrantRecognitionConsent("sam", error), error);
+                Check(registry.RevokeRecognitionConsent("sam", error), error);
+            }
+            const bool saved = registry.Save(error);
+            std::ifstream file(path, std::ios::binary);
+            const std::string actual{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+            const bool preserved = actual == original;
+            std::cout << "Unreadable " << operation << ": bytes=" << preserved << " blocked=" << !saved << '\n';
+            Check(preserved, operation + " overwrote identity after a failed load.");
+            Check(!saved, operation + " reported a durable save after a failed load.");
+            Check(error.find("blocked") != std::string::npos, operation + " did not explain blocked identity persistence.");
+            if (operation == "forget")
+                Check(!registry.RecognitionConsentRevision("sam"), "Blocked persistence undid live privacy revocation.");
+        }
+    }
+}
 } // namespace
 
 void RunSocialIdentityTests()
@@ -231,6 +275,7 @@ void RunSocialIdentityTests()
     run("TestStrictIdentityAndLegacyConsentAbsence", TestStrictIdentityAndLegacyConsentAbsence);
     run("TestQuietRequestsAreAuthoredBoundedAndExpire", TestQuietRequestsAreAuthoredBoundedAndExpire);
     run("TestSpeakerEvidenceNeedsCurrentConsentAndSeparation", TestSpeakerEvidenceNeedsCurrentConsentAndSeparation);
+    run("TestUnreadableIdentitySurvivesEveryPlainSocialSave", TestUnreadableIdentitySurvivesEveryPlainSocialSave);
     Check(failures == 0, "Social identity acceptance assertions failed: " + std::to_string(failures));
     std::cout << "Social identity tests passed.\n";
 }

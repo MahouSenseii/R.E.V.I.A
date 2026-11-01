@@ -209,10 +209,15 @@ bool ReviaSession::ForgetSpeaker(const std::string& entityId, std::string& outEr
     if (!relationships.RevokeRecognitionConsent(entityId, outError)) return false;
     speech::SpeakerRecognition(relationships).Forget(entityId);
     InvalidateAudience();
-    if (!relationships.Save(outError)) return false;
+    if (!relationships.Save(outError))
+    {
+        outError = "Recognition is disabled for this session, but the change was not saved: " + outError;
+        return false;
+    }
     // Kept training captures of conversations with them go too.
-    outError = WithdrawLiveCaptures("participant:" + entityId);
-    return true;
+    const auto withdrawal = WithdrawLiveCaptures("participant:" + entityId);
+    outError = withdrawal.succeeded ? std::string{} : "Recognition was forgotten, but " + withdrawal.error;
+    return withdrawal.succeeded;
 }
 
 bool ReviaSession::CorrectSpeakerEvidence(const std::string& evidenceId, const std::string& entityId, std::string& outError)

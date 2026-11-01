@@ -1057,6 +1057,7 @@ namespace
     // One server-sent event of a streamed chat completion.
     struct StreamEvent
     {
+        bool parsed = false;
         std::string content;
         std::vector<ToolCallDelta> toolCalls;
         // llama.cpp's separated thinking, when the server parses it out of the reply.
@@ -1078,6 +1079,9 @@ namespace
         try
         {
             const json chunk = json::parse(payload);
+            if (!chunk.is_object())
+                return event;
+            event.parsed = true;
             if (chunk.contains("timings") && chunk["timings"].is_object())
                 event.timings = chunk["timings"];
             if (chunk.contains("usage") && chunk["usage"].is_object())
@@ -1085,8 +1089,17 @@ namespace
             if (!chunk.contains("choices") || !chunk["choices"].is_array() || chunk["choices"].empty())
                 return event;
             const auto& choice = chunk["choices"][0];
-            if (choice.contains("finish_reason") && choice["finish_reason"].is_string())
-                event.finishReason = choice["finish_reason"].get<std::string>();
+            if (choice.contains("finish_reason") && !choice["finish_reason"].is_null())
+            {
+                if (!choice["finish_reason"].is_string())
+                    event.parsed = false;
+                else
+                {
+                    event.finishReason = choice["finish_reason"].get<std::string>();
+                    if (event.finishReason.empty())
+                        event.parsed = false;
+                }
+            }
             if (!choice.contains("delta") || !choice["delta"].is_object())
                 return event;
             const auto& delta = choice["delta"];
@@ -1126,12 +1139,88 @@ namespace
         return event;
     }
 
+    enum class NativeTerminalState
+    {
+        Incomplete,
+        Invalid,
+        Cancelled,
+        CompletedText,
+        CompletedToolStep,
+        OutputLimit
+    };
+
+    struct NativeTerminalEvidence
+    {
+        std::string finishReason;
+        bool completeStream = false;
+        bool completeMessageEnvelope = false;
+        bool invalid = false;
+        bool requestedTools = false;
+
+        void Observe(const StreamEvent& event)
+        {
+            const bool payload = !event.content.empty() || !event.reasoning.empty() || !event.toolCalls.empty();
+            if (!event.parsed || completeStream || (!finishReason.empty() && payload))
+                invalid = true;
+            if (!event.finishReason.empty())
+            {
+                if (!finishReason.empty() && finishReason != event.finishReason)
+                    invalid = true;
+                finishReason = event.finishReason;
+            }
+            requestedTools = requestedTools || !event.toolCalls.empty();
+        }
+    };
+
+    NativeTerminalState ClassifyNativeTermination(const NativeTerminalEvidence& evidence, const bool cancelled,
+        const bool callsAllowed, const bool ignoredCallTextFallback)
+    {
+        if (cancelled)
+            return NativeTerminalState::Cancelled;
+        if (evidence.invalid)
+            return NativeTerminalState::Invalid;
+        if (evidence.requestedTools && !callsAllowed && !ignoredCallTextFallback)
+            return NativeTerminalState::Invalid;
+        if (evidence.finishReason == "length")
+            return NativeTerminalState::OutputLimit;
+        // Locally supported forms: stop/tool_calls alone, or a DONE-only legacy
+        // envelope. Bounded video separately retains its stricter stop plus DONE rule.
+        if (evidence.finishReason == "tool_calls")
+        {
+            if (!evidence.requestedTools)
+                return NativeTerminalState::Invalid;
+        }
+        else if (evidence.finishReason != "stop")
+        {
+            if (!evidence.finishReason.empty())
+                return NativeTerminalState::Invalid;
+            if (!evidence.completeStream && !evidence.completeMessageEnvelope)
+                return NativeTerminalState::Incomplete;
+        }
+        if (evidence.requestedTools)
+        {
+            if (callsAllowed)
+                return NativeTerminalState::CompletedToolStep;
+            // The foreground last-step contract discards unsolicited calls and keeps
+            // usable text. Background completions have no such tool/text fallback.
+            if (!ignoredCallTextFallback)
+                return NativeTerminalState::Invalid;
+        }
+        return NativeTerminalState::CompletedText;
+    }
+
+    bool InterruptedNativeCompletion(const NativeTerminalState state)
+    {
+        return state == NativeTerminalState::Incomplete || state == NativeTerminalState::Invalid;
+    }
+
     // A completed background request, in the shape the non-streamed API returns.
     struct CompletionResult
     {
         bool sent = false;
         httplib::Error error = httplib::Error::Success;
         int status = 0;
+        NativeTerminalState terminal = NativeTerminalState::Incomplete;
         // The equivalent non-streamed JSON body on success, or the error body.
         std::string body;
     };
@@ -1167,37 +1256,87 @@ namespace
         output.sent = true;
         output.status = result->status;
         const std::size_t first = raw.find_first_not_of(" \t\r\n");
+        NativeTerminalEvidence terminal;
         if (output.status != 200 || first == std::string::npos || raw.compare(first, 5, "data:") != 0)
         {
+            // A proxy may ignore stream:true. A complete application/json message is
+            // its own local completion form; reconstructed SSE never gains this flag.
+            try
+            {
+                const json response = json::parse(raw);
+                const auto& choice = response.at("choices").at(0);
+                if (choice.contains("finish_reason") && !choice["finish_reason"].is_null())
+                {
+                    if (!choice["finish_reason"].is_string())
+                        terminal.invalid = true;
+                    else
+                    {
+                        terminal.finishReason = choice["finish_reason"].get<std::string>();
+                        if (terminal.finishReason.empty())
+                            terminal.invalid = true;
+                    }
+                }
+                if (choice.contains("message") && choice["message"].is_object())
+                {
+                    const auto& message = choice["message"];
+                    std::string contentType = result->get_header_value("Content-Type");
+                    std::transform(contentType.begin(), contentType.end(), contentType.begin(),
+                        [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+                    terminal.completeMessageEnvelope =
+                        TrimWhitespace(contentType.substr(0, contentType.find(';'))) == "application/json" &&
+                        !choice.contains("delta") && message.contains("content") && message["content"].is_string();
+                    if (message.contains("tool_calls") && !message["tool_calls"].is_null())
+                    {
+                        if (!message["tool_calls"].is_array())
+                            terminal.invalid = true;
+                        else
+                            terminal.requestedTools = !message["tool_calls"].empty();
+                    }
+                }
+            }
+            catch (...)
+            {
+                terminal.invalid = true;
+            }
+            output.terminal = ClassifyNativeTermination(terminal, false, false, false);
             output.body = std::move(raw);
             return output;
         }
 
         std::string content;
-        std::string finishReason;
         json usage;
         std::size_t begin = 0;
         while (begin < raw.size())
         {
             std::size_t end = raw.find('\n', begin);
             if (end == std::string::npos)
-                end = raw.size();
+            {
+                terminal.invalid = terminal.invalid || raw.find_first_not_of(" \t\r\n", begin) != std::string::npos;
+                break;
+            }
             std::string line = raw.substr(begin, end - begin);
             begin = end + 1;
             if (!line.empty() && line.back() == '\r')
                 line.pop_back();
-            if (line.rfind("data:", 0) == 0 && line.rfind("data: ", 0) != 0)
+            if (line.rfind("data:", 0) != 0)
+                continue;
+            if (line.rfind("data: ", 0) != 0)
                 line.insert(5, " ");
+            if (line == "data: [DONE]")
+            {
+                terminal.completeStream = true;
+                continue;
+            }
             StreamEvent event = ParseStreamEvent(line);
+            terminal.Observe(event);
             content += event.content;
-            if (!event.finishReason.empty())
-                finishReason = event.finishReason;
             if (event.usage.is_object())
                 usage = std::move(event.usage);
         }
+        output.terminal = ClassifyNativeTermination(terminal, false, false, false);
         json choice = {{"message", {{"role", "assistant"}, {"content", content}}}};
-        if (!finishReason.empty())
-            choice["finish_reason"] = finishReason;
+        if (!terminal.finishReason.empty())
+            choice["finish_reason"] = terminal.finishReason;
         json assembled = {{"choices", json::array({std::move(choice)})}};
         if (usage.is_object())
             assembled["usage"] = std::move(usage);
@@ -1671,7 +1810,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::vector<revia::llm::ToolCall> requestedCalls;
     std::vector<std::size_t> requestedIndexes;
     std::string buffer;
-    std::string finishReason;
+    NativeTerminalEvidence terminal;
     json backendTimings;
     std::string nativeReasoning;
     std::string inlineReasoningSent;
@@ -1679,7 +1818,6 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     std::optional<std::chrono::steady_clock::time_point> firstTokenAt;
     int responseStatus = 0;
     std::string errorBody;
-    bool completeStream = false;
     bool frameReplyLimitExceeded = false;
     constexpr std::size_t MaximumErrorBodyBytes = 4096;
     // A bounded lookahead lets the final byte cut recognize an incomplete code point
@@ -1749,19 +1887,20 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
 
             if (line.empty())
                 continue;
-            if (line.rfind("data: ", 0) != 0)
+            if (line.rfind("data:", 0) != 0)
                 continue;
+            if (line.rfind("data: ", 0) != 0)
+                line.insert(5, " ");
 
             const std::string jsonStr = line.substr(6);
             if (jsonStr == "[DONE]")
             {
-                completeStream = true;
+                terminal.completeStream = true;
                 continue;
             }
 
             StreamEvent event = ParseStreamEvent(line);
-            if (!event.finishReason.empty())
-                finishReason = event.finishReason;
+            terminal.Observe(event);
             if (event.timings.is_object())
                 backendTimings = std::move(event.timings);
             if (!event.reasoning.empty())
@@ -1892,13 +2031,12 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             req.body = serializeRequest(); // Valid UTF-8 was established by the first serialization.
             buffer.clear();
             errorBody.clear();
-            finishReason.clear();
+            terminal = {};
             backendTimings = json();
             nativeReasoning.clear();
             requestedCalls.clear();
             requestedIndexes.clear();
             responseStatus = 0;
-            completeStream = false;
             result = client.send(req);
         }
     }
@@ -1959,6 +2097,35 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         return output;
     }
 
+    terminal.invalid = terminal.invalid || buffer.find_first_not_of(" \t\r\n") != std::string::npos;
+    const bool callsAllowed = offerTools && tools->allowCalls;
+    const NativeTerminalState terminalState = ClassifyNativeTermination(terminal, stopToken.stop_requested(),
+        callsAllowed, offerTools && !tools->allowCalls && !cleanedResponse.empty());
+    const auto cancelledReply = [&]()
+    {
+        output.response = "I stopped that response.";
+        output.reason = "Conversation generation was cancelled before delivery.";
+        output.bShouldRemember = false;
+        return output;
+    };
+    if (terminalState == NativeTerminalState::Cancelled)
+        return cancelledReply();
+    if (InterruptedNativeCompletion(terminalState))
+    {
+        output.response = "My local response was interrupted before it finished.";
+        output.reason = "Conversation generation was interrupted: the backend did not provide a recognized, consistent terminal state.";
+        output.bShouldSpeak = true;
+        output.bShouldRemember = false;
+        output.bWasStreamed = onDelta && printedLength > 0;
+        return output;
+    }
+    if (terminalState == NativeTerminalState::OutputLimit && callsAllowed && terminal.requestedTools)
+    {
+        output.response = "The local model reached its output limit before finishing its tool step.";
+        output.reason = "backend_output_token_limit";
+        return output;
+    }
+
     if (boundedFrameReply)
     {
         if (stopToken.stop_requested())
@@ -1967,10 +2134,11 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
             output.reason = "Sampled-video review was cancelled before delivery.";
             return output;
         }
-        if (finishReason != "stop" || !completeStream)
+        if (terminal.finishReason != "stop" || !terminal.completeStream)
         {
             output.response = "The local model did not finish a complete bounded frame review. No partial review was delivered.";
-            output.reason = "Sampled-video response stream was incomplete or truncated.";
+            output.reason = terminalState == NativeTerminalState::OutputLimit ? "backend_output_token_limit"
+                                                                            : "Sampled-video response stream was incomplete or truncated.";
             return output;
         }
         const auto rendered = revia::llm::ParseVideoFrameReply(cleanedResponse, turnImages, frameReplyOptions);
@@ -1982,17 +2150,18 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         cleanedResponse = rendered.text;
     }
 
-    if (jsonReply && (finishReason == "length" || !revia::agents::MatchesReplyContract(cleanedResponse, replyContract)))
+    if (jsonReply && (terminalState == NativeTerminalState::OutputLimit || !revia::agents::MatchesReplyContract(cleanedResponse, replyContract)))
     {
         output.response = "I couldn't finish a valid JSON reply within the response limit. Ask for a smaller result.";
-        output.reason = "Structured reply was incomplete or violated its explicit turn-local contract.";
-        if (!replyContract.reason.empty())
+        output.reason = terminalState == NativeTerminalState::OutputLimit ? "backend_output_token_limit"
+                                                                        : "Structured reply was incomplete or violated its explicit turn-local contract.";
+        if (terminalState != NativeTerminalState::OutputLimit && !replyContract.reason.empty())
             output.reason += " " + replyContract.reason;
         output.bShouldSpeak = true;
         output.bShouldRemember = false;
         return output;
     }
-    if (offerTools && tools->allowCalls && !requestedCalls.empty())
+    if (terminalState == NativeTerminalState::CompletedToolStep && !requestedCalls.empty())
     {
         // A reply that asked for tools is a step, not an answer. Its text, if any, has
         // been streamed like any other and still passes the caller's gate; the calls go
@@ -2002,6 +2171,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                 requestedCalls[index].id = "call_" + std::to_string(index);
         if (onDelta && cleanedResponse.size() > printedLength)
             onDelta(cleanedResponse.substr(printedLength));
+        if (stopToken.stop_requested())
+            return cancelledReply();
         output.bSuccess = true;
         output.response = cleanedResponse;
         output.toolCalls = std::move(requestedCalls);
@@ -2010,7 +2181,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         output.bWasStreamed = static_cast<bool>(onDelta);
         return output;
     }
-    if (finishReason == "length")
+    if (terminalState == NativeTerminalState::OutputLimit)
     {
         output.reason = "backend_output_token_limit";
         // Never commit or speak the dangling clause created by a token ceiling. The
@@ -2050,6 +2221,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         printedLength = cleanedResponse.size();
     }
 
+    if (stopToken.stop_requested())
+        return cancelledReply();
     output.bSuccess = true;
     output.response = cleanedResponse;
     output.bShouldSpeak = true;
@@ -2065,9 +2238,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         auto exchange = std::make_shared<revia::llm::ProviderExchange>();
         exchange->requestBody = req.body;
         exchange->responseText = fullResponse;
-        exchange->finishReason = finishReason;
-        exchange->completeStream = completeStream;
-        exchange->requestedTools = !requestedCalls.empty();
+        exchange->finishReason = terminal.finishReason;
+        exchange->completeStream = terminal.completeStream;
+        exchange->requestedTools = terminal.requestedTools;
         exchange->model = modelName;
         {
             std::lock_guard templateLock(servedTemplateMutex);
@@ -2545,6 +2718,18 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
         return output;
     }
 
+    if (stopToken.stop_requested() || preemptionToken.stop_requested())
+    {
+        output.bPreempted = preemptionToken.stop_requested() && !stopToken.stop_requested();
+        output.reason = operation + " was cancelled or preempted before delivery.";
+        return output;
+    }
+    if (InterruptedNativeCompletion(result.terminal))
+    {
+        output.reason = operation + " was interrupted before a recognized native completion.";
+        return output;
+    }
+
     try
     {
         const json response = json::parse(result.body);
@@ -2691,6 +2876,11 @@ responseOutput llamaCppService::AnalyzeImage(const std::filesystem::path& imageP
         output.response = "My local vision backend returned an error.";
         output.reason = "llama.cpp vision request returned HTTP " +
             std::to_string(result.status) + ": " + result.body;
+        return output;
+    }
+    if (InterruptedNativeCompletion(result.terminal))
+    {
+        output.reason = "Vision analysis was interrupted before a recognized native completion.";
         return output;
     }
     try
@@ -2883,6 +3073,15 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
         {
             verdict.reason = "Memory evaluation returned HTTP status " +
                 std::to_string(result.status) + ".";
+            return false;
+        }
+
+        if (stopToken.stop_requested() || preemptionToken.stop_requested() || InterruptedNativeCompletion(result.terminal))
+        {
+            verdict.bPreempted = preemptionToken.stop_requested();
+            verdict.reason = stopToken.stop_requested() ? "Memory evaluation was cancelled."
+                : preemptionToken.stop_requested() ? "Memory evaluation yielded to an interactive conversation turn."
+                                                  : "Memory evaluation was interrupted before a recognized native completion.";
             return false;
         }
 

@@ -47,6 +47,17 @@ struct LiveCapture
 
 inline constexpr const char* LiveCaptureVersion = "live-capture-v1";
 
+struct CaptureWithdrawalResult
+{
+    bool succeeded = true;
+    bool withdrawalRecorded = false;
+    // A previously recorded cleanup was finalized, even if no files remained to remove.
+    bool pendingCleanupCompleted = false;
+    std::size_t capturesRemoved = 0;
+    std::size_t correctionsRemoved = 0;
+    std::string error;
+};
+
 // One kept capture as the owner reviews it, with the decision and correction saved so far.
 struct LiveCaptureSummary
 {
@@ -89,9 +100,9 @@ public:
     // and each deleted capture's judged reply (displayed-reply:...) as withdrawn. A
     // participant:<id> source matches the speaker a capture recorded. Nothing happens before
     // the first capture is kept.
-    bool Withdraw(const std::string& source, std::size_t& outRemoved, std::string& outError) const;
+    [[nodiscard]] CaptureWithdrawalResult Withdraw(const std::string& source) const;
     // The same for every kept capture, recording each one's conversation and judged reply.
-    bool WithdrawAll(std::size_t& outRemoved, std::string& outError) const;
+    [[nodiscard]] CaptureWithdrawalResult WithdrawAll() const;
 
     // Every kept capture with the owner's latest decision, newest first. A file that cannot be
     // read is left out, and outError says how many were.
@@ -119,7 +130,7 @@ public:
 
 private:
     // Deletes the captures `source` names, only `onlyCapture` when it is set, or all of them.
-    bool WithdrawMatching(const std::string* source, const std::string* onlyCapture, std::size_t& outRemoved, std::string& outError) const;
+    CaptureWithdrawalResult WithdrawMatching(const std::string* source, const std::string* onlyCapture) const;
     std::filesystem::path root;
 };
 

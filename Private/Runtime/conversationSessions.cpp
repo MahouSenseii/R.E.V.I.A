@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <set>
+#include <sstream>
 
 namespace revia::runtime
 {
@@ -10,6 +11,45 @@ namespace revia::runtime
 namespace
 {
 constexpr const char* BusyRefusal = "Revia is still working on something. Try again once she is idle.";
+}
+
+bool ConversationForgetResult::Succeeded() const
+{
+    return archive.Succeeded() && captures.succeeded && newSessionStarted && sessionError.empty();
+}
+
+ConversationForgetOutcome ConversationForgetResult::Outcome() const
+{
+    if (Succeeded())
+        return archive.turnsRemoved == 0 && captures.capturesRemoved == 0 && captures.correctionsRemoved == 0
+            ? ConversationForgetOutcome::Empty : ConversationForgetOutcome::Completed;
+    return archive.rowsDeleted || contextCleared || captures.withdrawalRecorded || captures.capturesRemoved > 0 || captures.correctionsRemoved > 0
+        ? ConversationForgetOutcome::Partial : ConversationForgetOutcome::Failed;
+}
+
+std::string ConversationForgetResult::Message() const
+{
+    std::ostringstream text;
+    const auto outcome = Outcome();
+    text << (outcome == ConversationForgetOutcome::Partial ? "Forgetting partially completed. " :
+        outcome == ConversationForgetOutcome::Failed ? "Forgetting failed. " : "Forgetting completed. ");
+    if (archive.rowsDeleted)
+        text << "Removed " << archive.turnsRemoved << " archived turn(s). ";
+    else
+        text << "Archive deletion was not confirmed; history may remain. ";
+    if (outcome == ConversationForgetOutcome::Empty)
+        text << "No archived turns or kept capture/correction files needed removal. ";
+    if (contextCleared)
+        text << "Cleared the current context. ";
+    text << "Removed " << captures.capturesRemoved << " kept capture(s) and " << captures.correctionsRemoved << " correction file(s).";
+    for (const auto* error : {&archive.error, &captures.error, &sessionError})
+        if (!error->empty())
+            text << ' ' << error->substr(0, 448);
+    if (!newSessionStarted)
+        text << " A fresh archive session could not be started; new turns will not be saved.";
+    if (!Succeeded())
+        text << " Retry " << retryTarget << " after resolving the reported storage or admission problem.";
+    return text.str();
 }
 
 bool ReviaSession::ConversationBrowsingAdmitted(std::string& outReason) const
@@ -210,50 +250,38 @@ bool ReviaSession::RenameConversation(const std::string& sessionId, const std::s
     return conversationArchive.RenameSession(sessionId, title, outError);
 }
 
-bool ReviaSession::DeleteConversation(const std::string& sessionId, std::string& outError)
+ConversationForgetResult ReviaSession::DeleteConversation(const std::string& sessionId)
 {
-    if (!ConversationBrowsingAdmitted(outError))
-        return false;
-    if (!conversationArchive.HasSession(sessionId))
+    ConversationForgetResult result;
+    result.retryTarget = "deleting conversation " + sessionId.substr(0, 128);
+    if (!ConversationBrowsingAdmitted(result.sessionError))
+        return result;
+    if (sessionId.empty())
     {
-        outError = "That conversation is no longer in the archive.";
-        return false;
+        result.sessionError = "A conversation ID is required.";
+        return result;
     }
-    if (sessionId != CurrentConversationId())
+    const bool current = sessionId == CurrentConversationId();
+    std::unique_lock operationLock(operationMutex, std::defer_lock);
+    if (current && (!operationLock.try_lock() || busy.load()))
     {
-        conversationArchive.ForgetSession(sessionId);
-        if (conversationArchive.HasSession(sessionId))
-        {
-            outError = "The conversation archive could not delete that chat.";
-            return false;
-        }
-        outError = WithdrawLiveCaptures("conversation:" + sessionId);
-        return true;
+        result.sessionError = BusyRefusal;
+        return result;
     }
-    // Deleting the chat in progress also clears what the prompt still carries from it;
-    // a delete that leaves the same turns in the working context is not one.
-    std::unique_lock operationLock(operationMutex, std::try_to_lock);
-    if (!operationLock.owns_lock() || busy.load())
-    {
-        outError = BusyRefusal;
-        return false;
-    }
-    conversationArchive.ForgetSession(sessionId);
+    // An absent archive row can be a retry whose capture/correction work remains.
+    result.archive = conversationArchive.ForgetSession(sessionId);
+    result.captures = WithdrawLiveCaptures("conversation:" + sessionId);
+    if (!current)
+        return result;
     conversationRuntime.ResetParticipantContinuity();
     lastExchange.reset();
-    const std::string withdrawal = WithdrawLiveCaptures("conversation:" + sessionId);
-    // The id is reused for the fresh chat, so the epoch is what tells a delegated task apart.
+    result.contextCleared = true;
     conversationEpoch.fetch_add(1);
-    std::string error;
-    if (!conversationArchive.BeginSession(sessionId, error))
+    if (result.archive.rowsDeleted)
     {
-        std::lock_guard idLock(conversationIdMutex);
-        conversationSessionId.clear();
-        outError = "The chat was deleted, but new turns will not be saved: " + error;
+        result.newSessionStarted = conversationArchive.BeginSession(sessionId, result.sessionError);
     }
-    if (!withdrawal.empty())
-        outError = outError.empty() ? withdrawal : outError + " " + withdrawal;
-    return true;
+    return result;
 }
 
 void ReviaSession::RememberExchange(const agents::InputBatch& batch, const SessionResult& result, const bool privateContext)

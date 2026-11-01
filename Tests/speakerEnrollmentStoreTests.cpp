@@ -245,15 +245,59 @@ void TestRevokedConsentRegrantsOnlyAfterDurableSave()
     Check(reloaded.Load(error), "Confirmed re-enrollment did not reload.");
     CheckTemplate(reloaded, "sam", 3, Sample(2));
 }
+
+void TestUnreadableLoadBlocksEnrollmentWithoutGrantingConsent()
+{
+    for (const std::string& original : {std::string("{ unreadable earned identity"),
+             std::string(R"({"schemaVersion":999,"earnedState":"preserve me"})")})
+    {
+        tests::ScopedTestDirectory directory;
+        const auto path = directory.root / "identity.json";
+        std::ofstream(path, std::ios::binary) << original;
+        identity::RelationshipRegistry registry(path);
+        std::string error;
+        Check(!registry.Load(error), "The unreadable-load enrollment fixture unexpectedly loaded.");
+        (void)registry.Get("sam");
+        const bool saved = SaveSample(registry, "sam", Sample(), [] { return true; }, error);
+        const bool preserved = Bytes(path) == original;
+        const bool noConsent = !registry.RecognitionConsentRevision("sam") && registry.SpeakerTemplates().empty();
+        std::cout << "Unreadable enrollment: bytes=" << preserved << " blocked=" << !saved
+                  << " no-live-consent=" << noConsent << " error=" << error << '\n';
+        Check(preserved, "Enrollment overwrote identity after a failed load.");
+        Check(!saved, "Enrollment reported durable success after a failed load.");
+        Check(error.find("blocked") != std::string::npos, "Enrollment did not explain blocked identity persistence.");
+        Check(noConsent, "Blocked enrollment adopted live biometric consent or a sample.");
+    }
+}
+
+void TestMissingFirstRunAndNormallyLoadedIdentityRemainWritable()
+{
+    tests::ScopedTestDirectory directory;
+    const auto path = directory.root / "identity.json";
+    identity::RelationshipRegistry firstRun(path);
+    std::string error;
+    Check(firstRun.Load(error), "A missing first-run identity was refused.");
+    (void)firstRun.Get("sam");
+    Check(SaveSample(firstRun, "sam", Sample(), [] { return true; }, error), "First-run enrollment was blocked: " + error);
+    identity::RelationshipRegistry loaded(path);
+    Check(loaded.Load(error), "The first-run identity did not load.");
+    Check(SaveSample(loaded, "sam", Sample(1), [] { return true; }, error), "Normally loaded enrollment was blocked: " + error);
+    Check(loaded.Save(error), "Normally loaded plain identity save was blocked: " + error);
+    identity::RelationshipRegistry restarted(path);
+    Check(restarted.Load(error), "The normally loaded enrollment did not persist.");
+    CheckTemplate(restarted, "sam", 1, Sample(1));
+}
 }
 
 void RunSpeakerEnrollmentStoreTests()
 {
+    TestUnreadableLoadBlocksEnrollmentWithoutGrantingConsent();
+    TestMissingFirstRunAndNormallyLoadedIdentityRemainWritable();
     TestFailedSavePreservesOldSampleAndRetry();
     TestDurableGrantPreservesOtherIdentityAndBoundedReplacement();
     TestDeniedThrowingAndStaleAdmissionPreserveIdentity();
     TestInvalidEntityAndFeaturesCannotGrantConsent();
     TestConsentCapacityAndRevisionExhaustionRemainBounded();
     TestRevokedConsentRegrantsOnlyAfterDurableSave();
-    std::cout << "Speaker enrollment store tests passed (6 actual private-store transactions; no device or recognition accuracy claim).\n";
+    std::cout << "Speaker enrollment store tests passed (8 private-store scenarios; no device or recognition accuracy claim).\n";
 }

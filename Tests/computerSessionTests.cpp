@@ -12,6 +12,11 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
+#include <future>
+#include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace
 {
@@ -686,7 +691,186 @@ void TestATaskWithNoContentStillRequiresIndependentAcceptance()
     Check(!fixture.session.IsStarted(), "The operator fixture did not restore the session's prior stopped state.");
 }
 
+#ifdef _WIN32
+// One owned UIA destination. The message thread services native accessibility calls;
+// no keyboard or pointer input is synthesized by this fixture.
+class AcceptanceWindow
+{
+public:
+    AcceptanceWindow()
+    {
+        previous = GetForegroundWindow();
+        std::promise<HWND> ready;
+        auto result = ready.get_future();
+        worker = std::thread([this, &ready]
+        {
+            WNDCLASSW windowClass{};
+            windowClass.lpfnWndProc = [](HWND window, UINT message, WPARAM wparam, LPARAM lparam) -> LRESULT
+            {
+                if (message == WM_DESTROY)
+                {
+                    PostQuitMessage(0);
+                    return 0;
+                }
+                return DefWindowProcW(window, message, wparam, lparam);
+            };
+            windowClass.hInstance = GetModuleHandleW(nullptr);
+            windowClass.lpszClassName = L"ReviaAcceptanceFixture";
+            static_cast<void>(RegisterClassW(&windowClass));
+            const HWND window = CreateWindowExW(WS_EX_NOACTIVATE, windowClass.lpszClassName,
+                L"Revia ACT-1 owned Compose", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                40, 40, 360, 150, nullptr, nullptr, windowClass.hInstance, nullptr);
+            if (window)
+            {
+                static_cast<void>(CreateWindowExW(0, L"STATIC", L"Compose", WS_CHILD | WS_VISIBLE,
+                    12, 12, 100, 20, window, nullptr, windowClass.hInstance, nullptr));
+                static_cast<void>(CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                    12, 36, 300, 24, window, reinterpret_cast<HMENU>(6001), windowClass.hInstance, nullptr));
+            }
+            ready.set_value(window);
+            if (!window)
+            {
+                shutdown.set_value();
+                return;
+            }
+            MSG message{};
+            while (GetMessageW(&message, nullptr, 0, 0) > 0)
+            {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            shutdown.set_value();
+        });
+        if (result.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+        {
+            std::cerr << "ACT-1 owned window startup exceeded five seconds." << std::endl;
+            std::terminate();
+        }
+        window = result.get();
+    }
+
+    ~AcceptanceWindow()
+    {
+        const bool restore = GetForegroundWindow() == window;
+        if (window) PostMessageW(window, WM_CLOSE, 0, 0);
+        if (worker.joinable())
+        {
+            if (exited.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+            {
+                std::cerr << "ACT-1 owned window teardown exceeded five seconds." << std::endl;
+                std::terminate();
+            }
+            worker.join();
+        }
+        if (restore && previous && IsWindow(previous))
+            static_cast<void>(SetForegroundWindow(previous));
+    }
+
+    [[nodiscard]] HWND Handle() const { return window; }
+
+    void Activate() const
+    {
+        Check(window != nullptr, "The owned ACT-1 Compose window could not be created.");
+        DWORD process = 0;
+        GetWindowThreadProcessId(window, &process);
+        Check(process == GetCurrentProcessId(), "ACT-1 fixture escaped the test process.");
+        SetLastError(ERROR_SUCCESS);
+        const bool requested = SetForegroundWindow(window) != FALSE;
+        const DWORD activationError = GetLastError();
+        DWORD_PTR acknowledged = 0;
+        // Cross-thread activation is queued. A no-op message acknowledges only this
+        // owned window's queue before the actual foreground identity is checked.
+        const bool synchronized = SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            2000, &acknowledged) != 0;
+        const HWND foreground = GetForegroundWindow();
+        DWORD foregroundProcess = 0;
+        GetWindowThreadProcessId(foreground, &foregroundProcess);
+        std::cout << "ACT-1 owned activation requested=" << requested << " error=" << activationError
+            << " acknowledged=" << synchronized << " foreground-owned=" << (foreground == window)
+            << " owned-pid=" << process << " foreground-pid=" << foregroundProcess << std::endl;
+        Check(synchronized && foreground == window && foregroundProcess == process,
+            "The owned ACT-1 fixture could not supply a current foreground observation.");
+    }
+
+private:
+    HWND window = nullptr;
+    HWND previous = nullptr;
+    std::promise<void> shutdown;
+    std::future<void> exited = shutdown.get_future();
+    std::thread worker;
+};
+
+void TestWholeRequestAcceptanceThroughInstalledSessionVerifier()
+{
+    AcceptanceWindow window;
+    for (const std::string& mode : {std::string("legacy"), std::string("assisted"), std::string("shadow")})
+    {
+        for (const bool extraWork : {false, true})
+        {
+            SessionFixture fixture;
+            {
+                std::ofstream config(fixture.directory.root / "capabilities.json");
+                config << nlohmann::json{{"mode", "approved_scope"},
+                    {"approvedRoots", {PathToUtf8(fixture.approved)}},
+                    {"approvedApplications", {"reviatests.exe"}},
+                    {"approvedControls", {{"reviatests.exe", {"6001"}}}},
+                    {"autoApproveRiskThrough", "reversible_write"},
+                    {"createMissingApprovedRoots", false}}.dump();
+            }
+            ReviaSessionTestAccess::PrepareOperator(fixture.session, fixture.directory.root);
+            fixture.UseMode(mode);
+            fixture.Script([](int) { return std::string(); }, [](int index)
+            {
+                if (index != 0) return nlohmann::json{{"decision", "complete"}, {"reason", "all work done"}}.dump();
+                return nlohmann::json{{"decision", "act"}, {"description", "Place exact content in the owned field"},
+                    {"step", {{"action", {{"action", "set_control_text"}, {"application", "reviatests.exe"},
+                        {"window_title", "Revia ACT-1 owned Compose"}, {"control", "6001"}, {"value", PreparedContentToken}}},
+                        {"check", {{"action", "inspect_window"}, {"application", "reviatests.exe"},
+                            {"window_title", "Revia ACT-1 owned Compose"}}}, {"expected", "6001 holds the prepared content"}}}}.dump();
+            });
+            window.Activate();
+            Goal goal;
+            goal.id = NewGoalId();
+            goal.title = "put \"hello and then tea\" into Compose";
+            if (extraWork) goal.title += " and open the project folder";
+            goal.scope = fixture.session.Capabilities();
+            goal.budget.maxActions = 3;
+            ReviaSessionTestAccess::BeginComputerTask(fixture.session, goal.id, ExtractTaskContent(goal.title), goal.title);
+            const auto finished = ReviaSessionTestAccess::OperateGoal(fixture.session, goal);
+            const auto* placed = TextEntry(finished);
+            Check(placed && placed->status == StepStatus::Succeeded && !placed->attempts.empty() &&
+                    placed->attempts.back().outcome == VerificationOutcome::Verified,
+                "ACT-1 session did not execute and verify exact native placement in mode " + mode + ": " + finished.stopDetail);
+            const auto readback = revia::actions::windows::ObserveDraft(placed->action);
+            Check(readback.valid && readback.control.window == window.Handle() && readback.control.processId == GetCurrentProcessId(),
+                "ACT-1 placement did not bind the exact owned HWND and process.");
+            Check(readback.value == "hello and then tea",
+                "ACT-1 session exact UIA readback lost the quoted conjunction payload.");
+            Check(extraWork ? finished.status == GoalStatus::Blocked : finished.status == GoalStatus::Succeeded,
+                "ACT-1 installed session acceptance misclassified the whole request in mode " + mode + ": " + finished.stopDetail);
+            if (extraWork)
+                Check(finished.stopReason == StopReason::VerificationFailed && finished.stopDetail.find("remaining work") != std::string::npos &&
+                        finished.stopDetail.find("project folder") != std::string::npos &&
+                        finished.stopDetail.find("hello and then tea") == std::string::npos,
+                    "ACT-1 session lost the unattempted remaining work in its final explanation.");
+            std::cout << "ACT-1 installed verifier mode=" << mode << " extra=" << extraWork
+                << " verified-placement=1 status=" << ToString(finished.status) << " detail=" << finished.stopDetail << std::endl;
+            ReviaSessionTestAccess::EndComputerTask(fixture.session);
+        }
+    }
+}
+#endif
+
 } // namespace
+
+void RunNativeTaskAcceptanceSessionTests()
+{
+#ifdef _WIN32
+    TestWholeRequestAcceptanceThroughInstalledSessionVerifier();
+#else
+    revia::tests::Check(false, "The explicit native acceptance fixture requires Windows UI Automation.");
+#endif
+}
 
 void RunComputerSessionTests()
 {

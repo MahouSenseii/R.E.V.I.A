@@ -239,7 +239,8 @@ void TestArchiveSessionManagement()
               json["messages"][3]["content"] == "Bob asks about beans.",
         "The JSON export lost the title or a message.");
 
-    Check(archive.ForgetSession("chat-a") == 4, "Deleting a conversation did not report its turns.");
+    const auto forgotten = archive.ForgetSession("chat-a");
+    Check(forgotten.Succeeded() && forgotten.turnsRemoved == 4, "Deleting a conversation did not report its turns.");
     Check(!archive.HasSession("chat-a") && archive.Search("tomatoes").empty() && archive.LoadSession("chat-a").empty(),
         "A deleted conversation stayed listed or searchable.");
 }

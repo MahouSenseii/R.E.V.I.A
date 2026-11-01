@@ -43,6 +43,7 @@ class ScriptedBackend
         std::vector<Json> events;
         int status = 200;
         std::string errorBody;
+        bool done = true;
     };
 
     ScriptedBackend()
@@ -74,7 +75,7 @@ class ScriptedBackend
                 std::string body;
                 for (const auto& event : reply.events)
                     body += "data: " + event.dump() + "\n\n";
-                response.set_content(body + "data: [DONE]\n\n", "text/event-stream");
+                response.set_content(body + (reply.done ? "data: [DONE]\n\n" : ""), "text/event-stream");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(1); };
         port = server.bind_to_any_port("127.0.0.1");
@@ -108,10 +109,10 @@ class ScriptedBackend
         return {{"choices", Json::array({{{"delta", {{"tool_calls", Json::array({fragment})}}}, {"finish_reason", finish}}})}};
     }
 
-    void Then(std::vector<Json> events)
+    void Then(std::vector<Json> events, const bool done = true)
     {
         std::lock_guard lock(mutex);
-        replies.push_back({std::move(events), 200, {}});
+        replies.push_back({std::move(events), 200, {}, done});
     }
     void ThenError(const int status, std::string body)
     {
@@ -1587,8 +1588,52 @@ void TestSelfContainedCompositionRequestsKeepDependencies()
 }
 }
 
+
+// Parsed arguments alone must not dispatch a tool before a recognized terminal state.
+void TestUnterminatedToolStepNeverExecutes()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ScriptedBackend backend;
+    messageRouter router((directory.root / "unterminated-tools.db").string());
+    Configure(router, backend.port);
+    backend.Then({ScriptedBackend::Call(0, "call_w", "web_search", R"({"query":"weather Paris"})")}, false);
+    std::size_t executed = 0;
+    ToolExecutors executors;
+    executors.webSearch = [&](const auto&, const auto&) { ++executed; return ToolExecution::Ok("Synthetic weather."); };
+    ToolPermissions permissions;
+    permissions.privateAudience = permissions.internetEnabled = permissions.automaticLookup = true;
+    Recorded recorded;
+    const ToolLoop loop = Observed(ToolRegistry::Project(permissions, executors), recorded);
+    const auto reply = loop.Run(router, "What is the weather in Paris?", {{"user", "What is the weather in Paris?"}}, {}, {}, {},
+        revia::llm::PrivateMemoryAccess::ProfileSetting);
+    Check(!reply.bSuccess && reply.toolCalls.empty() && reply.toolCallsExecuted == 0 && executed == 0 && backend.Requests().size() == 1,
+        "RUN3 unterminated parseable tool step executed/returned calls or adopted a final answer.");
+}
+
+void TestEmptyFinishReasonToolStepNeverExecutes()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ScriptedBackend backend;
+    messageRouter router((directory.root / "empty-finish-tools.db").string());
+    Configure(router, backend.port);
+    backend.Then({ScriptedBackend::Call(0, "call_empty", "web_search", R"({"query":"weather Paris"})", Json(""))});
+    std::size_t executed = 0;
+    ToolExecutors executors;
+    executors.webSearch = [&](const auto&, const auto&) { ++executed; return ToolExecution::Ok("Synthetic weather."); };
+    ToolPermissions permissions;
+    permissions.privateAudience = permissions.internetEnabled = permissions.automaticLookup = true;
+    Recorded recorded;
+    const ToolLoop loop = Observed(ToolRegistry::Project(permissions, executors), recorded);
+    const auto reply = loop.Run(router, "What is the weather in Paris?", {{"user", "What is the weather in Paris?"}}, {}, {}, {},
+        revia::llm::PrivateMemoryAccess::ProfileSetting);
+    Check(!reply.bSuccess && reply.toolCalls.empty() && reply.toolCallsExecuted == 0 && executed == 0 && backend.Requests().size() == 1,
+        "RUN3 review: an explicitly empty finish reason plus DONE authorized a tool or answer.");
+}
+
 void RunToolLoopTests()
 {
+    TestUnterminatedToolStepNeverExecutes();
+    TestEmptyFinishReasonToolStepNeverExecutes();
     TestRuntimeOwnsGeneratedArtifactDelivery();
     TestGeneratedArtifactsStayOutsideModelToolText();
     TestSelfContainedCompositionRequestsKeepDependencies();

@@ -13,6 +13,9 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace
 {
@@ -259,13 +262,28 @@ std::string Read(const std::filesystem::path& path)
     return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
 }
 
+bool Withdraw(const LiveCaptureStore& store, const std::string& source, std::size_t& removed, std::string& error)
+{
+    const auto result = source.empty() ? store.WithdrawAll() : store.Withdraw(source);
+    removed = result.capturesRemoved;
+    error = result.error;
+    return result.succeeded;
+}
+
+std::vector<std::string> WithdrawalSources(const LiveCaptureStore& store)
+{
+    auto names = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    std::erase_if(names, [](const auto& name) { return name.starts_with(std::string(1, '\0') + "revia-live-capture-cleanup-v1:"); });
+    return names;
+}
+
 void TestKeptCapturesAreImmutableAndWithdrawn()
 {
     revia::tests::ScopedTestDirectory directory;
     const LiveCaptureStore store(directory.root / "Captures");
     std::size_t removed = 0;
     std::string error;
-    Check(store.Withdraw("conversation:conversation-1", removed, error) && removed == 0 &&
+    Check(Withdraw(store, "conversation:conversation-1", removed, error) && removed == 0 &&
               !std::filesystem::exists(directory.root / "Captures"),
         "A withdrawal before any capture was kept created the capture store.");
 
@@ -280,18 +298,18 @@ void TestKeptCapturesAreImmutableAndWithdrawn()
     const auto [otherReply, otherJudgment] = OtherReply("conversation-2");
     const auto second = Built(otherReply, otherJudgment);
     Check(store.Keep(second, error), error);
-    Check(store.Withdraw("conversation:conversation-1", removed, error) && removed == 1, "Deleting a chat did not withdraw its capture: " + error);
+    Check(Withdraw(store, "conversation:conversation-1", removed, error) && removed == 1, "Deleting a chat did not withdraw its capture: " + error);
     Check(!std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")) &&
               std::filesystem::exists(store.LiveDirectory() / (second.captureId + ".json")),
         "The withdrawal did not remove exactly the deleted chat's capture.");
-    auto listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    auto listed = WithdrawalSources(store);
     // Not the shared request: the other chat's capture stays eligible.
     Check(listed == std::vector<std::string>{"conversation:conversation-1", "displayed-reply:reply-1"},
         "The withdrawal list does not name exactly the chat and its capture's judged reply.");
 
-    Check(store.WithdrawAll(removed, error) && removed == 1 && std::filesystem::is_empty(store.LiveDirectory()),
+    Check(Withdraw(store, {}, removed, error) && removed == 1 && std::filesystem::is_empty(store.LiveDirectory()),
         "Forgetting every chat left a capture: " + error);
-    listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    listed = WithdrawalSources(store);
     Check(listed == std::vector<std::string>{"conversation:conversation-1", "conversation:conversation-2", "displayed-reply:reply-1",
                         "displayed-reply:reply-2"},
         "Forgetting every chat did not list each capture's conversation and judged reply, or lost an earlier withdrawal.");
@@ -306,17 +324,17 @@ void TestKeptCapturesAreImmutableAndWithdrawn()
     guestJudgment.targetId = "displayed-reply:reply-3";
     const auto guest = Built(guestReply, guestJudgment);
     Check(store.Keep(guest, error), error);
-    Check(store.Withdraw("participant:guest", removed, error) && removed == 1 &&
+    Check(Withdraw(store, "participant:guest", removed, error) && removed == 1 &&
               !std::filesystem::exists(store.LiveDirectory() / (guest.captureId + ".json")) &&
               std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")),
         "Forgetting a speaker did not withdraw exactly the captures of conversations with them: " + error);
-    listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    listed = WithdrawalSources(store);
     Check(std::find(listed.begin(), listed.end(), "participant:guest") != listed.end() &&
               std::find(listed.begin(), listed.end(), "displayed-reply:reply-3") != listed.end(),
         "Forgetting a speaker did not list them and their capture's judged reply as withdrawn.");
 
     std::ofstream(store.WithdrawnList(), std::ios::binary | std::ios::trunc) << "{broken";
-    Check(!store.Withdraw("participant:owner", removed, error) && removed == 0 &&
+    Check(!Withdraw(store, "participant:owner", removed, error) && removed == 0 &&
               std::filesystem::exists(store.LiveDirectory() / (first.captureId + ".json")),
         "An unreadable withdrawal list was replaced, or a capture deleted without being listed.");
 }
@@ -392,13 +410,172 @@ void TestOwnerCorrectionsAreRevisedAndWithdrawn()
               !std::filesystem::exists(savedPath.string() + ".bak") &&
               std::filesystem::exists(store.LiveDirectory() / (other.captureId + ".json")),
         "Deleting a capture left it or its correction behind, or deleted the capture sharing its request.");
-    const auto withdrawn = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    const auto withdrawn = WithdrawalSources(store);
     Check(withdrawn == std::vector<std::string>{"displayed-reply:reply-1"},
         "Deleting one capture did not list exactly its judged reply as withdrawn.");
     Check(!store.Discard(capture.captureId, error), "A deleted capture was deleted again.");
     std::size_t removed = 0;
-    Check(store.WithdrawAll(removed, error) && removed == 1 && std::filesystem::is_empty(store.CorrectionsDirectory()),
+    Check(Withdraw(store, {}, removed, error) && removed == 1 && std::filesystem::is_empty(store.CorrectionsDirectory()),
         "Forgetting every chat left a capture's correction behind: " + error);
+}
+
+void TestCorrectionOrphanWithdrawalRetry()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    std::uint64_t revision = 0;
+    Check(store.Keep(capture, error) &&
+              store.Correct(capture.captureId, LearningDecision::Accept, "Synthetic corrected reply", revision, error), error);
+    const auto blocked = store.CorrectionsDirectory() / (capture.captureId + ".json.bak");
+    std::filesystem::create_directory(blocked);
+    std::ofstream(blocked / "synthetic-lock") << "fault";
+    const auto partial = store.Withdraw("conversation:conversation-1");
+    Check(!partial.succeeded && partial.withdrawalRecorded && partial.capturesRemoved == 1 && partial.correctionsRemoved == 1 &&
+              !std::filesystem::exists(store.LiveDirectory() / (capture.captureId + ".json")) &&
+              std::filesystem::exists(blocked), "Correction deletion fault did not leave the expected orphan.");
+    Check(!store.Keep(capture, error) && error.find("cleanup pending") != std::string::npos,
+        "A capture ID was reused while its exact correction cleanup was pending.");
+    std::filesystem::remove(blocked / "synthetic-lock");
+    const auto retry = LiveCaptureStore(directory.root / "Captures").Withdraw("conversation:conversation-1");
+    Check(retry.succeeded && retry.capturesRemoved == 0 && retry.correctionsRemoved == 1 &&
+              !std::filesystem::exists(blocked), "MEM-2: targeted retry claimed success while a correction orphan remained.");
+    const auto withdrawn = WithdrawalSources(store);
+    Check(std::find(withdrawn.begin(), withdrawn.end(), "conversation:conversation-1") != withdrawn.end() &&
+              std::find(withdrawn.begin(), withdrawn.end(), "displayed-reply:reply-1") != withdrawn.end(),
+        "Orphan retry lost previously withdrawn sources.");
+}
+
+void TestCaptureDeletionFailureRetainsWithdrawalAndRetries()
+{
+#ifdef _WIN32
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    Check(store.Keep(capture, error), error);
+    const auto path = store.LiveDirectory() / (capture.captureId + ".json");
+    const HANDLE held = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    Check(held != INVALID_HANDLE_VALUE, "The capture deletion fault handle could not be opened.");
+    const auto partial = store.WithdrawAll();
+    CloseHandle(held);
+    Check(!partial.succeeded && partial.withdrawalRecorded && partial.capturesRemoved == 0 && std::filesystem::exists(path),
+        "Capture deletion failure did not retain a truthful post-list receipt.");
+    const auto names = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    Check(std::find(names.begin(), names.end(), std::string(1, '\0') + "revia-live-capture-cleanup-v1:" + capture.captureId) != names.end() &&
+              std::find(names.begin(), names.end(), "displayed-reply:reply-1") != names.end(),
+        "Capture deletion was attempted before durable exact withdrawal identity.");
+    const auto retry = store.WithdrawAll();
+    Check(retry.succeeded && retry.capturesRemoved == 1 && !std::filesystem::exists(path), "Capture deletion retry failed.");
+#endif
+}
+
+void TestLegacyOrphansNeedExplicitScopeAndDiscardCanRetry()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    std::uint64_t revision = 0;
+    Check(store.Keep(capture, error) &&
+              store.Correct(capture.captureId, LearningDecision::Accept, "Synthetic correction", revision, error), error);
+    std::filesystem::remove(store.LiveDirectory() / (capture.captureId + ".json"));
+    const auto targeted = store.Withdraw("conversation:conversation-1");
+    Check(!targeted.succeeded && targeted.error.find("unconfirmed source scope") != std::string::npos &&
+              std::filesystem::exists(store.CorrectionsDirectory() / (capture.captureId + ".json")),
+        "Targeted withdrawal guessed legacy orphan provenance.");
+    const auto all = store.WithdrawAll();
+    Check(all.succeeded && all.correctionsRemoved == 1, "Explicit all withdrawal did not remove a legacy correction orphan.");
+    Check(store.Keep(capture, error) &&
+              store.Correct(capture.captureId, LearningDecision::Accept, "Synthetic correction", revision, error), error);
+    const auto blocked = store.CorrectionsDirectory() / (capture.captureId + ".json.bak");
+    std::filesystem::create_directory(blocked);
+    std::ofstream(blocked / "fault") << "synthetic";
+    Check(!store.Discard(capture.captureId, error), "Discard did not report correction deletion failure.");
+    std::filesystem::remove(blocked / "fault");
+    Check(store.Discard(capture.captureId, error) && !std::filesystem::exists(blocked), "Exact discard could not retry orphan correction cleanup.");
+}
+
+void TestCompletedCleanupRetainsPermanentSourcesAndAllowsUnrelatedRekeep()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    Check(store.Keep(capture, error), error);
+    const std::vector<std::string> permanent{"capture:" + capture.captureId, "participant:earlier-owner", "request:earlier-request",
+        "displayed-reply:earlier-reply", "conversation:earlier-conversation", "other-permanent-source"};
+    std::ofstream(store.WithdrawnList()) << json(permanent).dump();
+    const auto completed = store.Withdraw("conversation:conversation-1");
+    Check(completed.succeeded && completed.capturesRemoved == 1, "Initial scoped withdrawal did not complete.");
+    const auto saved = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    for (const auto& source : permanent)
+        Check(std::find(saved.begin(), saved.end(), source) != saved.end(),
+            "MEM-2: cleanup consumed a permanent withdrawal source: " + source);
+    Check(saved.size() == permanent.size() + 2 &&
+              std::none_of(saved.begin(), saved.end(), [](const auto& source) { return source.find('\0') != std::string::npos; }),
+        "Completed cleanup retained temporary retry metadata or changed permanent withdrawal entries.");
+    auto reply = Reply();
+    reply.conversationId = "conversation-2";
+    auto judgment = Judgment(reply);
+    judgment.targetId = "displayed-reply:rekept-in-another-conversation";
+    const auto rekept = Built(reply, judgment);
+    Check(rekept.captureId == capture.captureId && store.Keep(rekept, error),
+        "Completed withdrawal prevented the current native Keep caller from re-keeping the same deterministic ID.");
+    const auto unrelated = store.Withdraw("conversation:conversation-1");
+    Check(unrelated.succeeded && unrelated.capturesRemoved == 0 &&
+              std::filesystem::exists(store.LiveDirectory() / (rekept.captureId + ".json")),
+        "MEM-2: stale cleanup authority deleted a re-kept capture from another conversation.");
+}
+
+void TestOperationalWithdrawalInputIsRefusedBeforeMutation()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    Check(store.Keep(capture, error), error);
+    const auto marker = std::string(1, '\0') + "revia-live-capture-cleanup-v1:" + capture.captureId;
+    const auto result = store.Withdraw(marker);
+    Check(!result.succeeded && !result.withdrawalRecorded && result.capturesRemoved == 0 &&
+              !std::filesystem::exists(store.WithdrawnList()) &&
+              std::filesystem::exists(store.LiveDirectory() / (capture.captureId + ".json")),
+        "MEM-2: public withdrawal accepted an operational metadata source or mutated the list.");
+}
+
+void TestDiscardAcknowledgesFinalizationOnlyRetry()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const LiveCaptureStore store(directory.root / "Captures");
+    const auto capture = Built();
+    std::string error;
+    std::uint64_t revision = 0;
+    Check(store.Keep(capture, error) &&
+              store.Correct(capture.captureId, LearningDecision::Accept, "Synthetic corrected reply", revision, error), error);
+    const auto capturePath = store.LiveDirectory() / (capture.captureId + ".json");
+    const auto correctionPath = store.CorrectionsDirectory() / (capture.captureId + ".json");
+    const auto blocked = store.CorrectionsDirectory() / (capture.captureId + ".json.bak");
+    std::filesystem::create_directory(blocked);
+    std::ofstream(blocked / "fault") << "synthetic";
+    Check(!store.Discard(capture.captureId, error) && !std::filesystem::exists(capturePath) &&
+              !std::filesystem::exists(correctionPath), "Discard did not establish durable pending cleanup after file deletion.");
+    const auto pending = std::string(1, '\0') + "revia-live-capture-cleanup-v1:" + capture.captureId;
+    const auto listed = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    Check(std::find(listed.begin(), listed.end(), pending) != listed.end(), "Real Discard did not record the pending retry identity.");
+    // The durable state after all file deletes but before successful list finalization.
+    std::filesystem::remove(blocked / "fault");
+    std::filesystem::remove(blocked);
+    const bool completed = LiveCaptureStore(directory.root / "Captures").Discard(capture.captureId, error);
+    const auto finalized = json::parse(Read(store.WithdrawnList())).get<std::vector<std::string>>();
+    Check(std::find(finalized.begin(), finalized.end(), pending) == finalized.end() &&
+              std::find(finalized.begin(), finalized.end(), "displayed-reply:reply-1") != finalized.end() &&
+              !std::filesystem::exists(capturePath) && std::filesystem::is_empty(store.CorrectionsDirectory()),
+        "Finalization-only retry did not complete cleanup while preserving the permanent withdrawal.");
+    Check(completed && error.empty(), "MEM-2 review: Discard reported failure after successfully finalizing zero-removal pending cleanup: " + error);
+    Check(!store.Discard(capture.captureId, error), "Already completed Discard was broadened into success.");
+    Check(!store.Discard("0123456789abcdef", error), "An unknown capture was broadened into successful Discard.");
 }
 } // namespace
 
@@ -407,7 +584,10 @@ void RunLiveCaptureTests()
     std::string errors;
     for (const auto test : {TestJudgedReplyKeepsItsExactExchange, TestRepairedReplyKeepsTheModelsOwnText,
              TestInexactOrUnwithdrawableExchangesAreRefused, TestKeptCapturesAreImmutableAndWithdrawn,
-             TestOwnerCorrectionsAreRevisedAndWithdrawn})
+             TestOwnerCorrectionsAreRevisedAndWithdrawn, TestCorrectionOrphanWithdrawalRetry,
+             TestCaptureDeletionFailureRetainsWithdrawalAndRetries, TestLegacyOrphansNeedExplicitScopeAndDiscardCanRetry,
+             TestCompletedCleanupRetainsPermanentSourcesAndAllowsUnrelatedRekeep, TestOperationalWithdrawalInputIsRefusedBeforeMutation,
+             TestDiscardAcknowledgesFinalizationOnlyRetry})
         try
         {
             test();

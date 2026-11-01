@@ -38,6 +38,7 @@ Revia.NliDedupBenchmarkContract
 Revia.ObservedLocalModel
 Revia.OperatorSession
 Revia.OutputBoundaries
+Revia.ProfileVoiceAssignment
 Revia.QwenTtsServicePolicy
 Revia.RetrievalBenchmarkContracts
 Revia.SessionIdentity
@@ -148,3 +149,7 @@ Revia.AdapterEvaluationPolicy
 Revia.DatasetCapturePolicy
 ReviaReminderIntentTests
 Revia.VideoPublicationLane
+Revia.CompanionQualificationProtocol
+Revia.CompanionQualificationFixture
+Revia.TestCatalog
+Revia.TestCatalogSlash

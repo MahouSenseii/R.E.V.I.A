@@ -295,13 +295,37 @@ void TestFailedLoadAndReplacement()
     Configure(temporary.root);
     WorkingDirectory cwd(temporary.root);
     const auto path = IdentityPath(temporary.root);
-    const std::string corrupt = "{ unreadable original identity";
-    Write(path, corrupt);
+    for (const std::string& corrupt : {std::string("{ unreadable original identity"),
+             std::string(R"({"schemaVersion":999,"earnedState":"preserve me"})")})
     {
+        Write(path, corrupt);
         ReviaSession session;
         Access::IdentitySaveEvery(session, 25ms);
         Check(session.Start(), "Corrupt identity prevented isolated startup.");
         Access::RememberIdentity(session, "Must not overwrite");
+        auto& people = Access::People(session);
+        const auto person = LocalUserEntityId();
+        (void)people.Get(person);
+        std::string error;
+        Check(session.SetAudience({AudienceKind::Private, "fixture-private", 0, {"fixture-recipient"}}, error), error);
+        const bool aliasSaved = session.SetAudienceAlias(person, "Fixture alias", error);
+        Check(Read(path) == corrupt, "Explicit alias save overwrote a failed identity load.");
+        Check(!aliasSaved && error.find("blocked") != std::string::npos, "Alias did not report blocked identity persistence.");
+        RelationshipEvent event;
+        event.entityId = person;
+        event.evidenceId = "fixture-misattributed";
+        event.positiveInteraction = 0.5F;
+        people.Apply(event);
+        const bool correctionSaved = session.CorrectSpeakerEvidence(event.evidenceId, "fixture-other", error);
+        Check(Read(path) == corrupt, "Explicit evidence correction overwrote a failed identity load.");
+        Check(!correctionSaved && error.find("blocked") != std::string::npos,
+            "Evidence correction did not report blocked identity persistence.");
+        Check(people.GrantRecognitionConsent(person, error), error);
+        const bool forgetSaved = session.ForgetSpeaker(person, error);
+        Check(Read(path) == corrupt, "Explicit recognition forget overwrote a failed identity load.");
+        Check(!forgetSaved && error.find("session") != std::string::npos && error.find("not saved") != std::string::npos,
+            "Recognition forget did not distinguish live revocation from durable failure.");
+        Check(!people.RecognitionConsentRevision(person), "Blocked persistence undid live recognition revocation.");
         std::this_thread::sleep_for(150ms);
         Check(Read(path) == corrupt, "Autosave overwrote a failed identity load.");
         session.Stop();

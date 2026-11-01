@@ -18,6 +18,16 @@ namespace revia::memory
 
 struct RecallRequest;
 
+struct ArchiveForgetResult
+{
+    bool rowsDeleted = false;
+    bool cleanupCompleted = false;
+    std::size_t turnsRemoved = 0;
+    std::string error;
+
+    [[nodiscard]] bool Succeeded() const { return rowsDeleted && cleanupCompleted; }
+};
+
 struct ArchivedTurn
 {
     std::string id;
@@ -154,10 +164,9 @@ class ConversationArchive
     bool SaveEmbedding(const ArchivedTurn& expectedTurn, const std::string& embeddingModel, const std::vector<float>& embedding,
         std::function<bool()> admission = {});
 
-    // Returns how many turns were removed. Forgetting is immediate and total; there is no
-    // archived copy kept behind it, because a forget that leaves a copy is not one.
-    std::size_t Forget();
-    std::size_t ForgetSession(const std::string& sessionId);
+    // Counts describe committed deletion only; cleanup can still need a retry.
+    [[nodiscard]] ArchiveForgetResult Forget();
+    [[nodiscard]] ArchiveForgetResult ForgetSession(const std::string& sessionId);
 
     [[nodiscard]] ArchiveCounters Counters() const;
     [[nodiscard]] std::size_t TotalTurns() const;

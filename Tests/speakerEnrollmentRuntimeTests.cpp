@@ -172,6 +172,42 @@ void TestSelectedWaveReplacementFailurePreservesOldTemplate()
               after.front().features.values == before.features.values,
         "A failed selected-WAV replacement erased prior consent or the working template.");
 }
+
+void TestFailedIdentityLoadBlocksBothEnrollmentEntrypoints()
+{
+    for (const std::string& original : {std::string("{ unreadable earned identity"),
+             std::string(R"({"schemaVersion":999,"earnedState":"preserve me"})")})
+    {
+        tests::ScopedTestDirectory temporary;
+        const CompanionPaths paths(temporary.root, {"enrollment-unreadable", "Enrollment fixture", "assistant", false});
+        const auto path = paths.Resolve("RuntimeData/Identity/identity.json");
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path, std::ios::binary) << original;
+        ReviaSession session(paths);
+        auto& people = ReviaSessionTestAccess::People(session);
+        std::string error;
+        Check(!people.Load(error), "The connected unreadable identity fixture unexpectedly loaded.");
+        Prepare(session);
+        const auto wave = temporary.root / "synthetic.wav";
+        WriteSyntheticWave(wave);
+        const auto bytes = [&]
+        {
+            std::ifstream file(path, std::ios::binary);
+            return std::string{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        };
+        const bool selectedSaved = session.EnrollSpeaker(identity::LocalUserEntityId(), wave, true, error);
+        Check(bytes() == original, "Selected WAV enrollment overwrote unreadable identity.");
+        Check(!selectedSaved && error.find("blocked") != std::string::npos, "Selected WAV enrollment hid blocked persistence.");
+        Arm(session);
+        (void)ReviaSessionTestAccess::ResolveStudioVoice(session, wave);
+        const auto confirmation = session.Submit("Confirm this voice sample.");
+        Check(bytes() == original, "Conversational enrollment overwrote unreadable identity.");
+        Check(confirmation.text.find("No enrollment success is claimed") != std::string::npos,
+            "Conversational enrollment claimed a durable save after a failed load.");
+        Check(people.SpeakerTemplates().empty() && !people.RecognitionConsentRevision(identity::LocalUserEntityId()),
+            "Blocked enrollment adopted live consent or a biometric template.");
+    }
+}
 }
 
 void RunSpeakerEnrollmentRuntimeTests()
@@ -182,5 +218,6 @@ void RunSpeakerEnrollmentRuntimeTests()
     TestStalePrivateSubmissionCannotAcquireFreshPurpose();
     TestUnknownVoiceCanWithdrawWithoutAuthorizingEnrollment();
     TestSelectedWaveReplacementFailurePreservesOldTemplate();
+    TestFailedIdentityLoadBlocksBothEnrollmentEntrypoints();
     std::cout << "Connected conversational speaker enrollment checks passed.\n";
 }

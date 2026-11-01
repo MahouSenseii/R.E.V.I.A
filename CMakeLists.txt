@@ -471,7 +471,26 @@ add_custom_command(TARGET R_E_V_I_A POST_BUILD
 )
 
 include(CTest)
+find_package(Threads REQUIRED)
+add_library(ReviaTestRunCore STATIC Private/Runtime/testRunRuntime.cpp Private/Process/ownedProcess.cpp
+        Private/Actions/actionTypes.cpp Private/Audit/contentDigest.cpp Private/Core/atomicFile.cpp)
+target_include_directories(ReviaTestRunCore PUBLIC Public)
+target_link_libraries(ReviaTestRunCore PUBLIC nlohmann_json::nlohmann_json Threads::Threads expat::expat)
+if(WIN32)
+    target_compile_definitions(ReviaTestRunCore PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX)
+endif()
+add_executable(ReviaTestLauncher Tools/Tests/testLauncher.cpp)
+target_link_libraries(ReviaTestLauncher PRIVATE ReviaTestRunCore)
+revia_deploy_mingw_runtime(ReviaTestLauncher)
 if(BUILD_TESTING)
+    add_executable(ReviaTestCatalogTests Tests/testCatalogTests.cpp)
+    target_link_libraries(ReviaTestCatalogTests PRIVATE ReviaTestRunCore)
+    get_filename_component(REVIA_TEST_COMPILER_DIRECTORY "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    target_compile_definitions(ReviaTestCatalogTests PRIVATE
+            REVIA_CTEST_EXECUTABLE="${CMAKE_CTEST_COMMAND}" REVIA_TEST_RUNTIME_PATH="${REVIA_TEST_COMPILER_DIRECTORY}")
+    revia_deploy_mingw_runtime(ReviaTestCatalogTests)
+    add_test(NAME Revia.TestCatalog COMMAND ReviaTestCatalogTests)
+    set_tests_properties(Revia.TestCatalog PROPERTIES TIMEOUT 90)
     add_executable(ReviaSessionIdentityTests Tests/sessionIdentityTests.cpp
             Private/Runtime/sessionIdentity.cpp Private/Runtime/runtimeEvents.cpp)
     target_include_directories(ReviaSessionIdentityTests PRIVATE Public)
@@ -742,6 +761,7 @@ if(BUILD_TESTING)
     # It lives under Tests/ because that is what it is for, but it must not be linked
     # into the test binary.
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/Fixture/")
+    list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/testCatalogTests\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/(sessionIdentityTests|companionRuntimeTests)\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/studioPanelTests\\.cpp$")
     list(FILTER REVIA_TEST_SOURCES EXCLUDE REGEX "/Tests/videoStoreLive\\.cpp$")
@@ -754,6 +774,19 @@ if(BUILD_TESTING)
     add_executable(ReviaCompanionRuntimeTests Tests/companionRuntimeTests.cpp)
     revia_link_foundation(ReviaCompanionRuntimeTests)
     add_test(NAME Revia.CompanionRuntime COMMAND ReviaCompanionRuntimeTests)
+    if(WIN32)
+        add_executable(ReviaCompanionQualification Tools/Quality/companionQualification.cpp)
+        revia_link_foundation(ReviaCompanionQualification)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME Revia.CompanionQualificationProtocol COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Quality/qualifyCompanionTests.py")
+            add_test(NAME Revia.CompanionQualificationFixture COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Quality/qualifyCompanionTests.py" --worker "$<TARGET_FILE:ReviaCompanionQualification>")
+            set_tests_properties(Revia.CompanionQualificationProtocol PROPERTIES TIMEOUT 45)
+            set_tests_properties(Revia.CompanionQualificationFixture PROPERTIES TIMEOUT 300)
+        endif()
+    endif()
     add_executable(ReviaTests ${REVIA_TEST_SOURCES})
     add_executable(ReviaStudioLive Tests/studioLive.cpp Tests/Fixture/studioLiveMain.cpp)
     add_executable(ReviaAnswerQualityLive Tools/Quality/answerQualityLive.cpp)
@@ -1052,14 +1085,16 @@ if(BUILD_TESTING)
             target_link_options(ReviaDesktopStopTests PRIVATE -static-libgcc -static-libstdc++)
         endif()
         add_test(NAME Revia.DesktopStopPolicy COMMAND ReviaDesktopStopTests)
+        add_test(NAME Revia.ProfileVoiceAssignment COMMAND ReviaDesktopStopTests --suite=voice-assignment)
         add_test(NAME Revia.VideoPreview COMMAND ReviaDesktopStopTests --suite=video-preview)
         set_tests_properties(Revia.VideoPreview PROPERTIES SKIP_RETURN_CODE 77)
         add_test(NAME Revia.Theme COMMAND ReviaDesktopStopTests --suite=theme)
         add_test(NAME Revia.SettingsDialog COMMAND ReviaDesktopStopTests --suite=settings)
         add_test(NAME Revia.ShellWidgets COMMAND ReviaDesktopStopTests --suite=shell)
         add_test(NAME Revia.SettingsBackend COMMAND ReviaDesktopStopTests --suite=settingsBackend)
+        add_test(NAME Revia.TestCatalogSlash COMMAND ReviaDesktopStopTests --suite=test-catalog-slash)
         # REVIA_THEME=light keeps every capture the same whatever the runner's Windows colour setting.
-        set_tests_properties(Revia.DesktopStopPolicy Revia.VideoPreview Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend PROPERTIES
+        set_tests_properties(Revia.DesktopStopPolicy Revia.ProfileVoiceAssignment Revia.VideoPreview Revia.Theme Revia.SettingsDialog Revia.ShellWidgets Revia.SettingsBackend Revia.TestCatalogSlash PROPERTIES
                 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>;REVIA_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/TestLogs;REVIA_THEME=light"
                 TIMEOUT 30)
         add_executable(ReviaSvgRendererTests

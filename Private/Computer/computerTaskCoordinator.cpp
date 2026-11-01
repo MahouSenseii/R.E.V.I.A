@@ -78,14 +78,15 @@ goals::CompletionEvidence ComputerTaskCoordinator::VerifyCompletion(const goals:
 {
     if (stopToken.stop_requested()) return {false, "Completion verification was cancelled."};
     if (activeGoalId != goal.id) return {false, "The original task acceptance context is unavailable."};
+    if (observation.browser && !acceptance.placementOnly) return {false, acceptance.detail};
     if (observation.browser)
-        return VerifyExactBrowserPlacement(content.Content(), goal, *observation.browser);
+        return VerifyExactBrowserPlacement(content.Content(), goal, *observation.browser, acceptance);
     if (!observation.Available()) return {false, "A current admitted observation is unavailable for final acceptance."};
-    const auto criterion = VerifyExactContentPlacement(content.Content(), goal, observation, true);
+    const auto criterion = VerifyExactContentPlacement(content.Content(), goal, observation, true, acceptance);
     if (!criterion.accepted) return criterion;
     content.ObserveGoal(goal);
     if (stopToken.stop_requested()) return {false, "Completion verification was cancelled."};
-    return VerifyExactContentPlacement(content.Content(), goal, observation, content.Placed());
+    return VerifyExactContentPlacement(content.Content(), goal, observation, content.Placed(), acceptance);
 }
 
 void ComputerTaskCoordinator::ApplySettings(const computerControlSettings& settings)
@@ -130,9 +131,14 @@ PayloadReference ComputerTaskCoordinator::HoldPayload(std::string value, std::st
     return activePayload;
 }
 
-void ComputerTaskCoordinator::BeginTask(const std::string& goalId, const RequestOrigin origin, TaskContent taskContent)
+void ComputerTaskCoordinator::BeginTask(const std::string& goalId, const RequestOrigin origin, TaskContent taskContent, const std::string& request)
 {
     activeGoalId = goalId;
+    acceptance = DeriveTaskAcceptance(request);
+    const auto originalContent = ExtractTaskContent(request);
+    if (originalContent.requirement != taskContent.requirement || originalContent.value != taskContent.value ||
+        originalContent.destination != taskContent.destination || originalContent.submissionRequested != taskContent.submissionRequested)
+        acceptance = {};
     activeOrigin = origin;
     // Before anything else, and before any planner is asked anything. Exact content is
     // taken into custody here; from this point there is nothing a model could invent
@@ -173,6 +179,7 @@ void ComputerTaskCoordinator::EndTask()
     controller.ClearSubgoal();
     observations.Reset();
     content.EndTask();
+    acceptance = {};
     // The payloads go with the task that justified holding them. Whatever the outcome:
     // a cancelled task has no more claim on the user's words than a finished one.
     vault.Clear();
@@ -218,6 +225,7 @@ TaskProgress ComputerTaskCoordinator::Progress(const ComputerTaskContext& contex
 {
     TaskProgressInputs inputs;
     inputs.content = &content.Content();
+    inputs.acceptance = &acceptance;
     inputs.contentPlaced = content.Placed();
     inputs.submissionReady = content.SubmissionReady();
     inputs.context = &context;
@@ -408,8 +416,8 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
     const ComputerProviderMode mode = controller.Mode();
     if (context.observation.browser)
     {
-        const auto placement = VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser);
-        if (placement.accepted)
+        const auto placement = VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser, acceptance);
+        if (placement.accepted && acceptance.placementOnly)
         {
             goals::NextStep finished;
             finished.finished = true;
@@ -426,19 +434,9 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
         EnsureSubgoal(context, goal, stopToken);
     }
 
-    // A content task whose content has landed, with nothing further asked for, is
-    // finished -- and the runtime knows it without asking.
+    // Placement completes only an explicitly bound whole-request placement contract.
     //
-    // The evidence is not a provider's opinion: the content requirement came from the
-    // person's own request, the placement was established by a typed postcondition
-    // against the exact held value, and the request contained no submission verb. Asking
-    // a model to confirm that would be paying for a re-derivation of three facts already
-    // written down, and offering it the chance to answer wrongly.
-    //
-    // Deliberately narrow. It fires only for ExactUserContent tasks, only after
-    // ContentGate::Placed, and only when no submission was requested. Everything else
-    // still ends where it always did, with the next-step path answering the whole-task
-    // question.
+    // Unknown remaining work stays on the existing decision/final-verification path.
     if (mode != ComputerProviderMode::Legacy)
     {
         const TaskProgress progress = Progress(context, goal);
@@ -525,7 +523,7 @@ goals::NextStep ComputerTaskCoordinator::Decide(const goals::Goal& goal,
         }
     }
     else if (next.finished && !content.CompletionAllowed() &&
-        !(context.observation.browser && VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser).accepted))
+        !(context.observation.browser && VerifyExactBrowserPlacement(content.Content(), goal, *context.observation.browser, acceptance).accepted))
     {
         // "I typed something and we are done" is the shape of the original defect, and
         // it survives every repair that only looks at what gets typed. The content this

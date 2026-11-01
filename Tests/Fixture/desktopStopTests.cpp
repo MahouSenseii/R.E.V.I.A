@@ -1,6 +1,8 @@
 #include "reviaWindow.h"
 #include "desktopSuites.h"
 #include "panelWindow.h"
+#include "profilePanel.h"
+#include "settingsSessionBackend.h"
 #include "settingsDialog.h"
 #include "commandPalette.h"
 #include "shellSidebar.h"
@@ -25,6 +27,7 @@
 #include "Audit/contentDigest.h"
 #include "Policy/desktopAuthorization.h"
 #include "reviaSessionTestAccess.h"
+#include "speechServiceTestAccess.h"
 #include "Core/runtimePath.h"
 #include "Core/configManager.h"
 #include "Core/appSettings.h"
@@ -40,6 +43,8 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFont>
+#include <QFormLayout>
+#include <QBoxLayout>
 #include <QFile>
 #include <QFontDatabase>
 #include <QKeyEvent>
@@ -95,6 +100,620 @@
 
 struct ReviaWindowStopTests
 {
+    static void RunVoiceAssignmentUi(int& failures)
+    {
+        using namespace revia::runtime;
+        using namespace revia::desktop;
+        using revia::speech::SpeechServiceTestAccess;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir directory;
+        expect(directory.isValid(), "voice assignment fixture needs a disposable root");
+        if (!directory.isValid())
+            return;
+        struct RestoreDirectory
+        {
+            QString previous = QDir::currentPath();
+            ~RestoreDirectory() { QDir::setCurrent(previous); }
+        } restoreDirectory;
+        const std::filesystem::path root(directory.path().toStdWString());
+        const auto write = [](const std::filesystem::path& path, const nlohmann::json& value)
+        {
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream(path) << value.dump(2);
+        };
+        const auto bytes = [](const std::filesystem::path& path)
+        {
+            QFile file(QString::fromStdWString(path.wstring()));
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        write(root / "Config/settings.json", {{"activeProfile", "fixture"},
+            {"llm", {{"backend", "None"}, {"autoStartServer", false}, {"visionEnabled", false}}},
+            {"embedding", {{"enabled", false}, {"autoStartServer", false}}}, {"intelligence", {{"enabled", false}}},
+            {"speech", {{"enabled", false}, {"backend", "WindowsSapi"}, {"speakGreeting", false}}}, {"speechRecognition", {{"enabled", false}}},
+            {"presence", {{"enabled", false}, {"externalAdaptersEnabled", false}}}, {"vision", {{"enabled", false}}},
+            {"perception", {{"enabled", false}}}, {"initiative", {{"enabled", false}, {"curiosityEnabled", false}}},
+            {"conversation", {{"archiveEnabled", false}}}, {"image", {{"enabled", false}}},
+            {"resources", {{"startupSampleSeconds", 0}}}});
+        write(root / "Config/Profiles/fixture.json", {{"id", "fixture"}, {"displayName", "Voice fixture"},
+            {"description", "Saved description"}, {"systemPrompt", "Saved instructions."}, {"memoryEnabled", false}});
+        const auto voiceDocument = [](const std::string& assignment)
+        {
+            return nlohmann::json{{"version", 1}, {"presets", nlohmann::json::array({
+                {{"id", "alpha"}, {"name", "Alpha fixture voice"}, {"referenceAudioPath", "metadata-only-alpha.wav"}},
+                {{"id", "beta"}, {"name", "Beta fixture voice"}, {"referenceAudioPath", "metadata-only-beta.wav"}}})},
+                {"profileAssignments", {{"fixture", assignment}}}};
+        };
+        const auto voiceRoot = root / "RuntimeData/Voices";
+        const auto voicePath = voiceRoot / "voices.json";
+        const auto temporaryPath = voiceRoot / "voices.json.tmp";
+        expect(QDir::setCurrent(directory.path()), "voice assignment fixture could not select its own root");
+        ReviaWindow window(false, false);
+        window.pollTimer->stop();
+        expect(window.Session().Start(), "voice assignment fixture session did not start");
+        auto& speech = ReviaSessionTestAccess::Speech(window.Session());
+        expect(!ReviaSessionTestAccess::VoiceWarmupStarted(window.Session()) && !speech.HasActiveQwenVoice(),
+            "Windows-only fixture settings must prevent voice warmup admission before metadata seeding");
+        SpeechServiceTestAccess::ConfigureWithoutWorkers(speech, voiceRoot);
+        write(voicePath, voiceDocument("alpha"));
+        speech.SetActiveProfile("fixture");
+        expect(SpeechServiceTestAccess::HasNoWorkers(speech) && !speech.HasActiveQwenVoice(),
+            "metadata assignment fixture must have no synthesis/playback/Qwen pool workers");
+        const auto successes = std::make_shared<std::atomic<int>>(0);
+        SpeechServiceTestAccess::ObserveEvents(speech, [successes](const revia::speech::SpeechEvent& event)
+        {
+            if (event.phase == "Ready" && (event.detail.find("Voice preset assigned to profile") != std::string::npos ||
+                event.detail == "The profile will use Windows voice fallback."))
+                ++*successes;
+        });
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        auto* panel = window.profilePanel;
+        panel->Refresh();
+        auto* selection = qobject_cast<QComboBox*>(panel->findChild<QBoxLayout*>("profileSelectionRow")->itemAt(1)->widget());
+        auto* voice = qobject_cast<QComboBox*>(panel->findChild<QBoxLayout*>("profileVoiceRow")->itemAt(0)->widget());
+        const auto field = [&](const QString& label)
+        {
+            for (auto* form : panel->findChildren<QFormLayout*>())
+                for (int row = 0; row < form->rowCount(); ++row)
+                {
+                    auto* item = form->itemAt(row, QFormLayout::FieldRole);
+                    auto* input = item ? qobject_cast<QLineEdit*>(item->widget()) : nullptr;
+                    auto* title = input ? qobject_cast<QLabel*>(form->labelForField(input)) : nullptr;
+                    if (title && title->text() == label)
+                        return input;
+                }
+            return static_cast<QLineEdit*>(nullptr);
+        };
+        const auto button = [&](const QString& text)
+        {
+            for (auto* candidate : panel->findChildren<QPushButton*>())
+                if (candidate->text() == text)
+                    return candidate;
+            return static_cast<QPushButton*>(nullptr);
+        };
+        auto* name = field("Display name");
+        auto* description = field("Description");
+        auto* prompt = panel->findChild<QPlainTextEdit*>();
+        auto* memory = panel->findChild<QCheckBox*>("profileMemoryCheck");
+        auto* status = panel->findChild<QLabel*>("profileStatus");
+        auto* banner = panel->findChild<QLabel*>("profileActiveBanner");
+        auto* assign = button("Assign voice");
+        auto* windows = button("Use Windows voice");
+        expect(selection && voice && name && description && prompt && memory && status && banner && assign && windows &&
+                   assign->isEnabled() && windows->isEnabled() && voice->findData("beta") >= 0,
+            "voice assignment regression needs both enabled real buttons and metadata-only presets");
+        if (!selection || !voice || !name || !description || !prompt || !memory || !status || !banner || !assign || !windows)
+            return;
+        const auto origin = window.Session().Stamp();
+        const auto profileBefore = bytes(root / "Config/Profiles/fixture.json");
+        const auto dirty = [&]()
+        {
+            name->setText("Unrelated unsaved voice fixture name");
+            description->setText("Unrelated unsaved description");
+            prompt->setPlainText("Unrelated unsaved personality instructions.");
+            memory->setChecked(true);
+        };
+        const auto draftIntact = [&]()
+        {
+            return panel->HasUnsavedChanges() && name->text() == "Unrelated unsaved voice fixture name" &&
+                description->text() == "Unrelated unsaved description" &&
+                prompt->toPlainText() == "Unrelated unsaved personality instructions." && memory->isChecked() &&
+                selection->currentData().toString() == "fixture" && bytes(root / "Config/Profiles/fixture.json") == profileBefore;
+        };
+        // The real retirement owner joins this slot. The barrier never outlives its captured session.
+        const auto whileHeld = [&](const bool foreground, const bool retire, QPushButton* clicked,
+                                   const std::function<void()>& beforeRelease)
+        {
+            auto& owner = window.Session();
+            const auto token = ReviaSessionTestAccess::BeginEditorRetirementFixture(owner, RuntimeState::Thinking);
+            window.userStopRequested = false;
+            window.UpdateState(RuntimeState::Thinking, "Synthetic voice-owner barrier");
+            std::mutex mutex;
+            std::condition_variable changed;
+            bool held = false, release = false, fallback = false, exited = false;
+            bool returned = false, returnHeld = false, heartbeat = false, stop = false, dispatched = false;
+            if (window.voiceWorker.joinable())
+                window.voiceWorker.join();
+            window.voiceWorker = std::jthread([&]()
+            {
+                const auto gate = foreground ? ReviaSessionTestAccess::HoldForeground(owner)
+                                             : ReviaSessionTestAccess::HoldVoiceStudio(owner);
+                std::unique_lock lock(mutex);
+                held = true;
+                changed.notify_all();
+                changed.wait(lock, [&]() { return release; });
+                held = false;
+                exited = true;
+            });
+            {
+                std::unique_lock lock(mutex);
+                expect(changed.wait_for(lock, std::chrono::seconds(2), [&]() { return held; }),
+                    "voice fixture worker must acquire the actual owner lock");
+            }
+            std::jthread watchdog([&]()
+            {
+                std::unique_lock lock(mutex);
+                if (!changed.wait_for(lock, std::chrono::seconds(2), [&]() { return release; }))
+                {
+                    fallback = true;
+                    release = true;
+                    changed.notify_all();
+                }
+            });
+            QMetaObject::invokeMethod(&window, [&]()
+            {
+                clicked->click();
+                returned = true;
+                {
+                    std::lock_guard lock(mutex);
+                    returnHeld = held && !release;
+                }
+                QMetaObject::invokeMethod(&window, [&]()
+                {
+                    {
+                        std::lock_guard lock(mutex);
+                        heartbeat = held && !release;
+                    }
+                    window.stopButton->click();
+                    {
+                        std::lock_guard lock(mutex);
+                        stop = held && !release && window.userStopRequested && token.stop_requested();
+                    }
+                    dispatched = true;
+                }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!dispatched && std::chrono::steady_clock::now() < until)
+                QCoreApplication::processEvents();
+            bool heldWithoutFallback;
+            {
+                std::lock_guard lock(mutex);
+                heldWithoutFallback = held && !release && !fallback;
+            }
+            std::cout << "VoiceAssignment " << (foreground ? "success-foreground" : "busy-voice") << ' '
+                      << clicked->text().toStdString() << ": return-held=" << returnHeld << " heartbeat-held=" << heartbeat
+                      << " stop-cancelled-held=" << stop << " watchdog=" << !heldWithoutFallback << '\n';
+            expect(returned && returnHeld && heartbeat && stop && heldWithoutFallback,
+                "real voice assignment click, heartbeat and Stop cancellation must finish before owner release without watchdog");
+            beforeRelease();
+            {
+                std::lock_guard lock(mutex);
+                release = true;
+            }
+            changed.notify_all();
+            watchdog.join();
+            if (!retire)
+                window.voiceWorker.join();
+            else
+            {
+                const auto switchUntil = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+                while (window.switchingCompanion && std::chrono::steady_clock::now() < switchUntil)
+                    QCoreApplication::processEvents();
+                // Never touch owner, clicked or the outgoing panel after replacement.
+                expect(!window.switchingCompanion, "actual companion retirement must join the voice barrier worker");
+            }
+            {
+                std::lock_guard lock(mutex);
+                expect(exited, "voice barrier worker must exit before the fixture scope retires");
+            }
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        };
+        for (const bool useWindows : {false, true})
+        {
+            auto* clicked = useWindows ? windows : assign;
+            voice->setCurrentIndex(voice->findData("beta"));
+            dirty();
+            const auto before = bytes(voicePath);
+            const bool temporaryBefore = std::filesystem::exists(temporaryPath);
+            const auto temporaryBytesBefore = bytes(temporaryPath);
+            const auto selectionBefore = speech.SynthesisHealthSnapshot().selection;
+            const auto bannerBefore = banner->text();
+            const int successesBefore = successes->load();
+            const auto unchanged = [&]()
+            {
+                const auto current = speech.SynthesisHealthSnapshot().selection;
+                return bytes(voicePath) == before && std::filesystem::exists(temporaryPath) == temporaryBefore &&
+                    bytes(temporaryPath) == temporaryBytesBefore && current.profileId == selectionBefore.profileId &&
+                    current.presetId == selectionBefore.presetId && current.epoch == selectionBefore.epoch;
+            };
+            whileHeld(false, false, clicked, [&]()
+            {
+                expect(status->property("error").toBool() && status->text().contains("busy", Qt::CaseInsensitive) &&
+                           status->text().contains("try again", Qt::CaseInsensitive),
+                    "busy voice assignment must explain refusal and explicit retry");
+                expect(unchanged() && draftIntact() && voice->currentData().toString() == "beta" &&
+                           banner->text() == bannerBefore && successes->load() == successesBefore && origin.SameSession(window.Session().Stamp()),
+                    "busy voice assignment must preserve exact voice bytes/temp state, current voice, selections, draft and notification count");
+            });
+            expect(unchanged() && successes->load() == successesBefore,
+                "releasing and draining a refused assignment must never schedule a write or success notification");
+            // A success-only Refresh would now wait on operationMutex and erase the dirty controls.
+            dirty();
+            whileHeld(true, false, clicked, [&]()
+            {
+                const auto document = nlohmann::json::parse(bytes(voicePath).toStdString());
+                const auto current = speech.SynthesisHealthSnapshot().selection;
+                const bool persisted = useWindows ? !document.at("profileAssignments").contains("fixture")
+                    : document.at("profileAssignments").at("fixture") == "beta";
+                expect(persisted && current.profileId == "fixture" && current.presetId == (useWindows ? "" : "beta") &&
+                           current.epoch > selectionBefore.epoch && successes->load() == successesBefore + 1 &&
+                           !std::filesystem::exists(temporaryPath),
+                    "one explicit real-button retry must persist exactly its target and publish exactly one success");
+                expect(!status->property("error").toBool() && status->text().contains(useWindows ? "Windows voice fallback" : "Voice preset assigned") &&
+                           banner->text().contains(useWindows ? "voice Windows voice" : "voice Beta fixture voice") &&
+                           voice->currentData().toString() == (useWindows ? "" : "beta") && draftIntact(),
+                    "successful assignment must update accurate voice labels without reacquiring foreground or losing unrelated edits");
+            });
+            std::cout << "VoiceAssignment " << clicked->text().toStdString() << ": explicit retry notifications="
+                      << successes->load() - successesBefore << " persisted target=" << (useWindows ? "Windows" : "beta") << '\n';
+        }
+        // Refused outgoing work is never queued. Real switch retirement owns and joins the barrier.
+        expect(window.Session().AssignVoice("fixture", "alpha").succeeded, "retirement fixture needs a nonempty outgoing assignment");
+        panel->Refresh();
+        voice->setCurrentIndex(voice->findData("beta"));
+        dirty();
+        CompanionDescriptor second;
+        std::string error;
+        expect(window.companions->Create("Voice destination", "fixture", second, error),
+            "voice fixture could not create a synthetic destination");
+        const CompanionPaths secondPaths(root, second);
+        write(secondPaths.Resolve("Config/Profiles/fixture.json"), nlohmann::json::parse(profileBefore.toStdString()));
+        std::filesystem::copy_file(root / "Config/settings.json", secondPaths.Resolve("Config/settings.json"),
+            std::filesystem::copy_options::overwrite_existing);
+        const auto secondVoicePath = secondPaths.Resolve("RuntimeData/Voices/voices.json");
+        write(secondVoicePath, voiceDocument("beta"));
+        const auto outgoingBefore = bytes(voicePath);
+        const auto incomingBefore = bytes(secondVoicePath);
+        const int retireSuccesses = successes->load();
+        whileHeld(false, true, assign, [&]()
+        {
+            expect(status->property("error").toBool() && draftIntact() && bytes(voicePath) == outgoingBefore &&
+                       bytes(secondVoicePath) == incomingBefore && successes->load() == retireSuccesses,
+                "retiring assignment must refuse before either companion's private voice store changes");
+            window.panelHost->Close(PanelId::Profiles);
+            window.SwitchCompanion(second.id);
+            bool switchHeartbeat = false;
+            QMetaObject::invokeMethod(&window, [&]() { switchHeartbeat = window.switchingCompanion; }, Qt::QueuedConnection);
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+            expect(switchHeartbeat && !window.companionCombo->isEnabled(),
+                "actual companion switch must lock navigation and dispatch heartbeat while joining the held voice worker");
+        });
+        expect(window.Session().Stamp().companionId == second.id && !window.Session().Admits(origin) &&
+                   bytes(voicePath) == outgoingBefore && bytes(secondVoicePath) == incomingBefore && successes->load() == retireSuccesses &&
+                   !std::filesystem::exists(temporaryPath) && !std::filesystem::exists(secondVoicePath.parent_path() / "voices.json.tmp"),
+            "retirement must join safely and refuse stale writes in outgoing and incoming companion stores");
+        const auto switchUntil = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        while ((!window.Session().IsStarted() || window.operationRunning.load()) && std::chrono::steady_clock::now() < switchUntil)
+            QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        expect(window.Session().IsStarted() && !window.operationRunning.load() &&
+                   !ReviaSessionTestAccess::VoiceWarmupStarted(window.Session()) &&
+                   !ReviaSessionTestAccess::Speech(window.Session()).HasActiveQwenVoice(),
+            "incoming companion must finish Windows-only startup without admitting a Qwen warmup");
+        window.profilePanel->Refresh();
+        auto* incomingVoice = qobject_cast<QComboBox*>(window.profilePanel->findChild<QBoxLayout*>("profileVoiceRow")->itemAt(0)->widget());
+        expect(incomingVoice && incomingVoice->currentData().toString() == "beta" && !window.profilePanel->HasUnsavedChanges() &&
+                   !window.profilePanel->findChild<QPlainTextEdit*>()->toPlainText().contains("Unrelated unsaved") &&
+                   bytes(voicePath) == outgoingBefore && bytes(secondVoicePath) == incomingBefore,
+            "replacement panel must show its own assignment without a stale outgoing completion or draft");
+        std::cout << "VoiceAssignment retirement: actual switch joined barrier, incoming beta isolated, no deferred assignment.\n";
+    }
+
+    static void RunProfileSaveUi(int& failures)
+    {
+        using namespace revia::runtime;
+        using namespace revia::desktop;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir directory;
+        expect(directory.isValid(), "profile save fixture needs a disposable root");
+        if (!directory.isValid())
+            return;
+        struct RestoreDirectory
+        {
+            QString previous = QDir::currentPath();
+            ~RestoreDirectory() { QDir::setCurrent(previous); }
+        } restoreDirectory;
+        const std::filesystem::path root(directory.path().toStdWString());
+        const auto write = [](const std::filesystem::path& path, const nlohmann::json& value)
+        {
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream(path) << value.dump(2);
+        };
+        const auto bytes = [](const std::filesystem::path& path)
+        {
+            QFile file(QString::fromStdWString(path.wstring()));
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        write(root / "Config/settings.json", {{"activeProfile", "fixture"},
+            {"llm", {{"backend", "None"}, {"autoStartServer", false}, {"visionEnabled", false}}},
+            {"embedding", {{"enabled", false}, {"autoStartServer", false}}}, {"intelligence", {{"enabled", false}}},
+            {"speech", {{"enabled", false}, {"speakGreeting", false}}}, {"speechRecognition", {{"enabled", false}}},
+            {"presence", {{"enabled", false}, {"externalAdaptersEnabled", false}}}, {"vision", {{"enabled", false}}},
+            {"perception", {{"enabled", false}}}, {"initiative", {{"enabled", false}, {"curiosityEnabled", false}}},
+            {"conversation", {{"archiveEnabled", false}}}, {"image", {{"enabled", false}}},
+            {"resources", {{"startupSampleSeconds", 0}}}});
+        write(root / "Config/Profiles/fixture.json", {{"id", "fixture"}, {"displayName", "Original fixture"},
+            {"description", "Original description"}, {"systemPrompt", "Original instructions."}, {"memoryEnabled", false}});
+        write(root / "Config/Profiles/inactive.json", {{"id", "inactive"}, {"displayName", "Inactive fixture"},
+            {"systemPrompt", "Inactive instructions."}, {"memoryEnabled", false}});
+        expect(QDir::setCurrent(directory.path()), "profile save fixture could not select its own root");
+        ReviaWindow window(false, false);
+        window.pollTimer->stop();
+        expect(window.Session().Start(), "profile save fixture session did not start");
+        std::string audienceError;
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Private, "profile-save-private", 0, {}}, audienceError),
+            "profile save approval fixture needs a current private audience");
+        QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+        auto* panel = window.profilePanel;
+        panel->Refresh();
+        auto* selection = qobject_cast<QComboBox*>(panel->findChild<QBoxLayout*>("profileSelectionRow")->itemAt(1)->widget());
+        const auto field = [&](const QString& label)
+        {
+            for (auto* form : panel->findChildren<QFormLayout*>())
+                for (int row = 0; row < form->rowCount(); ++row)
+                {
+                    auto* item = form->itemAt(row, QFormLayout::FieldRole);
+                    auto* input = item ? qobject_cast<QLineEdit*>(item->widget()) : nullptr;
+                    auto* title = input ? qobject_cast<QLabel*>(form->labelForField(input)) : nullptr;
+                    if (title && title->text() == label)
+                        return input;
+                }
+            return static_cast<QLineEdit*>(nullptr);
+        };
+        const auto button = [&](const QString& text)
+        {
+            for (auto* candidate : panel->findChildren<QPushButton*>())
+                if (candidate->text() == text)
+                    return candidate;
+            return static_cast<QPushButton*>(nullptr);
+        };
+        auto* id = field("Profile id");
+        auto* name = field("Display name");
+        auto* description = field("Description");
+        auto* prompt = panel->findChild<QPlainTextEdit*>();
+        auto* memory = panel->findChild<QCheckBox*>("profileMemoryCheck");
+        auto* status = panel->findChild<QLabel*>("profileStatus");
+        auto* save = button("Save profile");
+        expect(selection && id && name && description && prompt && memory && status && save,
+            "profile save regression needs the real profile controls");
+        if (!selection || !id || !name || !description || !prompt || !memory || !status || !save)
+            return;
+        const auto origin = window.Session().Stamp();
+        const auto activePath = root / "Config/Profiles/fixture.json";
+        int settingsRefreshes = 0;
+        SessionBackendDeps deps;
+        deps.session = [&]() -> ReviaSession& { return window.Session(); };
+        deps.runInBackground = [](std::function<void()> work) { work(); };
+        deps.postToUi = [](std::function<void()> work) { work(); };
+        deps.profileDraftDirty = [] { return false; };
+        deps.afterProfileWrite = [&]() { ++settingsRefreshes; };
+        const auto settings = MakeSessionSettingsBackend(std::move(deps));
+        CompanionDescriptor second;
+        std::string error;
+        expect(window.companions->Create("Profile destination", "fixture", second, error),
+            "profile save fixture could not create a synthetic companion");
+        const CompanionPaths secondPaths(root, second);
+        const auto secondPath = secondPaths.Resolve("Config/Profiles/fixture.json");
+        write(secondPath, {{"id", "fixture"}, {"displayName", "Destination fixture"},
+            {"systemPrompt", "Destination instructions."}, {"memoryEnabled", false}});
+        const auto secondBefore = bytes(secondPath);
+        struct PromptProbe final : QObject
+        {
+            std::function<void(QMessageBox&)> shown;
+            bool eventFilter(QObject* watched, QEvent* event) override
+            {
+                auto* box = qobject_cast<QMessageBox*>(watched);
+                if (box && event->type() == QEvent::Show && box->windowTitle() == "Confirm Revia action" && shown)
+                    shown(*box);
+                return false;
+            }
+        } probe;
+        QApplication::instance()->installEventFilter(&probe);
+        bool switchRequested = false;
+        const auto refuseWhileHeld = [&](const std::filesystem::path& path, const bool retire)
+        {
+            QCoreApplication::sendPostedEvents(&window, QEvent::MetaCall);
+            auto& owner = window.Session();
+            const auto runningName = owner.ProfileStudio().activeDisplayName;
+            const auto before = bytes(path);
+            const QString editedName = name->text();
+            const QString editedPrompt = prompt->toPlainText();
+            const QString editedId = id->text();
+            const bool wasNew = !id->isReadOnly();
+            std::mutex mutex;
+            std::condition_variable changed;
+            bool held = false, askNow = false, release = false, fallback = false;
+            bool returned = false, heartbeat = false, heartbeatDelivered = false, promptShown = false;
+            std::atomic<bool> approvalDone = false;
+            revia::actions::ConfirmationChoice choice = revia::actions::ConfirmationChoice::Allow;
+            std::jthread worker([&]()
+            {
+                const auto foreground = ReviaSessionTestAccess::HoldForeground(owner);
+                {
+                    std::unique_lock lock(mutex);
+                    held = true;
+                    changed.notify_all();
+                    changed.wait(lock, [&]() { return askNow || release; });
+                }
+                if (retire)
+                {
+                    revia::actions::ActionRequest request;
+                    request.type = revia::actions::ActionType::ReadTextFile;
+                    request.source = root / "synthetic-profile-approval";
+                    choice = window.ConfirmAction(request, {revia::actions::PolicyVerdict::RequiresConfirmation,
+                        revia::actions::RiskLevel::ReadOnly, "Synthetic profile save approval fixture."});
+                    approvalDone.store(true);
+                }
+                std::unique_lock lock(mutex);
+                changed.wait(lock, [&]() { return release; });
+                held = false;
+            });
+            {
+                std::unique_lock lock(mutex);
+                changed.wait(lock, [&]() { return held; });
+            }
+            std::jthread watchdog([&]()
+            {
+                std::unique_lock lock(mutex);
+                if (!changed.wait_for(lock, std::chrono::seconds(2), [&]() { return release; }))
+                {
+                    fallback = true;
+                    release = true;
+                    window.questions.Abandon();
+                    changed.notify_all();
+                }
+            });
+            std::optional<SettingWrite> settingsResult;
+            settings.write({"profile.memoryEnabled", SettingStore::Profile}, true,
+                [&](SettingWrite result) { settingsResult = std::move(result); });
+            expect(settingsResult && !settingsResult->succeeded && settingsResult->message.contains("middle of a turn") &&
+                       settingsRefreshes == 0, "Settings TrySave control must refuse the real held foreground lock without refresh");
+            probe.shown = [&](QMessageBox& box)
+            {
+                promptShown = box.text().contains("synthetic-profile-approval");
+                QTimer::singleShot(0, &box, [&]()
+                {
+                    window.panelHost->Close(PanelId::Profiles);
+                    switchRequested = true;
+                    window.SwitchCompanion(second.id);
+                });
+            };
+            QMetaObject::invokeMethod(&window, [&]()
+            {
+                {
+                    std::lock_guard lock(mutex);
+                    askNow = true;
+                }
+                changed.notify_all();
+                save->click();
+                returned = true;
+                QMetaObject::invokeMethod(&window, [&]()
+                {
+                    std::lock_guard lock(mutex);
+                    heartbeat = held && !release;
+                    heartbeatDelivered = true;
+                }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while ((!returned || !heartbeatDelivered || (retire && !approvalDone.load())) && std::chrono::steady_clock::now() < until)
+                QCoreApplication::processEvents();
+            bool stillHeld;
+            {
+                std::lock_guard lock(mutex);
+                stillHeld = held && !release && !fallback;
+            }
+            expect(returned && heartbeat && stillHeld, "Profiles Save must return and dispatch a Qt heartbeat before foreground release");
+            expect(status->property("error").toBool() && status->text().contains("middle of a turn"),
+                "Profiles Save must truthfully report busy instead of saving after a foreground wait");
+            expect(panel->HasUnsavedChanges() && name->text() == editedName && prompt->toPlainText() == editedPrompt &&
+                       id->text() == editedId && (!id->isReadOnly()) == wasNew,
+                "a refused Profiles Save must retain exact existing/new draft controls");
+            expect(bytes(path) == before && origin.SameSession(owner.Stamp()),
+                "a refused Profiles Save must preserve exact saved bytes and its session identity");
+            if (retire)
+                expect(promptShown && switchRequested && approvalDone.load() && choice == revia::actions::ConfirmationChoice::Decline,
+                    "busy Profiles Save must let its held turn's queued approval display and retire on close/switch");
+            {
+                std::lock_guard lock(mutex);
+                release = true;
+            }
+            changed.notify_all();
+            worker.join();
+            watchdog.join();
+            if (!retire)
+                expect(owner.ProfileStudio().activeDisplayName == runningName,
+                    "a refused Profiles Save must not mutate the running profile");
+            probe.shown = {};
+            if (!switchRequested && window.questions.IsAbandoned())
+                window.questions.Reopen();
+        };
+        name->setText("Edited active fixture");
+        description->setText("Exact edited description");
+        prompt->setPlainText("Exact edited active instructions.");
+        memory->setChecked(true);
+        refuseWhileHeld(activePath, false);
+        save->click();
+        const auto saved = nlohmann::json::parse(bytes(activePath).toStdString());
+        expect(saved.at("displayName") == "Edited active fixture" && saved.at("description") == "Exact edited description" &&
+                   saved.at("systemPrompt") == "Exact edited active instructions." && saved.at("memoryEnabled") == true &&
+                   window.Session().ProfileStudio().activeDisplayName == "Edited active fixture" &&
+                   !panel->HasUnsavedChanges() && !status->property("error").toBool() && status->text().contains("next reply"),
+            "explicit retry must save the exact active profile and apply it normally");
+        const auto activeSaved = bytes(activePath);
+        selection->setCurrentIndex(selection->findData("inactive"));
+        name->setText("Edited inactive fixture");
+        prompt->setPlainText("Exact inactive instructions.");
+        save->click();
+        const auto inactive = nlohmann::json::parse(bytes(root / "Config/Profiles/inactive.json").toStdString());
+        expect(inactive.at("displayName") == "Edited inactive fixture" && inactive.at("systemPrompt") == "Exact inactive instructions." &&
+                   bytes(activePath) == activeSaved && window.Session().ProfileStudio().activeDisplayName == "Edited active fixture" &&
+                   !panel->HasUnsavedChanges() && !status->text().contains("next reply"),
+            "saving an inactive profile must preserve the running profile and report file-only success");
+        button("New profile")->click();
+        id->setText("new-draft");
+        name->setText("New draft fixture");
+        prompt->setPlainText("Exact new draft instructions.");
+        const auto newPath = root / "Config/Profiles/new-draft.json";
+        refuseWhileHeld(newPath, false);
+        save->click();
+        const auto newSaved = nlohmann::json::parse(bytes(newPath).toStdString());
+        expect(newSaved.at("id") == "new-draft" && newSaved.at("displayName") == "New draft fixture" &&
+                   newSaved.at("systemPrompt") == "Exact new draft instructions." && id->isReadOnly() && !panel->HasUnsavedChanges(),
+            "an explicit new-draft retry must save only after foreground release");
+        selection->setCurrentIndex(selection->findData("fixture"));
+        name->setText("Retired unsaved sentinel");
+        prompt->setPlainText("Retired unsaved instructions sentinel.");
+        window.panelHost->Open(PanelId::Profiles);
+        refuseWhileHeld(activePath, true);
+        if (!switchRequested)
+            window.SwitchCompanion(second.id);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        while (window.switchingCompanion && std::chrono::steady_clock::now() < until)
+            QCoreApplication::processEvents();
+        expect(!window.switchingCompanion && window.Session().Stamp().companionId == second.id && !window.Session().Admits(origin),
+            "profile refusal fixture must switch through the real companion retirement owner");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        expect(bytes(activePath) == activeSaved && bytes(secondPath) == secondBefore &&
+                   !window.profilePanel->HasUnsavedChanges() &&
+                   !window.profilePanel->findChild<QPlainTextEdit*>()->toPlainText().contains("Retired unsaved"),
+            "closing/switching after refusal must not adopt the outgoing draft in either companion");
+        QApplication::instance()->removeEventFilter(&probe);
+        std::cout << "Profile Save held-lock, exact retry, inactive, new-draft and approval close/switch checks finished.\n";
+    }
+
     static void CaptureStudioDetails(ReviaWindow& window, const QString& phase, int& failures)
     {
         const QString renderDirectory = qEnvironmentVariable("REVIA_UI_RENDER_DIR");
@@ -2532,10 +3151,14 @@ struct ReviaWindowStopTests
         QTemporaryDir directory;
         ReviaWindow window(false, false);
         const auto archivePath = std::filesystem::path(directory.path().toStdWString()) / "generated-ui.db";
+        std::string error;
+        expect(window.Session().SetAudience({revia::identity::AudienceKind::Private, "generated-ui-room", 0, {}}, error),
+            "the generated UI fixture could not establish its private audience");
         revia::runtime::ReviaSessionTestAccess::OpenConversationArchive(window.Session(), archivePath, "generated-ui");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
         const auto participant = revia::runtime::ReviaSessionTestAccess::IntroduceTaskSpeaker(window.Session(), "Generated Media Owner");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), false);
         expect(!participant.empty(), "generated continuation fixture could not identify its typist");
-        auto& library = revia::runtime::ReviaSessionTestAccess::Attachments(window.Session());
         const auto outputRoot = std::filesystem::path(directory.path().toStdWString()) / "output";
         std::filesystem::create_directory(outputRoot);
         const auto importImage = [&](const char* job, const QColor color)
@@ -2572,7 +3195,8 @@ struct ReviaWindowStopTests
             receipt.seed = expected.seed;
             receipt.requestedSteps = receipt.totalInferenceSteps = receipt.denoisingSteps = 4;
             receipt.sha256 = revia::audit::ContentDigest(bytes);
-            return library.ImportGeneratedImage(artifact, outputRoot, [] { return true; });
+            return revia::runtime::ReviaSessionTestAccess::Attachments(window.Session()).ImportGeneratedImage(
+                artifact, outputRoot, [] { return true; });
         };
         const auto generated = importImage("generated-ui-red", Qt::red);
         expect(generated.succeeded, "strict generated CPU fixture import failed");
@@ -2616,7 +3240,6 @@ struct ReviaWindowStopTests
         auto* picture = window.canvasPanel->findChild<QLabel*>("canvasImagePreview");
         expect(!picture->pixmap().isNull() && picture->pixmap().toImage().pixelColor(0, 0) == QColor(Qt::red),
             "Canvas did not use verified stored PNG bytes independently of the event's path");
-        std::string error;
         expect(window.Session().ForgetDocument(generated.reference.id, error), "generated image could not be forgotten");
         window.RevalidateAttachmentPresentation();
         expect(window.canvasPanel->GeneratedMediaReferences().empty() && picture->pixmap().isNull(),
@@ -2657,6 +3280,126 @@ struct ReviaWindowStopTests
         revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), false);
         expect(window.Session().ForgetDocument(second.reference.id, error),
             "the generated UI fixture could not clean up its retained artifact");
+
+        window.ClearTranscript();
+        window.canvasPanel->Clear();
+        const auto companionA = window.Session().Stamp().companionId;
+        const auto red = importImage("generated-switch-a-red", Qt::red);
+        expect(red.succeeded, "companion A could not import its generated CPU fixture");
+        if (!red.succeeded)
+            return;
+        const auto currentEvent = [&](const conversationMediaReference& reference)
+        {
+            auto current = event;
+            current.stamp = window.Session().Stamp();
+            current.audienceRevision = window.Session().Audience().revision;
+            current.conversationMediaEpoch = window.Session().ConversationMediaEpoch();
+            current.generatedMediaReference = reference;
+            current.resource = "A generated event must never load this raw path.png";
+            return current;
+        };
+        const auto expectCurrent = [&](const conversationMediaReference& reference, const QColor color)
+        {
+            const auto references = window.canvasPanel->GeneratedMediaReferences();
+            auto* preview = window.canvasPanel->findChild<QLabel*>("canvasImagePreview");
+            expect(references == std::vector{reference} && !preview->pixmap().isNull() &&
+                       preview->pixmap().toImage().pixelColor(0, 0) == color,
+                "selected companion Canvas lost its exact admitted generated reference or fixture pixels after switching");
+            const auto card = std::find_if(window.chatEntries.begin(), window.chatEntries.end(),
+                [&](const auto& entry) { return entry.generatedMediaReferences == std::vector{reference}; });
+            expect(cardCount() == 1 && card != window.chatEntries.end() &&
+                       card->speaker == QString::fromStdString(window.Session().DisplayName()) && card->attachments.size() == 1 &&
+                       card->attachments.front().id == reference.id && !card->attachments.front().thumbnail.isNull() &&
+                       card->attachments.front().thumbnail.pixelColor(0, 0) == color &&
+                       window.chatHistory->toPlainText().contains("Generated:"),
+                "selected companion chat lost its exact generated card identity or fixture pixels after switching");
+        };
+        window.HandleRuntimeEvent(currentEvent(red.reference));
+        present(red.reference);
+        expectCurrent(red.reference, Qt::red);
+        const auto staleA = currentEvent(red.reference);
+        revia::runtime::CompanionDescriptor companionB;
+        expect(window.companions->Create("Generated media companion B", "assistant", companionB, error),
+            "the generated-media switch fixture could not create companion B");
+        if (companionB.id.empty())
+            return;
+        const auto switchTo = [&](const std::string& id)
+        {
+            window.SwitchCompanion(id);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+            while (window.switchingCompanion && std::chrono::steady_clock::now() < deadline)
+            {
+                QCoreApplication::processEvents();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            const bool selected = !window.switchingCompanion && window.Session().Stamp().companionId == id;
+            expect(selected, "the generated-media fixture did not complete its actual companion switch");
+            return selected;
+        };
+        if (!switchTo(companionB.id))
+            return;
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && cardCount() == 0 &&
+                   window.canvasPanel->findChild<QLabel*>("canvasImagePreview")->pixmap().isNull() &&
+                   !window.GeneratedMediaPreview(red.reference),
+            "companion B inherited companion A's private generated media");
+        window.HandleRuntimeEvent(staleA);
+        window.HandleRuntimeEvent(currentEvent(red.reference));
+        present(red.reference);
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && cardCount() == 0,
+            "a stale A event or a current B event/card resolved A's private media");
+        const auto blue = importImage("generated-switch-b-blue", Qt::blue);
+        expect(blue.succeeded, "companion B could not import its generated CPU fixture");
+        if (!blue.succeeded)
+            return;
+        window.HandleRuntimeEvent(currentEvent(blue.reference));
+        present(blue.reference);
+        expectCurrent(blue.reference, Qt::blue);
+        auto badDigest = blue.reference;
+        badDigest.digest = std::string(64, 'f');
+        window.HandleRuntimeEvent(currentEvent(badDigest));
+        present(badDigest);
+        window.HandleRuntimeEvent(staleA);
+        expectCurrent(blue.reference, Qt::blue);
+        const auto staleB = currentEvent(blue.reference);
+        if (!switchTo(companionA))
+            return;
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && cardCount() == 0 &&
+                   window.canvasPanel->findChild<QLabel*>("canvasImagePreview")->pixmap().isNull() &&
+                   !window.GeneratedMediaPreview(blue.reference),
+            "returning to companion A inherited companion B's private generated media");
+        window.HandleRuntimeEvent(staleA);
+        window.HandleRuntimeEvent(staleB);
+        window.HandleRuntimeEvent(currentEvent(blue.reference));
+        present(blue.reference);
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() && cardCount() == 0,
+            "returning to A admitted a retired session event or B's private generated card");
+        window.HandleRuntimeEvent(currentEvent(red.reference));
+        present(red.reference);
+        expectCurrent(red.reference, Qt::red);
+        const auto expired = currentEvent(red.reference);
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), true);
+        expect(window.StartNewChat(error), "the switch fixture could not advance its conversation media epoch");
+        revia::runtime::ReviaSessionTestAccess::MarkStudioStarted(window.Session(), false);
+        window.HandleRuntimeEvent(expired);
+        expect(window.Session().ConversationMediaEpoch() != expired.conversationMediaEpoch &&
+                   window.canvasPanel->GeneratedMediaReferences().empty() && cardCount() == 0 &&
+                   window.canvasPanel->findChild<QLabel*>("canvasImagePreview")->pixmap().isNull(),
+            "an expired media epoch retained or revived generated pixels after companion switching");
+        window.HandleRuntimeEvent(currentEvent(red.reference));
+        present(red.reference);
+        expectCurrent(red.reference, Qt::red);
+        expect(window.Session().ForgetDocument(red.reference.id, error), "the returned companion could not Forget its generated image");
+        window.RevalidateAttachmentPresentation();
+        window.HandleRuntimeEvent(currentEvent(red.reference));
+        expect(window.canvasPanel->GeneratedMediaReferences().empty() &&
+                   window.canvasPanel->findChild<QLabel*>("canvasImagePreview")->pixmap().isNull() &&
+                   std::all_of(window.chatEntries.begin(), window.chatEntries.end(),
+                       [](const auto& entry)
+                       {
+                           return std::all_of(entry.attachments.begin(), entry.attachments.end(),
+                               [](const auto& chip) { return chip.thumbnail.isNull(); });
+                       }),
+            "Forget retained or revived generated Canvas/chat pixels after companion switching");
     }
 
     static void RunForgottenTranscriptMediaUi(int& failures)
@@ -3542,6 +4285,8 @@ int RunPolicySuite(int, char**)
         ReviaWindowStopTests::RunAttachmentLifecycleUi(window, failures);
         ReviaWindowStopTests::RunDocumentImagePreviewUi(window, failures);
         ReviaWindowStopTests::RunForgottenTranscriptMediaUi(failures);
+        ReviaWindowStopTests::RunGeneratedCanvasDefaultDenyUi(failures);
+        ReviaWindowStopTests::RunGeneratedMediaUi(failures);
         ReviaWindowStopTests::RunConfirmationAudienceUi(window, failures);
         ReviaWindowStopTests::RunConversationQualityUi(window, failures);
         ReviaWindowStopTests::RunMemoryRevisionUi(window, failures);
@@ -3551,6 +4296,8 @@ int RunPolicySuite(int, char**)
         ReviaWindowStopTests::RunHealthUiAndLayout(window, failures);
         ReviaWindowStopTests::RunCompanionStudio(window, failures);
     }
+    ReviaWindowStopTests::RunProfileSaveUi(failures);
+    ReviaWindowStopTests::RunVoiceAssignmentUi(failures);
     // Last, on a window of its own: it ends that window's event loop for good.
     ReviaWindowStopTests::RunShutdownUi(failures);
     if (failures == 0)
@@ -3560,6 +4307,105 @@ int RunPolicySuite(int, char**)
 }
 
 REVIA_DESKTOP_SUITE("policy", RunPolicySuite);
+
+namespace
+{
+int RunTestCatalogSlashSuite(int, char**)
+{
+    using namespace revia::runtime;
+    int failures = 0;
+    const auto expect = [&](const bool condition, const char* message)
+    {
+        if (!condition)
+        {
+            std::cerr << "FAIL: " << message << '\n';
+            ++failures;
+        }
+    };
+    const QByteArray previousEnabled = qgetenv("REVIA_TESTS_ENABLED");
+    const bool hadEnabled = qEnvironmentVariableIsSet("REVIA_TESTS_ENABLED");
+    struct RestoreEnvironment
+    {
+        QByteArray value;
+        bool present;
+        ~RestoreEnvironment()
+        {
+            if (present)
+                qputenv("REVIA_TESTS_ENABLED", value);
+            else
+                qunsetenv("REVIA_TESTS_ENABLED");
+        }
+    } restore{previousEnabled, hadEnabled};
+    qunsetenv("REVIA_TESTS_ENABLED");
+
+    // State-only admission: no session Start, window, model, audio or device host.
+    ReviaSession session;
+    ReviaSessionTestAccess::DisableQualityFixtureEmbedding(session);
+    ReviaSessionTestAccess::MarkStudioStarted(session, true);
+    const auto beforeContext = ReviaSessionTestAccess::WorkingContext(session);
+    const auto menu = session.Submit("/tests");
+    expect(menu.succeeded && !menu.fromAssistant && menu.text.find("/tests quick") != std::string::npos &&
+        menu.text.find("/tests status") != std::string::npos && menu.text.find("/tests catalog") != std::string::npos &&
+        menu.text.find("disabled") != std::string::npos && menu.text.size() < 4096,
+        "typed /tests must return the local menu and truthful disabled developer dependency state");
+    expect(!menu.taskContract && menu.stamp.sessionId == session.Stamp().sessionId,
+        "test catalog replies must keep their session stamp without entering a conversational task");
+    const auto status = session.Submit("/tests status");
+    expect(status.succeeded && status.text.find("disabled") != std::string::npos && status.text.size() < 2048,
+        "test catalog status must remain available without developer binaries");
+    const auto catalog = session.Submit("/tests catalog");
+    expect(catalog.succeeded && catalog.text.find("Catalog page 1/1") != std::string::npos &&
+        catalog.text.find("No catalog is available") != std::string::npos,
+        "an explicit catalog page must report unavailable inventory without inventing modules");
+    const auto quick = session.Submit("/tests quick");
+    expect(!quick.succeeded && quick.text.find("disabled") != std::string::npos,
+        "quick tests must not claim to run when developer configuration is disabled");
+    const auto policyGroup = session.Submit("/tests run future_ui4");
+    expect(!policyGroup.succeeded && !policyGroup.fromAssistant && !policyGroup.taskContract &&
+        policyGroup.text.find("disabled") != std::string::npos,
+        "literal policy group requests must remain local and truthfully blocked without developer configuration");
+    const auto details = session.Submit("/tests details");
+    expect(details.succeeded && details.text.find("No test run") != std::string::npos,
+        "test details must distinguish no evidence from a passing run");
+    const auto cancelled = session.Submit("/tests cancel");
+    expect(cancelled.succeeded && cancelled.text.find("No test work") != std::string::npos,
+        "cancelling an idle catalog must report that no work is active");
+    for (const std::string input : {"/tests run .*", "/tests run quick; calc.exe",
+             "/tests details C:/private/results.json", "/tests source C:/private", "/tests run quick extra",
+             "/tests catalog 0", "/tests catalog -1", "/tests catalog 1;calc.exe", "/tests catalog C:/private",
+             "/tests catalog 184467440737095516160"})
+    {
+        const auto rejected = session.Submit(input);
+        expect(!rejected.succeeded && rejected.text.find("Usage:") != std::string::npos,
+            "test commands must reject arbitrary selectors, shell text, paths and extra arguments locally");
+    }
+    const auto nonTyped = session.Submit("/tests quick", revia::agents::InputSource::Proposal);
+    expect(!nonTyped.succeeded && nonTyped.text.find("typed local") != std::string::npos,
+        "model proposals must not enter the developer test launcher");
+    expect(!session.HasRunningTask() && session.State() == RuntimeState::Offline &&
+        ReviaSessionTestAccess::WorkingContext(session).size() == beforeContext.size(),
+        "test menu, status and refusals must not start tasks, change state or enter private chat context");
+    session.RequestStop();
+    ReviaSessionTestAccess::MarkStudioStarted(session, false);
+    session.Stop();
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("test-catalog-slash", RunTestCatalogSlashSuite);
+
+namespace
+{
+int RunVoiceAssignmentSuite(int, char**)
+{
+    int failures = 0;
+    ReviaWindowStopTests::RunVoiceAssignmentUi(failures);
+    std::cout << "Voice assignment UI regression failures: " << failures << '\n';
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("voice-assignment", RunVoiceAssignmentSuite);
 
 namespace
 {

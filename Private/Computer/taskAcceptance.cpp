@@ -71,8 +71,12 @@ const browser::BrowserElement* MatchOriginalBrowserField(
 }
 
 goals::CompletionEvidence VerifyExactBrowserPlacement(
-    const TaskContent& task, const goals::Goal& goal, const browser::BrowserReceipt& receipt)
+    const TaskContent& task, const goals::Goal& goal, const browser::BrowserReceipt& receipt, const TaskAcceptanceContract& acceptance)
 {
+    if (!acceptance.placementOnly || acceptance.surface != TaskAcceptanceSurface::Browser || !acceptance.application.empty())
+        return {false, "The original whole request has no supported browser-only placement criterion; remaining work is unresolved."};
+    if (acceptance.browserOrigin.empty() || acceptance.browserOrigin != browser::UrlOrigin(receipt.url))
+        return {false, "Browser evidence did not establish the original requested origin."};
     std::string refusal;
     const auto* field = MatchOriginalBrowserField(task, receipt, refusal);
     if (!field)
@@ -99,13 +103,18 @@ goals::CompletionEvidence VerifyExactBrowserPlacement(
 }
 
 goals::CompletionEvidence VerifyExactContentPlacement(
-    const TaskContent& task, const goals::Goal& goal, const ComputerObservation& observation, const bool currentPlacementVerified)
+    const TaskContent& task, const goals::Goal& goal, const ComputerObservation& observation, const bool currentPlacementVerified, const TaskAcceptanceContract& acceptance)
 {
     if (task.requirement != ContentRequirement::ExactUserContent || task.value.empty())
         return {false, "This request has no supported whole-task acceptance criterion. Verified intermediate steps do not establish the "
                        "requested outcome."};
     if (task.submissionRequested)
         return {false, "The request includes submission. Current draft text cannot establish that the intended destination received it."};
+    if (!acceptance.placementOnly) return {false, acceptance.detail};
+    if (acceptance.surface != TaskAcceptanceSurface::Native)
+        return {false, "The original request requires browser origin evidence; native placement leaves remaining work unresolved."};
+    if (!acceptance.MatchesApplication(observation.screen.foregroundApplication))
+        return {false, "The original requested application context is unverified; remaining work is unresolved."};
     if (task.destination.empty())
         return {false, "The original request did not identify a destination that can be independently verified."};
     if (!observation.Available())

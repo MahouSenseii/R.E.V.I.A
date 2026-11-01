@@ -304,13 +304,27 @@ void TestATaskAsksNothingFurtherOnceItsContentHasLanded()
     const ComputerTaskContext context =
         Screen({Edit("c1", "Compose"), Button("b1", "Send")});
 
-    const TaskProgress progress =
-        DeriveTaskProgress(Inputs(content, context, payload, /*placed=*/true));
+    const auto acceptance = DeriveTaskAcceptance("put \"dinner at eight\" in the Compose box. Do not send anything.");
+    auto inputs = Inputs(content, context, payload, /*placed=*/true);
+    inputs.acceptance = &acceptance;
+    const TaskProgress progress = DeriveTaskProgress(inputs);
     Check(progress.phase == TaskPhase::Complete,
         "A placement task whose content had landed did not read as finished, so the run "
         "would pay a model call to be told what the runtime already knew.");
     Check(!progress.derivable,
         "Completion produced a subgoal. There is nothing left to do.");
+    for (const std::string& suffix : {std::string(" and open the project folder"), std::string(" then open the project folder"),
+             std::string(" also open the project folder"), std::string("; open the project folder")})
+    {
+        const std::string request = "put \"dinner at eight\" into Compose" + suffix;
+        const auto multi = ExtractTaskContent(request);
+        const auto contract = DeriveTaskAcceptance(request);
+        auto remaining = Inputs(multi, context, payload, true);
+        remaining.acceptance = &contract;
+        const auto unresolved = DeriveTaskProgress(remaining);
+        Check(unresolved.phase != TaskPhase::Complete && unresolved.contentPlaced && !unresolved.detail.empty(),
+            "ACT-1 progression lost remaining work after exact placement: " + suffix);
+    }
 }
 
 // ---- what the runtime refuses to derive ----

@@ -125,9 +125,33 @@ void TestAnOpinionRecitedOnRequestIsNotReviasOwn()
 // self-opinion past the transient gate. The exception must not apply to a recitation,
 // and this reaches that decision through llamaCppService::EvaluateMemory itself rather
 // than through a helper.
+struct StopFixtureServer
+{
+    httplib::Server& server;
+    ~StopFixtureServer()
+    {
+        server.stop();
+    }
+};
+
 void TestTheTransientGateDoesNotHoldOpenForARecitedOpinion()
 {
-    const llamaCppService service;
+    // An owned empty HTTP fixture returns 404, without contacting a normal model port.
+    httplib::Server server;
+    const int port = server.bind_to_any_port("127.0.0.1");
+    Check(port > 0, "Could not bind the transient memory fixture.");
+    std::jthread listener([&server] { server.listen_after_bind(); });
+    StopFixtureServer stopBeforeJoin{server};
+    for (int attempt = 0; attempt < 500 && !server.is_running(); ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    llamaCppService service;
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = port;
+    settings.bAutoStartServer = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    service.ApplySettings(settings, embeddings, aiProfile{});
     const std::string greeting = "hey";
     const std::string recited = "I hate jazz.";
 
@@ -192,6 +216,7 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
     const int port = server.bind_to_any_port("127.0.0.1");
     Check(port > 0, "Could not bind the memory classifier fixture.");
     std::jthread listener([&server] { server.listen_after_bind(); });
+    StopFixtureServer stopBeforeJoin{server};
     for (int attempt = 0; attempt < 500 && !server.is_running(); ++attempt)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 

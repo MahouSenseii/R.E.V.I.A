@@ -181,9 +181,11 @@ void TestArchiveEmbeddingPersistenceAndRetraction()
         "A delayed vector was attached to a regenerated turn with a reused ID.");
     Check(archive.SaveEmbedding(replacement, "fixture-model", {1.0F, 0.0F}) && archive.SaveEmbedding(second, "fixture-model", {1.0F, 0.0F}),
         "Replacement vectors failed.");
-    Check(archive.ForgetSession("replace") == 1 && VectorCount(path) == 1, "Session forgetting left archive vectors behind.");
+    const auto sessionForget = archive.ForgetSession("replace");
+    Check(sessionForget.Succeeded() && sessionForget.turnsRemoved == 1 && VectorCount(path) == 1, "Session forgetting left archive vectors behind.");
     Check(!archive.SaveEmbedding(replacement, "fixture-model", {1.0F, 0.0F}), "Forgotten turn was resurrected by vector backfill.");
-    Check(archive.Forget() == 1 && VectorCount(path) == 0, "Full archive forgetting left vectors behind.");
+    const auto fullForget = archive.Forget();
+    Check(fullForget.Succeeded() && fullForget.turnsRemoved == 1 && VectorCount(path) == 0, "Full archive forgetting left vectors behind.");
     Check(archive.ScanMissingEmbeddings("fixture-model", 0).entries.empty(), "Forgotten turns reappeared in backfill.");
     Check(!ConversationArchive(directory.root.string()).ScanMissingEmbeddings("fixture-model", 0).error.empty(),
         "An unavailable archive was reported as an empty successful backfill.");

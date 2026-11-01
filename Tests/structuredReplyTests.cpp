@@ -9,6 +9,7 @@
 #include <httplib.h>
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
@@ -122,15 +123,35 @@ class WireBackend
             {
                 std::lock_guard lock(mutex);
                 requests.push_back(nlohmann::json::parse(request.body));
-                if (!requests.back().value("stream", false))
+                if (httpStatus != 200)
                 {
-                    response.set_content(plainBody, "application/json");
+                    response.status = httpStatus;
+                    response.set_content("fixture HTTP failure", "text/plain");
+                    return;
+                }
+                if (directBody || !requests.back().value("stream", false))
+                {
+                    response.set_content(plainBody, plainContentType);
                     return;
                 }
                 std::string body;
                 for (const auto& event : events)
                     body += "data: " + event.dump() + "\n\n";
-                response.set_content(body + "data: [DONE]\n\n", "text/event-stream");
+                if (sendDone)
+                    body += "data: [DONE]\n\n";
+                body += trailing;
+                if (abortTransport)
+                {
+                    response.set_content_provider(body.size() + 128, "text/event-stream",
+                        [body](std::size_t offset, std::size_t, httplib::DataSink& sink)
+                        {
+                            if (offset == 0)
+                                sink.write(body.data(), body.size());
+                            return false;
+                        });
+                    return;
+                }
+                response.set_content(body, "text/event-stream");
             });
         server.new_task_queue = [] { return new httplib::ThreadPool(1); };
         port = server.bind_to_any_port("127.0.0.1");
@@ -156,6 +177,26 @@ class WireBackend
         std::lock_guard lock(mutex);
         events = std::move(scripted);
         plainBody = std::move(plain);
+        plainContentType = "application/json";
+        sendDone = true;
+        httpStatus = 200;
+        abortTransport = directBody = false;
+        trailing.clear();
+    }
+    void End(const bool done, const int status = 200, const bool abort = false, std::string tail = {})
+    {
+        std::lock_guard lock(mutex);
+        sendDone = done;
+        httpStatus = status;
+        abortTransport = abort;
+        trailing = std::move(tail);
+    }
+    void Direct(std::string body, std::string contentType = "application/json")
+    {
+        std::lock_guard lock(mutex);
+        directBody = true;
+        plainBody = std::move(body);
+        plainContentType = std::move(contentType);
     }
     std::vector<nlohmann::json> Requests()
     {
@@ -169,7 +210,13 @@ class WireBackend
     std::jthread worker;
     std::mutex mutex;
     std::vector<nlohmann::json> events;
+    bool sendDone = true;
+    int httpStatus = 200;
+    bool abortTransport = false;
+    bool directBody = false;
+    std::string trailing;
     std::string plainBody;
+    std::string plainContentType = "application/json";
     std::vector<nlohmann::json> requests;
 };
 
@@ -1150,6 +1197,553 @@ void TestOnlyTheKeyedServerReviaStartedIsTrusted()
         "An embedding server that accepts any key was trusted with memory queries.");
 }
 
+
+namespace
+{
+// Missing terminal admission would make partial text/JSON, tools or memory look final.
+// Collect independent failures so the RED receipt identifies every owner boundary.
+class TerminationChecks
+{
+  public:
+    template <typename Test> void Run(const std::string& name, Test test)
+    {
+        try
+        {
+            test();
+            std::cout << "RUN3 PASS " << name << '\n';
+        }
+        catch (const std::exception& error)
+        {
+            failures.push_back(name + ": " + error.what());
+            std::cerr << "RUN3 FAIL " << failures.back() << '\n';
+        }
+    }
+    void Finish() const { Check(failures.empty(), "RUN3 terminal admission failures: " + std::to_string(failures.size())); }
+  private:
+    std::vector<std::string> failures;
+};
+
+void TestNativeTerminationAdmission()
+{
+    using Json = nlohmann::json;
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "termination.db").string());
+    Configure(service, backend.port);
+    TerminationChecks checks;
+    struct Ending { const char* name; const char* reason; bool done; bool success; };
+    const Ending endings[] = {{"no-terminal", "", false, false}, {"stop-only", "stop", false, true},
+        {"done-only", "", true, true}, {"stop-and-done", "stop", true, true},
+        {"unknown-only", "unexpected", false, false}, {"unknown-and-done", "unexpected", true, false},
+        {"tool-reason-without-calls", "tool_calls", true, false}};
+    for (const bool structured : {false, true})
+    {
+        for (const auto& ending : endings)
+        {
+            checks.Run(std::string(structured ? "json/" : "text/") + ending.name, [&]
+            {
+                const std::string answer = structured ? R"({"x":1})" : "A short answer.";
+                backend.Script({WireBackend::Delta("content", answer, ending.reason[0] ? Json(ending.reason) : Json(nullptr))});
+                backend.End(ending.done);
+                std::string emitted;
+                const auto output = service.GenerateResponse({{"user", structured ? "Return JSON with key x." : "Explain static linking."}},
+                    {}, [&](const auto& delta) { emitted += delta; });
+                Check(output.bSuccess == ending.success, "Unexpected completed reply: " + output.reason);
+                if (ending.success)
+                    Check(output.response == answer && emitted == answer && output.exchange,
+                        "Completed reply or its held tail/provenance was lost.");
+                else
+                    Check(emitted.empty() && output.toolCalls.empty() && !output.bShouldRemember && !output.exchange &&
+                              output.reason.find("interrupt") != std::string::npos,
+                        "Interrupted short reply released a held tail, calls, capture or missing interruption status.");
+            });
+        }
+    }
+    for (const bool done : {false, true})
+    {
+        checks.Run(std::string("ordinary-length/") + (done ? "done" : "reason-only"), [&]
+        {
+            backend.Script({WireBackend::Delta("content", "One complete sentence. A dangling clause", "length")});
+            backend.End(done);
+            const auto output = service.GenerateResponse({{"user", "Explain static linking."}});
+            Check(output.bSuccess && output.response == "One complete sentence." && output.reason == "backend_output_token_limit",
+                "The deliberate ordinary length-prefix policy changed.");
+        });
+        checks.Run(std::string("structured-length/") + (done ? "done" : "reason-only"), [&]
+        {
+            backend.Script({WireBackend::Delta("content", R"({"x":1})", "length")});
+            backend.End(done);
+            std::string emitted;
+            const auto output = service.GenerateResponse({{"user", "Return JSON with key x."}}, {}, [&](const auto& delta) { emitted += delta; });
+            Check(!output.bSuccess && emitted.empty() && !output.exchange && output.reason == "backend_output_token_limit",
+                "Length-limited JSON became final or lost its explicit token-limit status.");
+        });
+    }
+    checks.Run("conflicting-reasons", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "length"), WireBackend::Delta("content", "", "stop")});
+        const auto output = service.GenerateResponse({{"user", "Explain static linking."}});
+        Check(!output.bSuccess && output.toolCalls.empty(), "The last finish reason concealed a contradictory earlier terminal reason.");
+    });
+    checks.Run("payload-after-done", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        backend.End(true, 200, false, "data: " + WireBackend::Delta("content", "More.").dump() + "\n\n");
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess, "Post-terminal payload became a completed reply.");
+    });
+    checks.Run("unterminated-event-after-stop", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        backend.End(false, 200, false, "data: {\"choices\":[");
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess, "An incomplete SSE event was ignored at success.");
+    });
+    checks.Run("empty-completed", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "", "stop")});
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess, "An empty completed stream became an answer.");
+    });
+    checks.Run("http-error", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        backend.End(true, 503);
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess, "HTTP failure became an answer.");
+    });
+    checks.Run("transport-abort-despite-terminal", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        backend.End(true, 200, true);
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess, "Truncated transport became an answer.");
+    });
+    checks.Run("cancel-during-text", [&]
+    {
+        backend.Script({WireBackend::Delta("content", std::string(300, 'a'), "stop")});
+        std::stop_source cancel;
+        const auto output = service.GenerateResponse({{"user", "Explain static linking."}}, cancel.get_token(),
+            [&](const auto&) { cancel.request_stop(); });
+        Check(!output.bSuccess && output.toolCalls.empty() && !output.exchange,
+            "A cancellation observed during content still completed/captured the reply.");
+    });
+    checks.Run("cancel-at-final-delivery", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        std::stop_source cancel;
+        const auto output = service.GenerateResponse({{"user", "Explain static linking."}}, cancel.get_token(),
+            [&](const auto&) { cancel.request_stop(); });
+        Check(!output.bSuccess && !output.exchange, "A reply cancelled at final delivery was still captured as completed.");
+    });
+    checks.Run("malformed-event-before-done", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", "stop")});
+        backend.End(false, 200, false, "data: {broken}\n\ndata: [DONE]\n\n");
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess,
+            "Malformed terminal payload was ignored before success.");
+    });
+    checks.Run("approved-prefix-not-final-tail", [&]
+    {
+        messageRouter router((directory.root / "prefix.db").string());
+        llmSettings settings;
+        settings.host = "127.0.0.1"; settings.port = backend.port; settings.modelName = "structured-reply-fixture";
+        settings.bAutoStartServer = settings.bAutoMaxTokens = settings.bVisionEnabled = false;
+        embeddingSettings embeddings; embeddings.bEnabled = embeddings.bAutoStartServer = false;
+        aiProfile profile; profile.bMemoryEnabled = false;
+        router.ApplyLLMSettings(settings, embeddings, profile);
+        const std::string answer = "Static linking copies the required code into the executable. "
+            "The linker resolves each symbol against its input object files. FINAL_HELD_TAIL";
+        backend.Script({WireBackend::Delta("content", answer)});
+        backend.End(false);
+        responseFilterSettings filters; filters.bAiReviewEnabled = false;
+        std::string emitted;
+        const auto output = revia::agents::ConversationAgent{}.Execute(router, "Explain static linking.",
+            {{"user", "Explain static linking."}}, filters, {}, {}, [&](const auto& delta) { emitted += delta; });
+        Check(!output.bSuccess && output.bWasStreamed && !emitted.empty() && answer.starts_with(emitted) &&
+                  emitted.find("FINAL_HELD_TAIL") == std::string::npos,
+            "An approved prefix was replayed, lost, or finalized with the interrupted tail.");
+    });
+    for (const bool structured : {false, true})
+    {
+        checks.Run(structured ? "review-empty-reason/json-done" : "review-empty-reason/text-done", [&]
+        {
+            backend.Script({WireBackend::Delta("content", structured ? R"({"x":1})" : "A short answer.", Json(""))});
+            std::string emitted;
+            const auto output = service.GenerateResponse({{"user", structured ? "Return JSON with key x." : "Explain static linking."}},
+                {}, [&](const auto& delta) { emitted += delta; });
+            Check(!output.bSuccess && emitted.empty() && output.toolCalls.empty() && !output.exchange,
+                "An explicitly empty finish reason was rescued by DONE and released text/capture.");
+        });
+    }
+    for (const bool done : {false, true})
+    {
+        checks.Run(std::string("review-empty-reason/text-then-stop/") + (done ? "done" : "reason-only"), [&]
+        {
+            backend.Script({WireBackend::Delta("content", "A short answer.", Json("")), WireBackend::Delta("content", "", "stop")});
+            backend.End(done);
+            std::string emitted;
+            const auto output = service.GenerateResponse({{"user", "Explain static linking."}}, {},
+                [&](const auto& delta) { emitted += delta; });
+            Check(!output.bSuccess && emitted.empty() && !output.exchange,
+                "A later recognized reason erased an explicitly empty terminal observation.");
+        });
+    }
+    checks.Run("non-string-finish-reason", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.", 17)});
+        Check(!service.GenerateResponse({{"user", "Explain static linking."}}).bSuccess,
+            "Malformed finish_reason was accepted as a DONE-only completion.");
+    });
+    checks.Finish();
+}
+
+
+void TestToolTerminalCompatibility()
+{
+    using Json = nlohmann::json;
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "tool-terminal.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1"; settings.port = backend.port; settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 32768; settings.bAutoStartServer = settings.bAutoMaxTokens = settings.bVisionEnabled = false;
+    embeddingSettings embeddings; embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile; profile.bMemoryEnabled = false;
+    service.ApplySettings(settings, embeddings, profile);
+    revia::llm::ToolExchange exchange;
+    exchange.definitions.push_back({"web_search", "Search synthetic data.",
+        R"({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false})"});
+    TerminationChecks checks;
+    for (const bool allow : {false, true})
+    {
+        exchange.allowCalls = allow;
+        for (const std::string reason : {"", "stop", "tool_calls", "length", "unexpected"})
+        {
+            for (const bool done : {false, true})
+            {
+                checks.Run(std::string(allow ? "allowed/" : "ignored/") + (reason.empty() ? "no-reason" : reason) +
+                    (done ? "/done" : "/no-done"), [&]
+                {
+                    const Json call = {{"choices", Json::array({{{"delta", {{"tool_calls", Json::array({
+                        {{"index", 0}, {"id", "call_fixture"}, {"type", "function"},
+                         {"function", {{"name", "web_search"}, {"arguments", R"({"query":"synthetic"})"}}}}})}}},
+                        {"finish_reason", reason.empty() ? Json(nullptr) : Json(reason)}}})}};
+                    backend.Script({WireBackend::Delta("content", "Checking both."), call});
+                    backend.End(done);
+                    std::string emitted;
+                    const auto output = service.GenerateResponse({{"user", "Check both synthetic examples."}}, {},
+                        [&](const auto& delta) { emitted += delta; }, false, revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+                    const bool completed = reason == "stop" || reason == "tool_calls" || (reason.empty() && done);
+                    const bool lengthText = !allow && reason == "length";
+                    Check(output.bSuccess == (completed || lengthText), "Unexpected tool/text classification: " + output.reason);
+                    if (completed && allow)
+                        Check(output.toolCalls.size() == 1 && output.toolCalls[0].arguments == R"({"query":"synthetic"})",
+                            "A supported terminal form lost the eligible tool proposal.");
+                    else
+                        Check(output.toolCalls.empty(), "Ignored, interrupted or limited calls were returned.");
+                    if (completed && !allow)
+                        Check(output.response == "Checking both." && output.exchange && output.exchange->requestedTools &&
+                                  emitted == "Checking both.", "Last-step fallback lost its text or raw requested-tools provenance.");
+                    if (reason == "length")
+                        Check(output.reason == "backend_output_token_limit", "A tool-bearing output limit was not explicit.");
+                    if (!completed && !lengthText)
+                        Check(emitted.empty() && !output.exchange, "An unsuccessful step released its held text/capture.");
+                });
+            }
+        }
+    }
+    for (const bool allow : {false, true})
+    {
+        exchange.allowCalls = allow;
+        for (const bool laterValid : {false, true})
+        {
+            checks.Run(std::string("review-empty-reason/") + (allow ? "allowed" : "ignored") +
+                (laterValid ? "/then-tool-calls" : "/done"), [&]
+            {
+                const Json call = {{"choices", Json::array({{{"delta", {{"tool_calls", Json::array({
+                    {{"index", 0}, {"id", "call_empty"}, {"type", "function"},
+                     {"function", {{"name", "web_search"}, {"arguments", R"({"query":"synthetic"})"}}}}})}}},
+                    {"finish_reason", ""}}})}};
+                std::vector<Json> events{WireBackend::Delta("content", "Checking both."), call};
+                if (laterValid)
+                    events.push_back(WireBackend::Delta("content", "", "tool_calls"));
+                backend.Script(std::move(events));
+                std::string emitted;
+                const auto output = service.GenerateResponse({{"user", "Check both synthetic examples."}}, {},
+                    [&](const auto& delta) { emitted += delta; }, false, revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+                Check(!output.bSuccess && output.toolCalls.empty() && emitted.empty() && !output.exchange,
+                    "An explicitly empty tool finish reason was rescued into a completed step/text fallback.");
+            });
+        }
+    }
+    checks.Run("ignored/call-only", [&]
+    {
+        exchange.allowCalls = false;
+        backend.Script({Json{{"choices", Json::array({{{"delta", {{"tool_calls", Json::array({
+            {{"index", 0}, {"function", {{"name", "web_search"}, {"arguments", "{}"}}}}})}}}, {"finish_reason", "tool_calls"}}})}}});
+        const auto output = service.GenerateResponse({{"user", "Check both synthetic examples."}}, {}, {}, false,
+            revia::llm::PrivateMemoryAccess::ProfileSetting, {}, &exchange);
+        Check(!output.bSuccess && output.toolCalls.empty(), "A call-only last step became an answer.");
+    });
+    checks.Finish();
+}
+
+void TestBackgroundTerminationAdmission()
+{
+    using Json = nlohmann::json;
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "background-terminal.db").string());
+    Configure(service, backend.port);
+    TerminationChecks checks;
+    const std::string answer = R"({"steps":[],"settled":"A bounded conclusion."})";
+    for (const bool direct : {false, true})
+    {
+        for (const auto& reason : {std::string(), std::string("stop"), std::string("unexpected"), std::string("tool_calls")})
+        {
+            checks.Run(std::string(direct ? "background-json/" : "background-sse/") +
+                (reason.empty() ? direct ? "complete-envelope" : "no-terminal" : reason), [&]
+            {
+                backend.Script({WireBackend::Delta("content", answer, reason.empty() ? Json(nullptr) : Json(reason))});
+                backend.End(false);
+                if (direct)
+                    backend.Direct(Json{{"choices", Json::array({{{"message", {{"content", answer}}},
+                        {"finish_reason", reason.empty() ? Json(nullptr) : Json(reason)}}})}}.dump());
+                const auto output = service.Deliberate("A bounded synthetic question.");
+                Check(output.bSuccess == (reason == "stop" || (direct && reason.empty())),
+                    "Background transport did not preserve its supported local completion form: " + output.reason);
+            });
+        }
+    }
+    checks.Run("background-done-only", [&]
+    {
+        backend.Script({WireBackend::Delta("content", answer)});
+        Check(service.Deliberate("A bounded synthetic question.").bSuccess, "Supported DONE-only background completion was rejected.");
+    });
+    checks.Run("memory-incomplete-valid-json", [&]
+    {
+        backend.Script({WireBackend::Delta("content",
+            R"({"shouldRemember":true,"category":"preference","summary":"The user prefers concise answers.","subject":"speaker","reason":"Stated."})")});
+        backend.End(false);
+        const auto output = service.EvaluateMemory("I prefer concise answers from now on.", "Understood.",
+            revia::agents::ResponseProvenance::NormalGeneration);
+        Check(!output.bSuccess && !output.bShouldRemember && output.summary.empty(),
+            "Incomplete but valid classifier JSON was accepted as durable memory.");
+    });
+    const Json completeEnvelope = {{"choices", Json::array({{{"message", {{"content", answer}}}}})}};
+    checks.Run("background/direct-envelope-wrong-content-type", [&]
+    {
+        backend.Script({}); backend.Direct(completeEnvelope.dump(), "text/plain");
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A markerless non-JSON response was mislabeled a complete JSON message.");
+    });
+    checks.Run("background/direct-envelope-content-type-parameters", [&]
+    {
+        backend.Script({}); backend.Direct(completeEnvelope.dump(), "Application/JSON; charset=utf-8");
+        Check(service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A complete application/json envelope lost compatible media-type parameters.");
+    });
+    checks.Run("background/direct-envelope-malformed-reason", [&]
+    {
+        auto envelope = completeEnvelope; envelope["choices"][0]["finish_reason"] = 17;
+        backend.Script({}); backend.Direct(envelope.dump());
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A complete direct envelope concealed a malformed provided finish reason.");
+    });
+    checks.Run("background/direct-envelope-raw-calls", [&]
+    {
+        auto envelope = completeEnvelope;
+        envelope["choices"][0]["message"]["tool_calls"] = Json::array({{{"function", {{"name", "unsupported"}, {"arguments", "{}"}}}}});
+        backend.Script({}); backend.Direct(envelope.dump());
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "Direct message-envelope compatibility admitted unsupported background calls.");
+    });
+    checks.Run("background/direct-incomplete-json", [&]
+    {
+        backend.Script({}); backend.Direct("{\"choices\":[{\"message\":");
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "An incomplete application/json body became a completed envelope.");
+    });
+    checks.Run("background/direct-delta-is-not-message", [&]
+    {
+        backend.Script({}); backend.Direct(WireBackend::Delta("content", answer).dump());
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A JSON-encoded delta was mistaken for a complete nonstreaming message.");
+    });
+    checks.Run("background/sse-under-json-header-still-needs-terminal", [&]
+    {
+        backend.Script({}); backend.Direct("data: " + WireBackend::Delta("content", answer).dump() + "\n\n");
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "SSE reconstructed without markers acquired the direct JSON completion exception.");
+    });
+    checks.Run("review-empty-reason/background-sse-done", [&]
+    {
+        backend.Script({WireBackend::Delta("content", answer, Json(""))});
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "Background SSE accepted an explicitly empty finish reason plus DONE.");
+    });
+    checks.Run("review-empty-reason/background-sse-then-stop", [&]
+    {
+        backend.Script({WireBackend::Delta("content", answer, Json("")), WireBackend::Delta("content", "", "stop")});
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "Background SSE forgot an empty reason when a recognized reason arrived later.");
+    });
+    checks.Run("review-empty-reason/direct-envelope", [&]
+    {
+        auto envelope = completeEnvelope;
+        envelope["choices"][0]["finish_reason"] = "";
+        backend.Script({}); backend.Direct(envelope.dump());
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A complete direct envelope rescued an explicitly empty finish reason.");
+    });
+    checks.Run("background/non-string-finish-reason", [&]
+    {
+        backend.Script({WireBackend::Delta("content", answer, 17)});
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "Malformed background finish_reason was accepted as a DONE-only completion.");
+    });
+    checks.Run("background/conflict-with-whitespace-trailer", [&]
+    {
+        backend.Script({WireBackend::Delta("content", answer, "length"), WireBackend::Delta("content", "", "stop")});
+        backend.End(true, 200, false, "   ");
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "An EOF whitespace trailer cleared an earlier contradictory terminal state.");
+    });
+    checks.Run("background/unsupported-call-on-length", [&]
+    {
+        backend.Script({Json{{"choices", Json::array({{{"delta", {{"content", answer}, {"tool_calls", Json::array({
+            {{"index", 0}, {"function", {{"name", "unsupported"}, {"arguments", "{}"}}}}})}}}, {"finish_reason", "length"}}})}}});
+        Check(!service.Deliberate("A bounded synthetic question.").bSuccess,
+            "A background owner accepted unsupported calls through its length policy.");
+    });
+    checks.Run("vision/incomplete-completion", [&]
+    {
+        const auto image = directory.root / "synthetic-frame.png";
+        std::ofstream(image, std::ios::binary) << "synthetic-frame-bytes";
+        backend.Script({WireBackend::Delta("content", "A synthetic scene.")});
+        backend.End(false);
+        Check(!service.AnalyzeImage(image, "Describe the synthetic frame.", 128).bSuccess,
+            "A vision owner accepted incomplete nonempty text.");
+    });
+    checks.Run("memory/direct-json-complete-envelope", [&]
+    {
+        backend.Script({});
+        backend.Direct(Json{{"choices", Json::array({{{"message", {{"content",
+            R"({"shouldRemember":true,"category":"preference","summary":"The user prefers concise answers.","subject":"speaker","reason":"Stated."})"}}}}})}}.dump());
+        const auto output = service.EvaluateMemory("I prefer concise answers from now on.", "Understood.",
+            revia::agents::ResponseProvenance::NormalGeneration);
+        Check(output.bSuccess && output.bShouldRemember && output.summary == "The user prefers concise answers.",
+            "A complete direct-JSON classifier envelope was refused without an optional finish reason.");
+    });
+    checks.Finish();
+}
+
+void TestInterruptedTurnCannotAdoptHistoryMemoryOrHeldReply()
+{
+    using namespace revia::agents;
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    messageRouter router((directory.root / "runtime-terminal.db").string());
+    conversationContext context;
+    TurnCoordinator coordinator((directory.root / "coordinator.db").string());
+    revia::speech::SpeechService speech;
+    revia::runtime::AffectController affect;
+    revia::emotion::EmotionRuntime emotions;
+    revia::runtime::RuntimeEventBus events;
+    logger log{directory.root / "Logs"};
+    const auto filters = [] { responseFilterSettings value; value.bAiReviewEnabled = false; return value; };
+    revia::runtime::ConversationRuntime runtime{router, context, coordinator, speech, affect, emotions, events, log,
+        [](auto, const auto&) {}, [](const auto&) {}, {}, {}, {}, filters, {}, {}, {}, {}, {}, {},
+        [] { SelfInquiryLimits value; value.enabled = false; return value; }};
+    llmSettings settings;
+    settings.host = "127.0.0.1"; settings.port = backend.port; settings.modelName = "structured-reply-fixture";
+    settings.bAutoStartServer = settings.bAutoMaxTokens = settings.bVisionEnabled = false;
+    embeddingSettings embeddings; embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile; profile.bMemoryEnabled = false;
+    router.ApplyLLMSettings(settings, embeddings, profile);
+    std::size_t heldReplies = 0;
+    runtime.SetDeliveredReplyObserver([&](const auto&, auto, const auto&) { ++heldReplies; });
+    std::string fragments;
+    const auto subscription = events.Subscribe([&](const auto& event)
+    {
+        if (event.kind == revia::runtime::RuntimeEventKind::ReplyFragment)
+            fragments += event.message;
+    });
+    TerminationChecks checks;
+    for (const bool structured : {false, true})
+    {
+        checks.Run(structured ? "runtime/json-adoption" : "runtime/text-adoption", [&]
+        {
+            context.Clear(); heldReplies = 0; fragments.clear();
+            const std::string input = structured ? "Return JSON with key x." : "Explain static linking.";
+            backend.Script({WireBackend::Delta("content", structured ? R"({"x":1})" : "A short answer.")});
+            backend.End(false);
+            const auto output = runtime.Reply(input, profile, true, false);
+            const auto history = context.GetRecentMessages();
+            Check(!output.succeeded && !output.reason.empty() && heldReplies == 0 && fragments.empty() &&
+                      std::none_of(history.begin(), history.end(), [](const auto& message) { return message.role == "assistant"; }),
+                "An interrupted turn adopted assistant history, held reply or final tail.");
+        });
+    }
+    checks.Run("coordinator/no-memory-submission", [&]
+    {
+        backend.Script({WireBackend::Delta("content", "A short answer.")});
+        backend.End(false);
+        const auto turn = coordinator.Execute(router, "Explain static linking.", {{"user", "Explain static linking."}},
+            filters(), {}, true, ResponseProvenance::NormalGeneration);
+        Check(!turn.response.bSuccess && !turn.memoryQueued, "An interrupted reply queued successful memory review.");
+    });
+    checks.Run("runtime/approved-prefix-no-held-tail", [&]
+    {
+        context.Clear(); heldReplies = 0; fragments.clear();
+        const std::string answer = "Static linking copies the required code into the executable. "
+            "The linker resolves each symbol against its input object files. FINAL_HELD_TAIL";
+        backend.Script({WireBackend::Delta("content", answer)}); backend.End(false);
+        const auto output = runtime.Reply("Explain static linking.", profile, true, false);
+        const auto history = context.GetRecentMessages();
+        Check(!output.succeeded && !fragments.empty() && fragments.find("FINAL_HELD_TAIL") == std::string::npos && heldReplies == 0 &&
+                  std::none_of(history.begin(), history.end(), [](const auto& message) { return message.role == "assistant"; }),
+            "An approved prefix became a successful turn or released its held final tail.");
+    });
+    events.Unsubscribe(subscription);
+    checks.Finish();
+}
+
+void TestBoundedVideoKeepsItsStricterTerminalPolicy()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "video-terminal.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1"; settings.port = backend.port; settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 32768; settings.bAutoStartServer = settings.bAutoMaxTokens = false; settings.bVisionEnabled = true;
+    embeddingSettings embeddings; embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile; profile.bMemoryEnabled = false;
+    service.ApplySettings(settings, embeddings, profile);
+    conversationMessage input{"user", "Describe the visible scene in these sampled video frames."};
+    input.images.push_back({"Video frame at 00:01.000", "image/png", std::make_shared<const std::string>("synthetic-pixels"), 64, 64});
+    input.mediaReferences.push_back({"fixture-video", "fixture-digest", "fixture.mp4", "video/mp4"});
+    TerminationChecks checks;
+    for (const auto& reason : {std::string(), std::string("stop"), std::string("length")})
+    {
+        for (const bool done : {false, true})
+        {
+            checks.Run("video/" + (reason.empty() ? std::string("no-reason") : reason) + (done ? "/done" : "/no-done"), [&]
+            {
+                backend.Script({WireBackend::Delta("content", R"({"image_1":{"literal_text":"","requested_visible_facts":"A synthetic scene."}})",
+                    reason.empty() ? nlohmann::json(nullptr) : nlohmann::json(reason))});
+                backend.End(done);
+                std::string emitted;
+                const auto output = service.GenerateResponse({input}, {}, [&](const auto& delta) { emitted += delta; });
+                Check(backend.Requests().back().at("response_format").at("json_schema").at("name") == "sampled_video_frames",
+                    "The fixture did not enter the actual bounded-video owner.");
+                Check(output.bSuccess == (reason == "stop" && done) && (output.bSuccess || emitted.empty()),
+                    "Bounded video weakened its stop-plus-DONE policy or released partial data: " + output.reason);
+                if (reason == "length")
+                    Check(output.reason == "backend_output_token_limit", "Bounded video lost explicit output-token-limit status.");
+            });
+        }
+    }
+    checks.Finish();
+}
+}
+
 void RunStructuredReplyTests()
 {
     TestProviderContractAndDataPreservation();
@@ -1167,4 +1761,11 @@ void RunStructuredReplyTests()
     TestToolCallsStreamAndReplayOnTheWire();
     TestNativeDeliberationReplacesTheSeparateInquiry();
     TestReasoningRelayReleasesReadablePieces();
+    TerminationChecks checks;
+    checks.Run("foreground-matrix", TestNativeTerminationAdmission);
+    checks.Run("tool-compatibility", TestToolTerminalCompatibility);
+    checks.Run("background-matrix", TestBackgroundTerminationAdmission);
+    checks.Run("runtime-adoption", TestInterruptedTurnCannotAdoptHistoryMemoryOrHeldReply);
+    checks.Run("bounded-video", TestBoundedVideoKeepsItsStricterTerminalPolicy);
+    checks.Finish();
 }

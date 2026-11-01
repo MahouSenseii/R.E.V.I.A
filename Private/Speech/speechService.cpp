@@ -919,13 +919,14 @@ VoiceOperationResult SpeechService::AssignVoice(const std::string& profileId, co
     {
         return {false, error, {}, -1.0};
     }
+    const auto assignedPreset = presetId.empty() ? std::optional<VoicePreset>{} : presetStore.Find(presetId);
     bool assignedActiveProfile = false;
     {
         std::lock_guard lock(mutex);
         assignedActiveProfile = profileId == activeProfile;
         if (profileId == activeProfile)
         {
-            SetActiveVoiceLocked(presetId.empty() ? std::nullopt : presetStore.Find(presetId));
+            SetActiveVoiceLocked(assignedPreset);
         }
     }
     std::string message = presetId.empty()
@@ -946,7 +947,9 @@ VoiceOperationResult SpeechService::AssignVoice(const std::string& profileId, co
         DrainSynthesisNotifications();
         RefreshSystemCueBank();
     }
-    return {true, message, {}, 0.0};
+    VoiceOperationResult result{true, message, {}, 0.0};
+    result.assignment = VoiceAssignmentSnapshot{profileId, presetId, assignedPreset ? assignedPreset->name : std::string{}};
+    return result;
 }
 
 void SpeechService::SetEnabled(const bool value)
