@@ -32,6 +32,7 @@
 #include "Core/configManager.h"
 #include "Core/appSettings.h"
 #include "Core/profile.h"
+#include "Browser/browserSession.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -91,6 +92,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <condition_variable>
+#include <exception>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -100,6 +102,311 @@
 
 struct ReviaWindowStopTests
 {
+    static void RunStopCleanupUi(int& failures)
+    {
+        using namespace revia::runtime;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir directory;
+        expect(directory.isValid(), "Stop cleanup fixture needs a disposable root");
+        if (!directory.isValid())
+            return;
+        struct RestoreDirectory
+        {
+            QString previous = QDir::currentPath();
+            ~RestoreDirectory() { QDir::setCurrent(previous); }
+        } restoreDirectory;
+        const bool selectedRoot = QDir::setCurrent(directory.path());
+        expect(selectedRoot, "Stop cleanup fixture could not select its own root");
+        if (!selectedRoot)
+            return;
+        const std::filesystem::path root(directory.path().toStdWString());
+        {
+            std::ofstream file(root / "capabilities.json");
+            file << nlohmann::json{{"mode", "supervised"}, {"approvedRoots", {revia::actions::PathToUtf8(root)}},
+                {"autoApproveRiskThrough", "read_only"}, {"createMissingApprovedRoots", false}}.dump();
+            expect(file.good(), "Stop cleanup fixture could not write its disposable capability configuration");
+            if (!file.good())
+                return;
+        }
+        const auto worker = root / "never-launch.cjs";
+        std::ofstream(worker) << "throw new Error('The pre-create refusal must prevent child launch');\n";
+        ReviaWindow window(false, false);
+        window.pollTimer->stop();
+        auto& owner = window.Session();
+        ReviaSessionTestAccess::PrepareActions(owner, root);
+        const auto token = ReviaSessionTestAccess::BeginEditorRetirementFixture(owner, RuntimeState::Thinking);
+        auto browser = std::make_shared<revia::browser::BrowserSession>(worker, root / "browser");
+        ReviaSessionTestAccess::SetBrowserSession(owner, browser);
+        window.UpdateState(RuntimeState::Thinking, "Browser cleanup barrier");
+        expect(window.stopButton->isEnabled() && !owner.DesktopControlStopped() && !token.stop_requested(),
+            "Stop cleanup fixture needs an enabled composer Stop and an uncancelled active operation");
+
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool held = false, release = false, completed = false, fallback = false;
+        bool returned = false, returnHeld = false, heartbeatHeld = false, observationDone = false, observationEmptyHeld = false;
+        bool latchHeld = false, tokenHeld = false, capturedHeld = false;
+        int callbacks = 0;
+        revia::actions::ActionResult result;
+        std::exception_ptr workerError;
+        const auto capture = [&]()
+        {
+            capturedHeld = held && !release;
+            latchHeld = capturedHeld && owner.DesktopControlStopped();
+            tokenHeld = capturedHeld && token.stop_requested();
+        };
+        revia::browser::BrowserSettings settings;
+        settings.enabled = settings.navigate = true;
+        settings.approvedOrigins = {"https://example.test"};
+        revia::actions::ActionRequest request;
+        request.type = revia::actions::ActionType::BrowserNavigate;
+        request.browser.url = "https://example.test/stop-cleanup";
+        request.authorityStamp = owner.Stamp();
+        request.beforeEffect = [&](const std::string&)
+        {
+            if (++callbacks == 1)
+                return std::string{};
+            // The second callback owns the real handle lock, before CreateProcessW.
+            std::unique_lock lock(mutex);
+            held = true;
+            changed.notify_all();
+            changed.wait(lock, [&]() { return release; });
+            held = false;
+            return std::string("Stop fixture refuses child creation.");
+        };
+        std::jthread browserWorker, observer, watchdog;
+        struct ReleaseBarrier
+        {
+            std::mutex& mutex;
+            std::condition_variable& changed;
+            bool& release;
+            ~ReleaseBarrier()
+            {
+                {
+                    std::lock_guard lock(mutex);
+                    release = true;
+                }
+                changed.notify_all();
+            }
+        } releaseBarrier{mutex, changed, release};
+        browserWorker = std::jthread([&]()
+        {
+            try { result = browser->Execute(request, settings); }
+            catch (...) { workerError = std::current_exception(); }
+            {
+                std::lock_guard lock(mutex);
+                completed = true;
+            }
+            changed.notify_all();
+        });
+        {
+            std::unique_lock lock(mutex);
+            changed.wait_for(lock, std::chrono::seconds(2), [&]() { return held || completed; });
+            expect(held, "Stop cleanup fixture must reach the actual pre-create handle lock without starting a child");
+            if (!held)
+                return;
+        }
+        observer = std::jthread([&]()
+        {
+            {
+                std::unique_lock lock(mutex);
+                changed.wait(lock, [&]() { return returned || release; });
+                if (release)
+                    return;
+            }
+            const bool empty = !browser->Observation();
+            {
+                std::lock_guard lock(mutex);
+                observationEmptyHeld = empty && held && !release;
+                observationDone = true;
+            }
+            changed.notify_all();
+        });
+        watchdog = std::jthread([&]()
+        {
+            std::unique_lock lock(mutex);
+            if (!changed.wait_for(lock, std::chrono::seconds(2), [&]() { return release; }))
+            {
+                capture();
+                fallback = true;
+                release = true;
+                changed.notify_all();
+            }
+        });
+        QMetaObject::invokeMethod(&window, [&]()
+        {
+            window.stopButton->click();
+            {
+                std::lock_guard lock(mutex);
+                returned = true;
+                returnHeld = held && !release;
+            }
+            changed.notify_all();
+            QMetaObject::invokeMethod(&window, [&]()
+            {
+                std::lock_guard lock(mutex);
+                heartbeatHeld = held && !release;
+            }, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (;;)
+        {
+            QCoreApplication::processEvents();
+            std::lock_guard lock(mutex);
+            if (fallback || (heartbeatHeld && observationDone) || std::chrono::steady_clock::now() >= deadline)
+            {
+                if (!release)
+                {
+                    capture();
+                    release = true;
+                }
+                break;
+            }
+        }
+        changed.notify_all();
+        watchdog.join();
+        observer.join();
+        browserWorker.join();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        std::cout << "StopCleanup: native-latch-held=" << latchHeld << " active-token-held=" << tokenHeld
+                  << " return-held=" << returnHeld << " heartbeat-held=" << heartbeatHeld
+                  << " observation-empty-held=" << observationEmptyHeld << " watchdog=" << fallback << '\n';
+        expect(!workerError && callbacks == 2 && !result.attempted && !result.succeeded,
+            "the actual browser owner must refuse before child creation and effect dispatch");
+        expect(capturedHeld && latchHeld && tokenHeld && returned && returnHeld && heartbeatHeld && observationEmptyHeld && !fallback,
+            "composer Stop must latch native control, cancel its copied active token, return, service Qt and refuse observation before cleanup releases without watchdog");
+    }
+
+    static void RunBrowserCancellationProtocol(int& failures)
+    {
+        using namespace revia;
+        const auto expect = [&](const bool condition, const char* message)
+        {
+            if (!condition)
+            {
+                std::cerr << "FAIL: " << message << '\n';
+                ++failures;
+            }
+        };
+        QTemporaryDir directory;
+        expect(directory.isValid(), "browser cancellation protocol needs a disposable root");
+        if (!directory.isValid())
+            return;
+        const std::filesystem::path root(directory.path().toStdWString());
+        const auto worker = root / "finite-protocol.cjs";
+        {
+            std::ofstream file(worker);
+            file << R"js(const fs = require('node:fs');
+const readline = require('node:readline');
+const sessionId = require('node:crypto').randomUUID();
+let generation = 0;
+setTimeout(() => process.exit(0), 8000);
+readline.createInterface({input: process.stdin}).on('line', line => {
+    const request = JSON.parse(line);
+    const receipt = {session: sessionId, generation: ++generation,
+        url: request.url + '#receipt', title: 'Finite protocol fixture', text: request.operation,
+        fingerprint: 'finite-' + generation, elements: []};
+    fs.writeSync(1, JSON.stringify({succeeded: true, attempted: false,
+        message: 'Finite protocol response', receipt}) + '\n');
+});
+)js";
+            expect(file.good(), "browser cancellation protocol could not write its finite stdlib worker");
+            if (!file.good())
+                return;
+        }
+        browser::BrowserSettings settings;
+        settings.enabled = settings.navigate = settings.interact = true;
+        settings.approvedOrigins = {"https://example.test"};
+        settings.timeoutMs = 1000;
+        actions::ActionRequest request;
+        request.type = actions::ActionType::BrowserNavigate;
+        request.browser.url = "https://example.test/protocol";
+        request.authorityStamp.sessionId = "stop-protocol";
+        request.authorityStamp.taskId = "stop-task";
+        request.authorityStamp.generation = request.authorityStamp.policyVersion = 1;
+        const auto admit = [](const std::string&) { return std::string{}; };
+        request.beforeEffect = admit;
+        const auto profiles = root / "profiles";
+        {
+            browser::BrowserSession session(worker, profiles);
+            auto result = session.Execute(request, settings);
+            expect(result.succeeded && result.browser && session.Observation(),
+                "finite protocol navigation must publish a real owned-pipe receipt");
+            if (!result.succeeded || !result.browser)
+                return;
+            auto previousSession = result.browser->session;
+            // Multiple requests share one pending slot; none may reach the replacement owner.
+            for (int cycle = 0; cycle < 3; ++cycle)
+            {
+                for (int repeat = 0; repeat < 32; ++repeat)
+                    session.RequestStop();
+                expect(!session.Observation(), "requested cancellation must immediately revoke the previous receipt");
+                result = session.Execute(request, settings);
+                expect(result.succeeded && result.browser && result.browser->session != previousSession,
+                    "a later navigate must drain old cancellation and start a fresh owned generation");
+                if (!result.succeeded || !result.browser)
+                    return;
+                previousSession = result.browser->session;
+                request.type = actions::ActionType::BrowserObserve;
+                result = session.Execute(request, settings);
+                expect(result.succeeded && result.browser && result.browser->session == previousSession,
+                    "late old-generation termination must not kill the replacement worker");
+                request.type = actions::ActionType::BrowserNavigate;
+            }
+            request.type = actions::ActionType::BrowserFill;
+            bool cancelledAfterReceipt = false;
+            request.beforeEffect = [&](const std::string& url)
+            {
+                if (url.ends_with("#receipt"))
+                {
+                    cancelledAfterReceipt = true;
+                    session.RequestStop();
+                }
+                return std::string{};
+            };
+            result = session.Execute(request, settings);
+            expect(cancelledAfterReceipt && !result.succeeded && result.attempted && result.browser &&
+                result.browser->uncertainEffect && !session.Observation(),
+                "cancellation after a dispatched mutation must defeat worker success/attempted=false and retain uncertainty");
+            request.type = actions::ActionType::BrowserNavigate;
+            request.beforeEffect = admit;
+            expect(session.Execute(request, settings).succeeded,
+                "a cancelled response must not poison the next drained generation");
+            session.RequestStop();
+            session.DrainStop();
+            expect(!session.Observation() && std::filesystem::is_empty(profiles),
+                "lifecycle drainage must retire owned profiles before the browser owner is destroyed");
+        }
+        bool profilesRemain = false;
+        if (std::filesystem::exists(profiles))
+            for (const auto& entry : std::filesystem::directory_iterator(profiles))
+                profilesRemain = profilesRemain || entry.path().filename().wstring().starts_with(L"session-");
+        expect(!profilesRemain, "browser destruction must drain termination and retire its owned profile");
+        {
+            browser::BrowserSession session(worker, root / "reentrant");
+            int callbacks = 0;
+            request.beforeEffect = [&](const std::string&)
+            {
+                if (++callbacks == 2)
+                {
+                    session.RequestStop();
+                    session.Stop();
+                }
+                return std::string{};
+            };
+            const auto result = session.Execute(request, settings);
+            expect(callbacks == 2 && !result.attempted && !result.succeeded && !session.Observation(),
+                "synchronous reentrant Stop at pre-create admission must refuse child creation without a worker lock cycle");
+        }
+    }
+
     static void RunVoiceAssignmentUi(int& failures)
     {
         using namespace revia::runtime;
@@ -4307,6 +4614,19 @@ int RunPolicySuite(int, char**)
 }
 
 REVIA_DESKTOP_SUITE("policy", RunPolicySuite);
+
+namespace
+{
+int RunStopCleanupSuite(int, char**)
+{
+    int failures = 0;
+    ReviaWindowStopTests::RunStopCleanupUi(failures);
+    ReviaWindowStopTests::RunBrowserCancellationProtocol(failures);
+    return failures;
+}
+}
+
+REVIA_DESKTOP_SUITE("stop-cleanup", RunStopCleanupSuite);
 
 namespace
 {

@@ -153,3 +153,4 @@ Revia.CompanionQualificationProtocol
 Revia.CompanionQualificationFixture
 Revia.TestCatalog
 Revia.TestCatalogSlash
+Revia.StopCleanup

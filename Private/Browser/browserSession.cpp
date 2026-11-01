@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <thread>
@@ -85,12 +86,51 @@ struct BrowserSession::State
     std::mutex operationMutex;
     std::recursive_mutex handleMutex;
     std::atomic_bool stopped = false;
+    std::atomic<std::uint64_t> cancellationRevision = 0;
+    std::atomic<std::uint64_t> observationRevision = 0;
     runtime::RuntimeStamp stamp;
     std::string grant;
     std::string pending;
     std::optional<BrowserReceipt> observation;
 #ifdef _WIN32
     Handle process, job, input, output;
+    std::atomic<std::uint64_t> generation = 0;
+    std::mutex terminationMutex;
+    std::condition_variable terminationChanged;
+    std::uint64_t requestedRevision = 0, processedRevision = 0, requestedGeneration = 0;
+    bool terminationPending = false, terminationClosing = false;
+    std::thread terminationWorker;
+
+    void RunTermination()
+    {
+        std::unique_lock lock(terminationMutex);
+        for (;;)
+        {
+            terminationChanged.wait(lock, [&]() { return terminationPending || terminationClosing; });
+            if (!terminationPending && terminationClosing)
+                return;
+            const auto revision = requestedRevision;
+            const auto target = requestedGeneration;
+            terminationPending = false;
+            lock.unlock();
+            {
+                // Queue ownership never spans the handle wait; callbacks may synchronously Stop.
+                std::lock_guard handleLock(handleMutex);
+                if (generation.load() == target && job.value)
+                    TerminateJobObject(job.value, 1);
+            }
+            lock.lock();
+            processedRevision = std::max(processedRevision, revision);
+            terminationChanged.notify_all();
+        }
+    }
+
+    void DrainTermination()
+    {
+        std::unique_lock lock(terminationMutex);
+        const auto revision = requestedRevision;
+        terminationChanged.wait(lock, [&]() { return processedRevision >= revision; });
+    }
 
     void Close()
     {
@@ -113,11 +153,17 @@ struct BrowserSession::State
         profile.clear();
     }
 
-    bool Start(const actions::ActionRequest& request, std::string& error)
+    bool Start(const actions::ActionRequest& request, const std::uint64_t revision, std::string& error)
     {
         std::lock_guard lock(handleMutex);
         Close();
         stopped = false;
+        if (!Admitted(revision, error))
+        {
+            stopped = true;
+            return false;
+        }
+        ++generation;
         const auto node = NodePath();
         if (node.empty() || !worker.is_absolute() || !std::filesystem::is_regular_file(worker) || !root.is_absolute())
         {
@@ -185,7 +231,7 @@ struct BrowserSession::State
         std::wstring command = Quote(node.wstring()) + L" " + Quote(worker.wstring()) + L" --profile " + Quote(profile.wstring());
         PROCESS_INFORMATION created{};
         error = request.beforeEffect(request.browser.url);
-        const BOOL started = attached && error.empty() &&
+        const BOOL started = attached && Admitted(revision, error) && error.empty() &&
                              CreateProcessW(node.c_str(), command.data(), nullptr, nullptr, TRUE,
                                  CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
                                  environment.data(), worker.parent_path().c_str(), &startup.StartupInfo, &created);
@@ -212,7 +258,7 @@ struct BrowserSession::State
             return false;
         }
         error = request.beforeEffect(request.browser.url);
-        if (!error.empty() || ResumeThread(thread.value) == static_cast<DWORD>(-1))
+        if (!Admitted(revision, error) || !error.empty() || ResumeThread(thread.value) == static_cast<DWORD>(-1))
         {
             if (error.empty())
                 error = "The browser worker could not resume.";
@@ -220,28 +266,67 @@ struct BrowserSession::State
             return false;
         }
         stamp = request.authorityStamp;
+        if (!Admitted(revision, error))
+        {
+            Close();
+            return false;
+        }
         return true;
     }
 #endif
+
+    bool Admitted(const std::uint64_t revision, std::string& error) const
+    {
+        if (cancellationRevision.load() == revision)
+            return true;
+        error = "The owned browser operation was cancelled.";
+        return false;
+    }
 };
 
 BrowserSession::BrowserSession(std::filesystem::path worker, std::filesystem::path privateRoot) : state(std::make_unique<State>())
 {
     state->worker = std::move(worker);
     state->root = std::move(privateRoot);
+#ifdef _WIN32
+    state->terminationWorker = std::thread([owner = state.get()]() { owner->RunTermination(); });
+#endif
 }
 
 BrowserSession::~BrowserSession()
 {
     Stop();
-    std::lock_guard lock(state->operationMutex);
+    DrainStop();
 #ifdef _WIN32
-    state->Close();
+    {
+        std::lock_guard lock(state->terminationMutex);
+        state->terminationClosing = true;
+    }
+    state->terminationChanged.notify_all();
+    state->terminationWorker.join();
+#endif
+}
+
+void BrowserSession::RequestStop()
+{
+#ifdef _WIN32
+    {
+        std::lock_guard lock(state->terminationMutex);
+        state->requestedRevision = state->cancellationRevision.fetch_add(1) + 1;
+        state->stopped = true;
+        state->requestedGeneration = state->generation.load();
+        state->terminationPending = true;
+    }
+    state->terminationChanged.notify_all();
+#else
+    ++state->cancellationRevision;
+    state->stopped = true;
 #endif
 }
 
 void BrowserSession::Stop()
 {
+    ++state->cancellationRevision;
     state->stopped = true;
 #ifdef _WIN32
     std::lock_guard lock(state->handleMutex);
@@ -250,24 +335,40 @@ void BrowserSession::Stop()
 #endif
 }
 
-std::optional<BrowserReceipt> BrowserSession::Observation() const
+void BrowserSession::DrainStop()
 {
     std::lock_guard lock(state->operationMutex);
-    return state->stopped ? std::nullopt : state->observation;
+#ifdef _WIN32
+    state->DrainTermination();
+    state->Close();
+#endif
+}
+
+std::optional<BrowserReceipt> BrowserSession::Observation() const
+{
+    const auto revision = state->cancellationRevision.load();
+    if (state->stopped || state->observationRevision.load() != revision)
+        return std::nullopt;
+    std::lock_guard lock(state->operationMutex);
+    return state->stopped || state->cancellationRevision.load() != revision || state->observationRevision.load() != revision
+        ? std::nullopt : state->observation;
 }
 
 actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& request, const BrowserSettings& settings)
 {
+    const auto revision = state->cancellationRevision.load();
     std::lock_guard lock(state->operationMutex);
     actions::ActionResult result;
     result.backend = "owned_interactive_browser";
+    if (!state->Admitted(revision, result.message))
+        return result;
     if (!request.beforeEffect || !ValidateSettings(settings, result.message) || !IsApprovedUrl(request.browser.url, settings))
     {
         result.message = "The interactive browser requires runtime admission and an enabled exact origin grant.";
         return result;
     }
     result.message = request.beforeEffect(request.browser.url);
-    if (!result.message.empty())
+    if (!state->Admitted(revision, result.message) || !result.message.empty())
         return result;
     if (request.dryRun)
     {
@@ -280,6 +381,9 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
     result.message = "The interactive browser owner currently requires Windows.";
     return result;
 #else
+    state->DrainTermination();
+    if (!state->Admitted(revision, result.message))
+        return result;
     const auto grant = Grant(settings);
     const std::string encodedGrant = grant.dump();
     if (!state->process.value || !state->stamp.SameSession(request.authorityStamp) ||
@@ -291,7 +395,7 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
             result.message = "The owned browser session changed; navigate and observe before further interaction.";
             return result;
         }
-        if (!state->Start(request, result.message))
+        if (!state->Start(request, revision, result.message))
             return result;
         state->grant = encodedGrant;
     }
@@ -306,13 +410,14 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
             .dump() +
         "\n";
     result.message = request.beforeEffect(input.url);
-    if (!result.message.empty())
+    if (!state->Admitted(revision, result.message) || !result.message.empty())
     {
         state->Close();
         return result;
     }
     DWORD written = 0;
-    result.attempted = request.type != actions::ActionType::BrowserObserve;
+    const bool dispatchedMutation = request.type != actions::ActionType::BrowserObserve;
+    result.attempted = dispatchedMutation;
     if (encoded.size() > 65536 || !WriteFile(state->input.value, encoded.data(), static_cast<DWORD>(encoded.size()), &written, nullptr) ||
         written != encoded.size())
     {
@@ -330,7 +435,8 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
     for (;;)
     {
         result.message = request.beforeEffect(input.url);
-        if (!result.message.empty() || state->stopped || std::chrono::steady_clock::now() >= deadline)
+        if (!state->Admitted(revision, result.message) || !result.message.empty() || state->stopped ||
+            std::chrono::steady_clock::now() >= deadline)
         {
             if (result.message.empty())
                 result.message = state->stopped ? "The owned browser was stopped." : "The owned browser operation timed out.";
@@ -369,7 +475,7 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
                     const auto response = nlohmann::json::parse(state->pending.substr(0, newline));
                     state->pending.erase(0, newline + 1);
                     result.message = response.value("message", "Browser returned no evidence.");
-                    result.attempted = response.value("attempted", result.attempted);
+                    result.attempted = dispatchedMutation || response.value("attempted", false);
                     result.succeeded = response.value("succeeded", false);
                     if (result.succeeded)
                     {
@@ -400,17 +506,22 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
                         }
                         result.content = receipt.text;
                         result.browser = std::move(receipt);
-                        state->observation = result.browser;
                     }
                     const auto refusal = request.beforeEffect(result.browser ? result.browser->url : input.url);
-                    if (!refusal.empty())
+                    if (!state->Admitted(revision, result.message) || !refusal.empty())
                     {
-                        result.message = refusal;
+                        if (!refusal.empty())
+                            result.message = refusal;
                         result.succeeded = false;
                         state->Close();
                     }
                     if (!result.succeeded && response.value("uncertainEffect", false))
                         state->Close();
+                    if (result.succeeded)
+                    {
+                        state->observation = result.browser;
+                        state->observationRevision = revision;
+                    }
                 }
                 catch (const std::exception&)
                 {
@@ -423,6 +534,11 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
         }
         else
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!state->Admitted(revision, result.message))
+    {
+        result.succeeded = false;
+        state->Close();
     }
     if (!result.succeeded && result.attempted)
     {

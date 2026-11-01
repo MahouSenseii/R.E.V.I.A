@@ -192,6 +192,16 @@
         "Revia.SvgRenderer"
       ]
     },
+    "ui4": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Composer Stop under browser cleanup contention, finite owned protocol cancellation, and existing admission contracts.",
+      "ids": [
+        "Revia.StopCleanup",
+        "ReviaBrowserContractTests",
+        "Revia.TestCatalogSlash"
+      ]
+    },
     "catalog": {
       "approval": "reviewed-controlled",
       "scope": "controlled",
@@ -4753,6 +4763,39 @@
       "history": {
         "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
         "outcome": "not_selected",
+        "fresh": false
+      }
+    },
+    "Revia.StopCleanup": {
+      "purpose": "Composer Stop responsiveness, immediate revocation, drained browser generations and truthful cancelled mutation receipts.",
+      "prerequisites": [
+        "Existing Qt offscreen plugin and runtime DLLs; no native window fallback.",
+        "Existing Node runtime for a finite standard-library pipe worker in owned temporary state; no browser, sockets or interactive host."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "qt-offscreen",
+        "cwd": "registered",
+        "environment": {
+          "QT_QPA_PLATFORM": "offscreen",
+          "REVIA_THEME": "light",
+          "QT_QPA_PLATFORM_PLUGIN_PATH": "<REGISTERED_ENV:QT_QPA_PLATFORM_PLUGIN_PATH>"
+        },
+        "requiredFiles": [
+          {
+            "path": "<BUILD_ROOT>/ReviaDesktopStopTests.exe",
+            "reason": "Registered focused fixture binary must exist."
+          }
+        ],
+        "requiredPrograms": ["node.exe"],
+        "registrationDigest": "7cf91ec52fe9f8d8c84780f2f4da8484ae23f6a8af30090265ee2703dced80fb",
+        "interpreterArguments": [],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
+      },
+      "history": {
+        "sourceIdentity": "ui4-later-before-green",
+        "outcome": "not_run",
         "fresh": false
       }
     },

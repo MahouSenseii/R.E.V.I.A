@@ -5414,19 +5414,24 @@ void ReviaSession::PollBackgroundEvents()
 
 void ReviaSession::RequestStop()
 {
+    // Synthesized input keeps producing consequences while it is being noticed, so the
+    // deliberate stop gesture latches it off. /desktop resume clears it.
+    actionRuntime.StopDesktopControl("stop was requested");
+    std::stop_source source;
+    {
+        std::lock_guard lock(cancellationMutex);
+        source = activeStopSource;
+    }
+    source.request_stop();
     testRunRuntime.Cancel();
     if (interactiveBrowser)
-        interactiveBrowser->Stop();
+        interactiveBrowser->RequestStop();
     imageGenerator.Cancel();
     CancelSpeakerEnrollment();
     videoGenerator.Cancel();
     CancelDelegation("stop was requested");
     agentWorkflow.RequestCancel();
     PreemptAutonomousActivity("stop was requested");
-    // Synthesized input keeps producing consequences while it is being noticed, so the
-    // deliberate stop gesture latches it off rather than merely cancelling the current
-    // action. /desktop resume, or the desktop shell's own control, clears it.
-    actionRuntime.StopDesktopControl("stop was requested");
     // A song is the loudest thing she does, so Stop stops it too. Unlike desktop control
     // this does not latch: the next /sing works normally.
     performanceRuntime.Stop("you asked her to stop");
@@ -5442,12 +5447,6 @@ void ReviaSession::RequestStop()
     }
     userInteractionGeneration.fetch_add(1);
     curiosityCondition.notify_all();
-    std::stop_source source;
-    {
-        std::lock_guard lock(cancellationMutex);
-        source = activeStopSource;
-    }
-    source.request_stop();
     // Stop means stop: a background task ends too. A new message does not do this.
     CancelTask("stop was requested");
     Publish(RuntimeEventKind::Activity, "Stop requested.");
@@ -5518,6 +5517,8 @@ void ReviaSession::Stop()
     // Under the lock, so no turn can launch another task after this. The task worker
     // never takes operationMutex, so joining it here cannot deadlock.
     StopTaskWorker();
+    if (interactiveBrowser)
+        interactiveBrowser->DrainStop();
     StopVirtualMachine();
     // Start also holds operationMutex: join here so startup cannot create a
     // save worker after shutdown has already tried to stop it.

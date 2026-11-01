@@ -597,6 +597,12 @@ struct ReviaSessionTestAccess
         (void)session.BeginOperation();
     }
 
+    static void SetBrowserSession(ReviaSession& session, std::shared_ptr<browser::BrowserSession> browser)
+    {
+        session.interactiveBrowser = std::move(browser);
+        session.actionRuntime.SetBrowserSession(session.interactiveBrowser);
+    }
+
     static SessionResult Execute(ReviaSession& session, actions::ActionRequest request)
     {
         // Direct action fixtures simulate admission without starting unrelated session services.
