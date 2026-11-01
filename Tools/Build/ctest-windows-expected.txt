@@ -27,6 +27,7 @@ Revia.ImageArtifact
 Revia.ImageGenerator
 Revia.ImageServicePolicy
 Revia.InteractiveBrowser
+Revia.InteractiveBrowserBudget
 Revia.InteractiveBrowserOwner
 Revia.Live2DBridge
 Revia.MemoryNliPythonWorker

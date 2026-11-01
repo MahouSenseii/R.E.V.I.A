@@ -971,6 +971,12 @@ if(BUILD_TESTING)
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Browser/browserHost.test.mjs"
         )
         add_test(
+                NAME Revia.InteractiveBrowserBudget
+                COMMAND "${REVIA_NODE_EXECUTABLE}" --test
+                        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Browser/interactiveBudget.test.mjs"
+        )
+        set_tests_properties(Revia.InteractiveBrowserBudget PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(
                 NAME Revia.DiscordVoiceAdapter
                 COMMAND "${REVIA_NODE_EXECUTABLE}" --test
                         "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Presence/DiscordVoice/adapter.test.mjs"

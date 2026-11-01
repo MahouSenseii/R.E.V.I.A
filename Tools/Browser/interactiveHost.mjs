@@ -14,6 +14,27 @@ function bounded(value, maximum) {
   if (bytes(result) > maximum) result = Buffer.from(result).subarray(0, maximum).toString('utf8').replace(/\uFFFD$/, '');
   return result;
 }
+function fitObservation(receipt, attempted) {
+  const limit = 262144;
+  const response = { succeeded: true, attempted, message: 'Current browser state observed.', receipt };
+  let size = bytes(`${JSON.stringify(response)}\n`);
+  if (size <= limit) return response.message;
+  const message = 'Current browser state observed; some field values are unavailable because of the response size limit.';
+  size += bytes(JSON.stringify(message)) - bytes(JSON.stringify(response.message));
+  response.message = message;
+  for (const element of receipt.elements) {
+    if (size <= limit) break;
+    if (!element.valueAvailable) continue;
+    // Removing the JSON string leaves two quotes; true -> false costs one byte.
+    const saving = bytes(JSON.stringify(element.value)) - 3;
+    if (saving <= 0) continue;
+    element.valueAvailable = false; element.value = '';
+    size -= saving;
+  }
+  if (size > limit || bytes(`${JSON.stringify(response)}\n`) > limit)
+    throw new Error('The browser observation exceeds the response size limit.');
+  return response.message;
+}
 export function publicAddress(address) {
   if (net.isIP(address) === 4) {
     const [a, b] = address.split('.').map(Number);
@@ -173,7 +194,7 @@ export class InteractiveBrowser {
     if (response.exceptionDetails) throw new Error('The current page could not be observed.');
     return response.result?.value;
   }
-  async observe() {
+  async observe(attempted = false) {
     const generation = ++this.generation;
     const observed = await this.evaluate(`(() => {
       const shown = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none' && !e.closest('[hidden],[inert]'); };
@@ -196,8 +217,10 @@ export class InteractiveBrowser {
     })()`);
     if (!allowedOrigin(observed.url, this.grant)) throw new Error('The current browser origin is no longer admitted.');
     const fingerprint = createHash('sha256').update(observed.signature).digest('hex');
-    this.last = { session: this.session, generation, url: observed.url, title: bounded(observed.title, 1024),
+    const receipt = { session: this.session, generation, url: observed.url, title: bounded(observed.title, 1024),
       text: bounded(observed.text, this.grant.maxTextBytes), elements: observed.elements, fingerprint };
+    this.observationMessage = fitObservation(receipt, attempted);
+    this.last = receipt;
     this.signature = observed.signature;
     return this.last;
   }
@@ -246,7 +269,8 @@ export class InteractiveBrowser {
           await sleep(60);
         }
       }
-      return { succeeded: true, attempted: effect, message: 'Current browser state observed.', receipt: await this.observe() };
+      const receipt = await this.observe(effect);
+      return { succeeded: true, attempted: effect, message: this.observationMessage, receipt };
     } catch (error) {
       this.generation++; this.last = null;
       return { succeeded: false, attempted: effect, uncertainEffect: effect, message: String(error.message).slice(0,400) };
