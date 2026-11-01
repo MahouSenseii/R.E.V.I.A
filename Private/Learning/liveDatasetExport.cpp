@@ -53,6 +53,27 @@ bool WriteReplacing(const std::filesystem::path& target, const std::string& byte
     return core::ReplaceFileAtomically(target, partial, error);
 }
 
+bool ReadWithdrawalList(const std::filesystem::path& path, std::set<std::string>& withdrawn, std::string& error)
+{
+    const auto failure = "The withdrawal list " + actions::PathToUtf8(path) + " could not be read, so nothing was exported: ";
+    try
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+            return Refuse(error, failure + "the file could not be opened.");
+        const std::string bytes{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+        if (stream.bad())
+            return Refuse(error, failure + "the file could not be read completely.");
+        for (const auto& source : json::parse(bytes).get<std::vector<std::string>>())
+            withdrawn.insert(source);
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        return Refuse(error, failure + exception.what());
+    }
+}
+
 // The folders OneDrive keeps in step with the cloud, as Windows names them.
 std::vector<std::filesystem::path> SyncedRoots()
 {
@@ -218,18 +239,14 @@ bool ExportLiveDataset(const LiveCaptureStore& store, const std::filesystem::pat
                                                       : "No exchange is kept for training. Nothing was exported.");
     std::set<std::string> withdrawn;
     std::error_code ignored;
-    if (std::filesystem::exists(store.WithdrawnList(), ignored))
-    {
-        try
-        {
-            for (const auto& source : json::parse(ReadText(store.WithdrawnList())).get<std::vector<std::string>>())
-                withdrawn.insert(source);
-        }
-        catch (const std::exception&)
-        {
-            return Refuse(outError, "The withdrawal list could not be read, so nothing was exported.");
-        }
-    }
+    const auto withdrawalList = store.WithdrawnList();
+    std::error_code inspection;
+    const bool listed = std::filesystem::exists(withdrawalList, inspection);
+    if (inspection)
+        return Refuse(outError, "The withdrawal list " + actions::PathToUtf8(withdrawalList) +
+                                   " could not be inspected, so nothing was exported: " + inspection.message());
+    if (listed && !ReadWithdrawalList(withdrawalList, withdrawn, outError))
+        return false;
 
     outExport.number = lineage.exports.size() + 1;
     outExport.name = lineage.name + "-" + std::to_string(outExport.number);
@@ -264,6 +281,16 @@ bool ExportLiveDataset(const LiveCaptureStore& store, const std::filesystem::pat
     if (std::filesystem::exists(outExport.directory, ignored))
         return Refuse(outError, actions::PathToUtf8(outExport.directory) + " already exists; an export is never replaced.");
 
+    // A training job requires this readable list before an export is reserved or published.
+    if (!listed)
+    {
+        if (!WriteReplacing(withdrawalList, "[]\n", outError))
+            return Refuse(outError, "The withdrawal list " + actions::PathToUtf8(withdrawalList) +
+                                       " could not be written, so nothing was exported: " + outError);
+        if (!ReadWithdrawalList(withdrawalList, withdrawn, outError))
+            return false;
+    }
+
     // The lineage is recorded before the export is written: should writing fail, the next
     // export still keeps these partitions rather than reusing their examples elsewhere.
     const auto& manifest = exported.files.at("manifest.json");
@@ -279,14 +306,7 @@ bool ExportLiveDataset(const LiveCaptureStore& store, const std::filesystem::pat
         return Refuse(outError, "The dataset lineage could not be recorded, so nothing was exported: " + outError);
     if (!WriteDatasetExport(exported, outExport.directory, outError))
         return false;
-    // A training job names this list; it exists from the first export even before anything is withdrawn.
-    outExport.withdrawnList = store.WithdrawnList();
-    if (!std::filesystem::exists(outExport.withdrawnList, ignored))
-    {
-        std::string error;
-        if (!WriteReplacing(outExport.withdrawnList, "[]\n", error))
-            outExport.withdrawnList.clear();
-    }
+    outExport.withdrawnList = withdrawalList;
     return true;
 }
 

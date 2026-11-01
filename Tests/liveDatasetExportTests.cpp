@@ -1,3 +1,4 @@
+#include "Actions/actionTypes.h"
 #include "Audit/contentDigest.h"
 #include "Learning/liveDatasetExport.h"
 #include "testSupport.h"
@@ -267,9 +268,11 @@ void TestRefusalsWriteNothing()
     SetOneDrive({});
     Check(refused, "A folder inside OneDrive was used for private training data.");
     Check(!std::filesystem::exists(fixture.lineage) && std::filesystem::is_empty(fixture.parent), "A refused export wrote something.");
+    Check(!std::filesystem::exists(fixture.store.WithdrawnList()), "An ineligible or invalid-destination export created a withdrawal list.");
 
     std::filesystem::create_directories(fixture.parent / "revia-live-1");
     Check(!fixture.Export(exported, error) && error.find("already exists") != std::string::npos, "An existing folder was replaced.");
+    Check(!std::filesystem::exists(fixture.store.WithdrawnList()), "An existing export destination created a withdrawal list.");
     std::filesystem::remove(fixture.parent / "revia-live-1");
     Check(fixture.Export(exported, error) && exported.name == "revia-live-1", "A refused export used up a number: " + error);
     Write(fixture.lineage / "manifests" / "revia-live-1.json", "{}");
@@ -279,6 +282,99 @@ void TestRefusalsWriteNothing()
     Write(fixture.lineage / "lineage.json", "{broken");
     Check(!fixture.Export(exported, error) && error.find("lineage could not be read") != std::string::npos,
         "An unreadable lineage was reset instead of refusing.");
+}
+
+void TestInitialWithdrawalListFailureDoesNotReserveAnExport()
+{
+    Fixture fixture;
+    for (int number = 1; number <= 30; ++number)
+        Keep(fixture.store, number);
+    const auto list = fixture.store.WithdrawnList();
+    auto fault = list;
+    fault += ".partial";
+    Check(!std::filesystem::exists(list) && std::filesystem::create_directory(fault),
+        "The initial withdrawal-list fault was not established.");
+    LiveDatasetExport exported;
+    std::string error;
+    Check(!fixture.Export(exported, error), "An export succeeded without establishing its required withdrawal list.");
+    Check(!error.empty() && error.find(revia::actions::PathToUtf8(list)) != std::string::npos,
+        "The withdrawal-list failure did not report the concrete list path: " + error);
+    Check(!std::filesystem::exists(list) && !std::filesystem::exists(fixture.lineage) && std::filesystem::is_empty(fixture.parent),
+        "An initial withdrawal-list failure published an export or reserved its lineage.");
+    Check(std::filesystem::is_empty(fault) && std::filesystem::remove(fault), "The owned empty withdrawal-list fault could not be removed.");
+
+    Check(fixture.Export(exported, error), "Retrying after the initial withdrawal-list failure failed: " + error);
+    Check(exported.number == 1 && exported.name == "revia-live-1" && exported.train + exported.validation + exported.test == 30,
+        "The initial withdrawal-list failure consumed the first export number or lost accepted corrections.");
+    Check(!exported.withdrawnList.empty() && exported.withdrawnList == list &&
+              std::filesystem::is_regular_file(list) && json::parse(Read(list)) == json::array(),
+        "The retry did not return a readable empty withdrawal list.");
+    const auto summary = DescribeLiveDatasetExport(exported);
+    Check(summary.find(revia::actions::PathToUtf8(list)) != std::string::npos && summary.find("withdrawnSourcesPath") != std::string::npos,
+        "The successful retry omitted the withdrawal-list guidance for a training job.");
+}
+
+void TestInvalidExistingWithdrawalListIsPreserved()
+{
+    Fixture fixture;
+    for (int number = 1; number <= 30; ++number)
+        Keep(fixture.store, number);
+    const auto list = fixture.store.WithdrawnList();
+    for (const std::string bytes : {"{broken\n", "{\"withdrawn\":[\"source-to-retain\"]}\n", "[\"source-to-retain\",7]\n"})
+    {
+        Write(list, bytes);
+        LiveDatasetExport exported;
+        std::string error;
+        Check(!fixture.Export(exported, error) && !error.empty() && error.find(revia::actions::PathToUtf8(list)) != std::string::npos,
+            "An invalid existing withdrawal list was accepted or its concrete path was omitted: " + error);
+        Check(Read(list) == bytes && !std::filesystem::exists(fixture.lineage) && std::filesystem::is_empty(fixture.parent),
+            "An invalid existing withdrawal list was replaced or an export was reserved or published.");
+    }
+}
+
+void TestPublicationFailureKeepsReservedPartitionsAndNumber()
+{
+    Fixture fixture;
+    std::vector<std::string> kept;
+    for (int number = 1; number <= 30; ++number)
+        kept.push_back(Keep(fixture.store, number));
+    Write(fixture.store.WithdrawnList(), "[]\n");
+    const auto fault = fixture.parent / "revia-live-1.partial";
+    Check(std::filesystem::create_directory(fault), "The publication fault was not established.");
+    LiveDatasetExport failed;
+    std::string error;
+    Check(!fixture.Export(failed, error) && !error.empty() && !std::filesystem::exists(fixture.parent / "revia-live-1"),
+        "The blocked publication reported success or published its final directory.");
+    const auto reservation = json::parse(Read(fixture.lineage / "lineage.json"));
+    const auto reservedManifest = fixture.lineage / "manifests" / "revia-live-1.json";
+    Check(reservation.at("exports").size() == 1 && reservation.at("exports")[0].at("name") == "revia-live-1" &&
+              reservation.at("exports")[0].at("number") == 1 &&
+              reservation.at("exports")[0].at("manifestSha256") == revia::audit::ContentDigest(Read(reservedManifest)),
+        "A publication failure lost its numbered reservation or kept manifest.");
+    const auto reserved = Partitions(reservedManifest);
+    std::string heldOut;
+    int heldOutNumber = 0;
+    for (int number = 1; number <= 30 && heldOut.empty(); ++number)
+        if (reserved.at("live:" + kept[number - 1]) != "train")
+        {
+            heldOut = kept[number - 1];
+            heldOutNumber = number;
+        }
+    Check(!heldOut.empty(), "No reserved example was held out to test with.");
+    int sibling = 1000;
+    while (Judged(sibling, "", heldOutNumber).captureId > heldOut)
+        ++sibling;
+    const auto newTurn = Keep(fixture.store, sibling, LearningDecision::Accept, "", heldOutNumber);
+    Check(std::filesystem::is_empty(fault) && std::filesystem::remove(fault), "The owned empty publication fault could not be removed.");
+    LiveDatasetExport retried;
+    Check(fixture.Export(retried, error) && retried.number == 2 && retried.name == "revia-live-2",
+        "A publication retry reused a reserved export number: " + error);
+    const auto retriedPartitions = Partitions(retried.directory / "manifest.json");
+    for (const auto& [id, partition] : reserved)
+        Check(retriedPartitions.at(id) == partition, "A publication retry moved an earlier reserved partition: " + id);
+    Check(retriedPartitions.at("live:" + newTurn) == reserved.at("live:" + heldOut) &&
+              json::parse(Read(retried.directory / "manifest.json")).at("salt") == reservation.at("salt"),
+        "A new related turn escaped its reserved held-out partition or the lineage salt changed.");
 }
 
 void TestPendingCleanupMetadataIsOpaqueToExport()
@@ -309,6 +405,8 @@ void RunLiveDatasetExportTests()
     std::string errors;
     for (const auto test : {TestCandidateFileMatchesTheCaptureTool, TestNumberedExportsKeepEveryEarlierPartition,
              TestReturningExampleKeepsItsPartitionFromAnyEarlierExport, TestRefusalsWriteNothing,
+             TestInitialWithdrawalListFailureDoesNotReserveAnExport, TestInvalidExistingWithdrawalListIsPreserved,
+             TestPublicationFailureKeepsReservedPartitionsAndNumber,
              TestPendingCleanupMetadataIsOpaqueToExport})
         try
         {
