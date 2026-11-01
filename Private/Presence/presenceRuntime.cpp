@@ -18,6 +18,8 @@ namespace revia::presence
 
 namespace
 {
+    constexpr std::size_t MaximumAdapterEnvelopeBytes = 256 * 1024;
+
     std::string Lower(std::string value)
     {
         std::transform(value.begin(), value.end(), value.begin(),
@@ -669,11 +671,32 @@ bool PresenceRuntime::ParseAdapterFile(const std::filesystem::path& path, Extern
         std::lock_guard lock(mutex);
         settings = configuration;
     }
-    std::ifstream file(path);
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        outError = "Adapter input could not be opened.";
+        return false;
+    }
+    // The extra byte detects an oversized envelope without trusting a prior file-size check.
+    std::string bytes(MaximumAdapterEnvelopeBytes + 1, '\0');
+    file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    const auto count = file.gcount();
+    if (count > static_cast<std::streamsize>(MaximumAdapterEnvelopeBytes))
+    {
+        outError = "Adapter input exceeded the " + std::to_string(MaximumAdapterEnvelopeBytes) + "-byte envelope limit.";
+        return false;
+    }
+    if (file.bad() || (file.fail() && !file.eof()))
+    {
+        outError = "Adapter input could not be read.";
+        return false;
+    }
+    bytes.resize(static_cast<std::size_t>(count));
     nlohmann::json document;
     try
     {
-        file >> document;
+        std::istringstream input(std::move(bytes));
+        input >> document;
     }
     catch (...)
     {
