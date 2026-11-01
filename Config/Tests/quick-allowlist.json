@@ -202,6 +202,14 @@
         "Revia.TestCatalogSlash"
       ]
     },
+    "browser-budget": {
+      "approval": "reviewed-controlled",
+      "scope": "controlled",
+      "purpose": "Pure Node observation-frame budget and effect-uncertainty component checks; no browser, network or device startup.",
+      "ids": [
+        "Revia.InteractiveBrowserBudget"
+      ]
+    },
     "catalog": {
       "approval": "reviewed-controlled",
       "scope": "controlled",
@@ -3844,6 +3852,37 @@
         "sourceIdentity": "975c0b1b360a69ea046cc478a138561805442274ed5edfafffe3fb58c598d3ce",
         "outcome": "completed_zero_exit_with_skip_hints",
         "fresh": false
+      }
+    },
+    "Revia.InteractiveBrowserBudget": {
+      "purpose": "Actual observe/operate with synthetic DOM evaluation checks complete UTF-8 frames, unavailable readback, target identities and pre/post-effect refusal.",
+      "prerequisites": [
+        "Existing Node.js interpreter; no installation, browser, network, audio or GPU worker."
+      ],
+      "execution": {
+        "approval": "reviewed-controlled",
+        "adapter": "node",
+        "cwd": "registered",
+        "environment": {},
+        "requiredFiles": [
+          {
+            "path": "<SOURCE_ROOT>/Tools/Browser/interactiveBudget.test.mjs",
+            "reason": "Registered pure Node budget module must exist."
+          },
+          {
+            "path": "<SOURCE_ROOT>/Tools/Browser/interactiveHost.mjs",
+            "reason": "Production browser worker imported by the budget module must exist."
+          }
+        ],
+        "registrationDigest": "9ee325495701e81a7c45ce6eaf3d14fba645009d8f2b9d9d7a0415be1522507a",
+        "interpreterArguments": [
+          {
+            "index": 0,
+            "kind": "node"
+          }
+        ],
+        "holdReason": "",
+        "requiresOwnedLoopback": false
       }
     },
     "Revia.DiscordVoiceAdapter": {
