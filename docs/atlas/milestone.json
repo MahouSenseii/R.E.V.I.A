@@ -1,23 +1,24 @@
 {
   "schema_version": 2,
-  "milestone": "Eleven reliability repairs integrated into GitHub main",
-  "recorded_utc": "2026-11-01T23:09:17+00:00",
+  "milestone": "Twelve reliability repairs integrated into GitHub main",
+  "recorded_utc": "2026-11-01T23:55:52+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
-    "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
+    "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+    "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
     "source_files": 1403,
-    "raw_source_sha256": "d36d4014118b711b63626a26001b4df89764515e4623212661e7d3682d8fb4bd",
-    "git_lf_source_sha256": "0029e7631db645fa1ebbc52a94da9db2494b62b14735b15f1c129bb165526035",
+    "raw_source_sha256": "8c1bd9553178609befc759a05b4e05850acb3654868664e7b751b3a28155691a",
+    "git_lf_source_sha256": "e4966f4954dc83878ac362cf1df99271840525517bb77dba1cc3b4613eb04fc7",
     "incremental_changed_paths": [
       67,
       8,
       5,
-      4
+      4,
+      3
     ],
-    "reliability_repairs": 11,
+    "reliability_repairs": 12,
     "installed_app_updated": false,
     "release_qualified": false,
     "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
@@ -113,6 +114,14 @@
       "checks": "Preceding repair: the direct existing Presence module passed GREEN with 4 new cases and its original playback checks. This evidence is reused here; no new run.",
       "next_step": "Qualify external-adapter input handling in authorized running-app use.",
       "implementation": "Merged into GitHub main through PR 13; installed app unchanged"
+    },
+    {
+      "id": "ACT-2",
+      "name": "Refuse unsupported window-specific recording consent",
+      "summary": "Reject any nonempty window-title restriction before files or a recording session can change.",
+      "checks": "Reused: the preceding direct recorder suite completed 15 functions (13 original, 2 new) after a meaningful RED failure. Not a registered CTest/catalog pass; Foundation stayed held.",
+      "next_step": "Keep supported application-only consent; qualify recorder behavior in separately authorized live use.",
+      "implementation": "Merged through PR 14; installed app unchanged"
     }
   ],
   "capabilities": [
@@ -446,12 +455,15 @@
   ],
   "next": {
     "sequence": [
-      "Qualify live native-browser integration and Stop behavior",
-      "Qualify real-model, voice/media/GPU and normal-app behavior before release"
+      "Diagnose and fix the retained AudiencePrivacy failure on current main.",
+      "Run complete application CI on latest main with no skipped checks.",
+      "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
+      "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
+      "Only then consider broader multi-workflow expansion."
     ],
-    "name": "Qualify the integrated source in live use",
-    "state": "Source merged; installed app unchanged; runtime/release qualification open",
-    "detail": "Retain scoped evidence and unresolved setup gaps. Source integration is not application deployment or a new full-suite pass."
+    "name": "Validate current main before considering broader workflows",
+    "state": "REQUESTED / NOT RUN",
+    "detail": "After ACT2 closeout: (1) diagnose and fix AudiencePrivacy; (2) run complete application CI on latest main without skipped checks; (3) check finite real-local-model delegation alongside chat, review its report and cancel an active job; (4) verify Atlas evidence, source and handoffs; (5) only then consider multi-workflow expansion. Setup, resource and cost inspection precede the approved finite CI/model validation. None has run in this milestone; no ready hierarchy, production readiness or scheduler expansion is claimed."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -593,7 +605,7 @@
     "qualification": "Application CI has not run; no CI pass is claimed. Broad autoBuild real-browser paths remain deferred and unqualified; retained local results are scoped evidence",
     "scope": "Application source CI only; excludes static Atlas Pages publishing"
   },
-  "excluded_later_work": "Only the reviewed PR10/11/12 source and the four-file MEM3/MED6 delta in PR13 are integrated; other later work is excluded",
+  "excluded_later_work": "Only reviewed PR10/11/12/13 and ACT2 PR14 source changes are integrated; other later work is excluded",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -729,19 +741,21 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
-    "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
+    "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+    "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
     "merge_order": [
       10,
       11,
       12,
-      13
+      13,
+      14
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
       "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
       "12": "0b908ef779ea10564d7746834065adcf02abb07c",
-      "13": "23f20c91c81c6f0002335daa0c77360decc32240"
+      "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+      "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": true,
@@ -850,13 +864,141 @@
       "UI-4",
       "ACT-3",
       "MEM-3",
-      "MED-6"
+      "MED-6",
+      "ACT-2"
     ],
-    "merged_repairs": 11,
+    "merged_repairs": 12,
     "separate_tooling_ids": [
       "QUAL-1",
       "TEST-CATALOG"
     ],
     "capabilities": 20
+  },
+  "historical_integration_before_ACT2": {
+    "milestone": "Eleven reliability repairs integrated into GitHub main",
+    "recorded_utc": "2026-11-01T23:09:17+00:00",
+    "source": {
+      "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+      "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
+      "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
+      "source_files": 1403,
+      "raw_source_sha256": "d36d4014118b711b63626a26001b4df89764515e4623212661e7d3682d8fb4bd",
+      "git_lf_source_sha256": "0029e7631db645fa1ebbc52a94da9db2494b62b14735b15f1c129bb165526035",
+      "incremental_changed_paths": [
+        67,
+        8,
+        5,
+        4
+      ],
+      "reliability_repairs": 11,
+      "installed_app_updated": false,
+      "release_qualified": false,
+      "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
+    },
+    "integration": {
+      "main_commit": "23f20c91c81c6f0002335daa0c77360decc32240",
+      "main_tree": "2f185827f5fa4e0937f60237cff52ad9c0a5e0e0",
+      "merge_order": [
+        10,
+        11,
+        12,
+        13
+      ],
+      "merge_commits": {
+        "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+        "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+        "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+        "13": "23f20c91c81c6f0002335daa0c77360decc32240"
+      },
+      "method": "normal merge commits; reviewed source heads preserved",
+      "merge_commit_skip_ci": true,
+      "application_ci_run": false,
+      "installed_app_updated": false,
+      "runtime_release_qualified": false
+    },
+    "scope": "Previous eleven-repair source integration, retained as history"
+  },
+  "recording_consent_follow_on": {
+    "id": "ACT-2",
+    "name": "Refuse unsupported window-specific recording consent",
+    "source_state": "Merged source; installed app unchanged; runtime/release qualification open",
+    "source_head": "5b4ff5ff53128ef9b79d71216df7b681664312e5",
+    "source_merge_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+    "source_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
+    "pull_request": 14,
+    "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/14",
+    "source_parent": "b0969f36571a67220fa53a13c6480990a4c5c4ad",
+    "reviewed_source_paths": [
+      "Private/Computer/experienceRecorder.cpp",
+      "Public/Computer/experienceRecorder.h",
+      "Tests/experienceRecorderTests.cpp"
+    ],
+    "changed_paths": 3,
+    "raw_1403_sha256": "8c1bd9553178609befc759a05b4e05850acb3654868664e7b751b3a28155691a",
+    "git_lf_1403_sha256": "e4966f4954dc83878ac362cf1df99271840525517bb77dba1cc3b4613eb04fc7",
+    "source_file_count_scope": "Pinned repository files, including code, configuration, docs and assets; not all code",
+    "behavior": "Begin refuses every nonempty title before filesystem/session mutation and preserves an already authorized application-only session after refusal",
+    "window_specific_recording_supported": false,
+    "normal_app_only_controller_behavior_compatible": true,
+    "observed_privacy_incident": false,
+    "direct_existing_suite": "RunExperienceRecorderTests",
+    "functions": {
+      "original": 13,
+      "new": 2,
+      "completed_GREEN": 15
+    },
+    "preceding_RED_exit": 1,
+    "preceding_GREEN_exit": 0,
+    "evidence_reused_for_this_milestone": true,
+    "new_test_execution_here": false,
+    "registered_CTest_or_catalog_entry": false,
+    "held_Foundation_run": false,
+    "recording_scope": "Real recorder API wrote only invented fixture data to owned temporary datasets; no real activity capture",
+    "build_scope": "Both phases compiled recorder/test/entry with pinned reused archives; component relink, not clean application build",
+    "framework_CMake_catalog_added": false,
+    "independent_review": "Specification PASS; code quality PASS; no findings or blockers",
+    "combined_build_full_suite_CI_live_runtime_release_qualified": false,
+    "installed_app_updated": false,
+    "application_deployed": false
+  },
+  "current_evidence_boundary": "Evidence boundary: ACT2 reuses its preceding direct recorder GREEN: 15 functions, not a registered CTest/catalog entry. Foundation remained held. Earlier MEM3/MED6 evidence keeps its original scope. These component relinks do not establish a combined build, full suite, CI, live capture, runtime/release readiness or performance.",
+  "next_milestone": {
+    "state": "REQUESTED_NOT_RUN",
+    "requested_order": [
+      {
+        "step": 1,
+        "request": "Diagnose and fix the retained AudiencePrivacy failure on current main.",
+        "state": "REQUESTED_NOT_RUN"
+      },
+      {
+        "step": 2,
+        "request": "Run complete application CI on latest main with no skipped checks.",
+        "state": "REQUESTED_NOT_RUN"
+      },
+      {
+        "step": 3,
+        "request": "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
+        "state": "REQUESTED_NOT_RUN"
+      },
+      {
+        "step": 4,
+        "request": "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
+        "state": "REQUESTED_NOT_RUN"
+      },
+      {
+        "step": 5,
+        "request": "Only then consider broader multi-workflow expansion.",
+        "state": "REQUESTED_NOT_RUN"
+      }
+    ],
+    "authorization_scope": "Finite CI and real-local-model validation are approved next, subject to setup, resource and cost inspection; no such execution has occurred in this milestone.",
+    "setup_resource_cost_inspection_status": "NOT RUN",
+    "complete_application_CI_status": "NOT RUN; requested without skipped checks",
+    "finite_local_model_delegation_chat_report_cancel_status": "NOT RUN",
+    "Atlas_evidence_source_handoff_verification_status": "REQUESTED after the validation receipts",
+    "multi_workflow_expansion": "CONSIDER ONLY AFTER prior steps; no implementation or scheduler expansion started",
+    "ready_hierarchy_claim": false,
+    "production_readiness_claim": false,
+    "current_milestone_execution_claim": "ACT2 and prior evidence remain as recorded; this next plan adds no CI/model/runtime result"
   }
 }
