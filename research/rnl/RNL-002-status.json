@@ -1,0 +1,18 @@
+{
+  "experiment": "RNL-002",
+  "status": "measured_numeric_contract",
+  "protocol_commit": "b8dfac36bc291e1230cc72471938c7ad6a929cfd",
+  "report": "RESULTS-RNL-002.md",
+  "summary": "results/RNL-002/summary.json",
+  "oracle_tests_passed": 7,
+  "steps_per_mode": 280,
+  "M_matches_U_bits": true,
+  "M_hits": 77,
+  "M_matrix_macs": 834,
+  "U_matrix_macs": 972,
+  "B_negative_control_rejected": true,
+  "speed_or_total_memory_benefit_established": false,
+  "training_or_gpu_work": false,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false
+}

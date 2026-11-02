@@ -3,3 +3,5 @@ first001.cpp -text
 check_first001.py -text
 run_bounded.py -text
 test_run_bounded.py -text
+cache002.cpp -text
+check_cache002.py -text

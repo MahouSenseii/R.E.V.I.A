@@ -23,13 +23,23 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | New packed-runtime instrumentation; no language-model claim |
-| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 toy equivalence/storage results; timing and total-RAM limits remain |
+| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime and matrix-cache instrumentation; no language-model claim |
+| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence and RNL-002 exact-cache contract; no runtime benefit established |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
 These stages are separate decisions. A completed run, smaller matrix payload or
 passing toy test does not promote an idea automatically.
+
+RNL-002 then tested one correction to the failed cache contract: reuse only the
+raw matrix product, keyed by selected expert and all input bits, while always
+rerouting and updating state. M matched the uncached reference bit-for-bit over
+280 steps, with 77 hits. Omitting the expert from the key failed its planned
+control. This is numeric equivalence on a pinned toy, not a speed or RAM result.
+See the [RNL-002 report](RESULTS-RNL-002.md), [pre-registered protocol](RNL-002.md),
+[status](RNL-002-status.json) and [evidence](results/RNL-002/summary.json).
+One experiment is concluded; a representative size/throughput study is a separate
+next decision. No further model, training or integration work runs automatically.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored

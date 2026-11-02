@@ -1,0 +1,737 @@
+{
+  "experiment": "RNL-002",
+  "status": "measured_numeric_contract",
+  "question": "Does one-entry reuse of raw selected-expert matrix products preserve numeric recurrence when routing and state always recompute?",
+  "protocol_commit": "b8dfac36bc291e1230cc72471938c7ad6a929cfd",
+  "protocol_git_bytes_sha256": "39cf614104e16a8fc9cd8a355c00d1674ac3d30f85fcb263f3843445466a9c59",
+  "started_utc": "2026-11-02T19:14:29.462362+00:00",
+  "finished_utc": "2026-11-02T19:14:30.745605+00:00",
+  "source_hashes": {
+    "model": "624a406e865feb8c3274537e2d0667b56992744f2277aa42d1da1f25469e12dd",
+    "fixtures": "117fb9c164787d3cf784722ddae6b955b03bf3492a97e42462413d707b2fd029",
+    "original_cpp": "d5ee18bbe9df39eb9d99b571c93ae1f0bbeec97bf19b387587a71d4563d61b0f",
+    "worker_cpp": "8163fb3ffa478ed93557df758920a9f8fae0eef26e6a242c14ef38d36d767984",
+    "checker": "3318bf8c1dd416d1ed21cc25a29854c148c6b7962994bfd47f0eebff630f274e",
+    "protocol": "39cf614104e16a8fc9cd8a355c00d1674ac3d30f85fcb263f3843445466a9c59",
+    "worker_executable": "d78bc8cb7f7e8e733de5daeb97d255ec78286cff1608e6c5b617ad5c555b8d75",
+    "guard": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7"
+  },
+  "compiler": "MSVC 19.50.35730.0",
+  "compile_flags": [
+    "/std:c++20",
+    "/EHsc",
+    "/W4",
+    "/O2",
+    "/fp:strict",
+    "/INCREMENTAL:NO"
+  ],
+  "build_warnings": "Six inherited size_t-to-unsigned warnings from unchanged original source; no new worker warning.",
+  "modes": {
+    "U": "Uncached recurrence",
+    "M": "One-entry selected-expert plus all input FP32 bits key",
+    "B": "Negative control omitting selected expert from key"
+  },
+  "conditions": {
+    "model_immutable_per_cache_lifetime": true,
+    "top_k": 1,
+    "experts": 3,
+    "matrix_dimensions": [
+      3,
+      3
+    ],
+    "cases_per_mode": 20,
+    "steps_per_mode": 280,
+    "initial_states": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0.25,
+        -0.5,
+        0.75
+      ]
+    ],
+    "entry_reset_per_case": true,
+    "raw_product_copied_by_value": true,
+    "router_activation_state_always_recomputed": true,
+    "oracle_fp32_tolerance": 1e-06,
+    "numeric_trajectories_only": true,
+    "fp_exception_flags_in_contract": false,
+    "model_reload_or_mutation_tested": false
+  },
+  "validation": {
+    "tests": 7,
+    "oracle_exit": 0,
+    "U_vs_M_bitwise_equivalent": true,
+    "comparisons": {
+      "M": {
+        "bit_mismatches": 0,
+        "state_divergent_steps": 0,
+        "max_state_error": 0.0,
+        "max_output_error": 0.0
+      },
+      "B": {
+        "bit_mismatches": 132,
+        "state_divergent_steps": 25,
+        "max_state_error": 0.09268528199999992,
+        "max_output_error": 0.167425096
+      }
+    },
+    "negative_control_rejected": true,
+    "signed_zero_expected_hit_pattern": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "counts": {
+    "U": {
+      "matrix_macs": 972,
+      "router_products": 7560,
+      "activations": 840,
+      "state_updates": 840,
+      "key_comparisons": 0,
+      "key_expert_comparisons": 0,
+      "cache_lookups": 0,
+      "cache_hits": 0,
+      "cache_misses": 0,
+      "matrix_evaluations": 280
+    },
+    "M": {
+      "matrix_macs": 834,
+      "router_products": 7560,
+      "activations": 840,
+      "state_updates": 840,
+      "key_comparisons": 437,
+      "key_expert_comparisons": 260,
+      "cache_lookups": 280,
+      "cache_hits": 77,
+      "cache_misses": 203,
+      "matrix_evaluations": 203
+    },
+    "B": {
+      "matrix_macs": 684,
+      "router_products": 7560,
+      "activations": 840,
+      "state_updates": 840,
+      "key_comparisons": 560,
+      "key_expert_comparisons": 0,
+      "cache_lookups": 280,
+      "cache_hits": 102,
+      "cache_misses": 178,
+      "matrix_evaluations": 178
+    }
+  },
+  "capacity": {
+    "U": {
+      "logical_enabled": false,
+      "logical_capacity_bytes": 0,
+      "input_key_bits_bytes": 0,
+      "raw_product_bytes": 0,
+      "expert_index_bytes": 0,
+      "validity_bytes": 0,
+      "padding_bytes": 0,
+      "cache_struct_sizeof_bytes": 32,
+      "vm_object_sizeof_bytes": 40,
+      "full_vm_allocation_bytes": null,
+      "process_memory_bytes": null,
+      "sizeof_is_not_total_memory": true
+    },
+    "M": {
+      "logical_enabled": true,
+      "logical_capacity_bytes": 32,
+      "input_key_bits_bytes": 12,
+      "raw_product_bytes": 12,
+      "expert_index_bytes": 4,
+      "validity_bytes": 1,
+      "padding_bytes": 3,
+      "cache_struct_sizeof_bytes": 32,
+      "vm_object_sizeof_bytes": 64,
+      "full_vm_allocation_bytes": null,
+      "process_memory_bytes": null,
+      "sizeof_is_not_total_memory": true
+    },
+    "B": {
+      "logical_enabled": true,
+      "logical_capacity_bytes": 32,
+      "input_key_bits_bytes": 12,
+      "raw_product_bytes": 12,
+      "expert_index_bytes": 4,
+      "validity_bytes": 1,
+      "padding_bytes": 3,
+      "cache_struct_sizeof_bytes": 32,
+      "vm_object_sizeof_bytes": 64,
+      "full_vm_allocation_bytes": null,
+      "process_memory_bytes": null,
+      "sizeof_is_not_total_memory": true
+    }
+  },
+  "fp_environment": {
+    "U": {
+      "fe_round_start": 0,
+      "fe_round_end": 0,
+      "FE_TONEAREST": 0,
+      "round_to_nearest": true,
+      "sse_control_mask": 57408,
+      "mxcsr_control_before": 0,
+      "mxcsr_control_after": 0,
+      "sse_rounding_bits": 0,
+      "ftz": false,
+      "daz": false,
+      "exception_status_flags_start": 0,
+      "exception_status_flags_end": 32,
+      "controls_unchanged": true,
+      "exception_flags_in_contract": false
+    },
+    "M": {
+      "fe_round_start": 0,
+      "fe_round_end": 0,
+      "FE_TONEAREST": 0,
+      "round_to_nearest": true,
+      "sse_control_mask": 57408,
+      "mxcsr_control_before": 0,
+      "mxcsr_control_after": 0,
+      "sse_rounding_bits": 0,
+      "ftz": false,
+      "daz": false,
+      "exception_status_flags_start": 0,
+      "exception_status_flags_end": 32,
+      "controls_unchanged": true,
+      "exception_flags_in_contract": false
+    },
+    "B": {
+      "fe_round_start": 0,
+      "fe_round_end": 0,
+      "FE_TONEAREST": 0,
+      "round_to_nearest": true,
+      "sse_control_mask": 57408,
+      "mxcsr_control_before": 0,
+      "mxcsr_control_after": 0,
+      "sse_rounding_bits": 0,
+      "ftz": false,
+      "daz": false,
+      "exception_status_flags_start": 0,
+      "exception_status_flags_end": 32,
+      "controls_unchanged": true,
+      "exception_flags_in_contract": false
+    }
+  },
+  "matrix_macs_avoided_by_M": 138,
+  "matrix_mac_reduction_fraction": 0.1419753086419753,
+  "route_transition": {
+    "U": [
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0,
+          0,
+          0
+        ],
+        "state_before_bits": [
+          0,
+          0,
+          0
+        ],
+        "scores": [
+          -0.200000003,
+          2,
+          2
+        ],
+        "scores_bits": [
+          3192704205,
+          1073741824,
+          1073741824
+        ],
+        "selected": [
+          1
+        ],
+        "matrix_product": [
+          1,
+          1,
+          2
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1073741824
+        ],
+        "output": [
+          0.761594176,
+          0.761594176,
+          0.964027584
+        ],
+        "output_bits": [
+          1061353430,
+          1061353430,
+          1064749699
+        ],
+        "state_after": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_after_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "cache_hit": false,
+        "matrix_macs": 6,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 0,
+        "key_expert_comparisons": 0,
+        "cache_lookups": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "matrix_evaluations": 1
+      },
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_before_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "scores": [
+          -0.110199161,
+          2.10281515,
+          2.11986208
+        ],
+        "scores_bits": [
+          3185684505,
+          1074173062,
+          1074244562
+        ],
+        "selected": [
+          2
+        ],
+        "matrix_product": [
+          1,
+          1,
+          1
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1065353216
+        ],
+        "output": [
+          0.795295715,
+          0.795295715,
+          0.803514957
+        ],
+        "output_bits": [
+          1061918848,
+          1061918848,
+          1062056744
+        ],
+        "state_after": [
+          0.546377659,
+          0.546377659,
+          0.60017854
+        ],
+        "state_after_bits": [
+          1057742696,
+          1057742696,
+          1058645325
+        ],
+        "cache_hit": false,
+        "matrix_macs": 6,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 0,
+        "key_expert_comparisons": 0,
+        "cache_lookups": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "matrix_evaluations": 1
+      }
+    ],
+    "M": [
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0,
+          0,
+          0
+        ],
+        "state_before_bits": [
+          0,
+          0,
+          0
+        ],
+        "scores": [
+          -0.200000003,
+          2,
+          2
+        ],
+        "scores_bits": [
+          3192704205,
+          1073741824,
+          1073741824
+        ],
+        "selected": [
+          1
+        ],
+        "matrix_product": [
+          1,
+          1,
+          2
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1073741824
+        ],
+        "output": [
+          0.761594176,
+          0.761594176,
+          0.964027584
+        ],
+        "output_bits": [
+          1061353430,
+          1061353430,
+          1064749699
+        ],
+        "state_after": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_after_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "cache_hit": false,
+        "matrix_macs": 6,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 0,
+        "key_expert_comparisons": 0,
+        "cache_lookups": 1,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "matrix_evaluations": 1
+      },
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_before_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "scores": [
+          -0.110199161,
+          2.10281515,
+          2.11986208
+        ],
+        "scores_bits": [
+          3185684505,
+          1074173062,
+          1074244562
+        ],
+        "selected": [
+          2
+        ],
+        "matrix_product": [
+          1,
+          1,
+          1
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1065353216
+        ],
+        "output": [
+          0.795295715,
+          0.795295715,
+          0.803514957
+        ],
+        "output_bits": [
+          1061918848,
+          1061918848,
+          1062056744
+        ],
+        "state_after": [
+          0.546377659,
+          0.546377659,
+          0.60017854
+        ],
+        "state_after_bits": [
+          1057742696,
+          1057742696,
+          1058645325
+        ],
+        "cache_hit": false,
+        "matrix_macs": 6,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 0,
+        "key_expert_comparisons": 1,
+        "cache_lookups": 1,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "matrix_evaluations": 1
+      }
+    ],
+    "B": [
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0,
+          0,
+          0
+        ],
+        "state_before_bits": [
+          0,
+          0,
+          0
+        ],
+        "scores": [
+          -0.200000003,
+          2,
+          2
+        ],
+        "scores_bits": [
+          3192704205,
+          1073741824,
+          1073741824
+        ],
+        "selected": [
+          1
+        ],
+        "matrix_product": [
+          1,
+          1,
+          2
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1073741824
+        ],
+        "output": [
+          0.761594176,
+          0.761594176,
+          0.964027584
+        ],
+        "output_bits": [
+          1061353430,
+          1061353430,
+          1064749699
+        ],
+        "state_after": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_after_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "cache_hit": false,
+        "matrix_macs": 6,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 0,
+        "key_expert_comparisons": 0,
+        "cache_lookups": 1,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "matrix_evaluations": 1
+      },
+      {
+        "input": [
+          0,
+          1,
+          1
+        ],
+        "input_bits": [
+          0,
+          1065353216,
+          1065353216
+        ],
+        "state_before": [
+          0.342717379,
+          0.342717379,
+          0.43381241
+        ],
+        "state_before_bits": [
+          1051687079,
+          1051687079,
+          1054743721
+        ],
+        "scores": [
+          -0.110199161,
+          2.10281515,
+          2.11986208
+        ],
+        "scores_bits": [
+          3185684505,
+          1074173062,
+          1074244562
+        ],
+        "selected": [
+          2
+        ],
+        "matrix_product": [
+          1,
+          1,
+          2
+        ],
+        "matrix_product_bits": [
+          1065353216,
+          1065353216,
+          1073741824
+        ],
+        "output": [
+          0.795295715,
+          0.795295715,
+          0.970940053
+        ],
+        "output_bits": [
+          1061918848,
+          1061918848,
+          1064865671
+        ],
+        "state_after": [
+          0.546377659,
+          0.546377659,
+          0.675519824
+        ],
+        "state_after_bits": [
+          1057742696,
+          1057742696,
+          1059909342
+        ],
+        "cache_hit": true,
+        "matrix_macs": 0,
+        "router_products": 27,
+        "activations": 3,
+        "state_updates": 3,
+        "key_comparisons": 3,
+        "key_expert_comparisons": 0,
+        "cache_lookups": 1,
+        "cache_hits": 1,
+        "cache_misses": 0,
+        "matrix_evaluations": 0
+      }
+    ]
+  },
+  "resources": {
+    "supervised_workers": 3,
+    "all_zero_exit": true,
+    "all_limits_verified_and_cleanup_confirmed": true,
+    "elapsed_attempt_seconds": 1.2810000000172295,
+    "elapsed_is_not_a_latency_comparison": true,
+    "artifact_bytes_at_attempt_end": 617060,
+    "artifact_bytes_with_derived_summary": 629450,
+    "worker_working_set_and_commit_cap_bytes": 268435456,
+    "logical_cpu_affinity_mask": 1,
+    "single_os_thread_proven": false,
+    "result_budget_exclusive_bytes": 10485760,
+    "direct_output_limit_per_worker_exclusive_bytes": 1048576,
+    "stream_and_metadata_limit_per_worker_exclusive_bytes": 65536,
+    "guard_not_a_security_sandbox": true,
+    "initial_scratch_path_failure_retained": true,
+    "permission_settings_changed": false
+  },
+  "performance": {
+    "latency_compared": false,
+    "throughput_compared": false,
+    "process_memory_benefit_tested": false,
+    "source_counts_are_not_cpu_instructions_or_speedup": true,
+    "language_quality_tested": false,
+    "Qwen_or_llama_cpp_tested": false
+  },
+  "artifacts": {
+    "fixtures.rnc": {
+      "bytes": 3764,
+      "sha256": "117fb9c164787d3cf784722ddae6b955b03bf3492a97e42462413d707b2fd029"
+    },
+    "B/result.json": {
+      "bytes": 200787,
+      "sha256": "e0fb43da9255be8fb27b738258c0b993da8ecc555db4b3d34c499802d9ba13ef"
+    },
+    "M/result.json": {
+      "bytes": 200807,
+      "sha256": "4c4b355401d193a6eb6b0c841aa073fa442e86fe10dd1d5dcc8142540088a23b"
+    },
+    "U/result.json": {
+      "bytes": 200873,
+      "sha256": "0d284885109c52f1e7bb3e062c1bef8bff8e8b8f9fb12dddae75c52a37970a63"
+    }
+  },
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "conclusion": "The complete key preserves the pinned toy numeric trajectory; an input-only key fails when recurrent routing changes expert. This is not a timing, total-memory or model-quality result."
+}
