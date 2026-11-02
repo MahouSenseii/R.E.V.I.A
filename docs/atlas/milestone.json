@@ -1,27 +1,40 @@
 {
   "schema_version": 2,
-  "milestone": "Twelve reliability repairs integrated into GitHub main",
-  "recorded_utc": "2026-11-01T23:55:52+00:00",
+  "milestone": "Privacy fixture maintenance and scoped validation checkpoint",
+  "recorded_utc": "2026-11-02T06:32:09.360662+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
-    "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
+    "main_commit": "29df918f62c2dbc2eece734122bb583b934512d8",
+    "main_tree": "2df6daec7c2102591aa96ff5e6d480d77c4fc0d6",
     "source_files": 1403,
-    "raw_source_sha256": "8c1bd9553178609befc759a05b4e05850acb3654868664e7b751b3a28155691a",
-    "git_lf_source_sha256": "e4966f4954dc83878ac362cf1df99271840525517bb77dba1cc3b4613eb04fc7",
+    "raw_source_sha256": "3a11b8951fbb59599ace50fc08794c366ea56f212cfcdc6edeed851ab69279b5",
+    "git_lf_source_sha256": "7b798dccec1f62335b50f52a6ca36d6489a40c2b4eb8e61bbeab00f87c6312fc",
     "incremental_changed_paths": [
       67,
       8,
       5,
       4,
+      3,
       3
     ],
     "reliability_repairs": 12,
     "installed_app_updated": false,
     "release_qualified": false,
-    "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
+    "file_count_scope": "The legacy source_files field counts a pinned 1,403-file product snapshot subset, including non-UTF8 format fixtures; the complete Git tree has 1,409 blobs. Six later public Atlas/workflow files are outside that map. Identity preserves raw bytes or their recorded CRLF-to-LF form; not all files are text.",
+    "pinned_product_snapshot_files": 1403,
+    "repository_tree_blobs": 1409,
+    "excluded_later_Atlas_workflow_files": [
+      ".github/workflows/atlas-pages.yml",
+      "docs/atlas/atlas.css",
+      "docs/atlas/atlas.js",
+      "docs/atlas/index.html",
+      "docs/atlas/milestone.json",
+      "docs/atlas/public.css"
+    ],
+    "test_catalog_maintenance_pr": 15,
+    "production_privacy_changed_by_PR15": false
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "counts": {
@@ -455,15 +468,14 @@
   ],
   "next": {
     "sequence": [
-      "Diagnose and fix the retained AudiencePrivacy failure on current main.",
-      "Run complete application CI on latest main with no skipped checks.",
-      "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
-      "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
-      "Only then consider broader multi-workflow expansion."
+      "Review actual CI outcomes and skips without weakening gates",
+      "Diagnose useful grounded read selection and reviewed-report failure",
+      "Keep operator-started cancellation separate from autonomous model-selected flow",
+      "Verify source/evidence before considering broader workflow expansion"
     ],
-    "name": "Validate current main before considering broader workflows",
-    "state": "REQUESTED / NOT RUN",
-    "detail": "After ACT2 closeout: (1) diagnose and fix AudiencePrivacy; (2) run complete application CI on latest main without skipped checks; (3) check finite real-local-model delegation alongside chat, review its report and cancel an active job; (4) verify Atlas evidence, source and handoffs; (5) only then consider multi-workflow expansion. Setup, resource and cost inspection precede the approved finite CI/model validation. None has run in this milestone; no ready hierarchy, production readiness or scheduler expansion is claimed."
+    "name": "Resolve validation gaps before expanding workflows",
+    "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
+    "detail": "Review CI failures and actual skips, then diagnose why the local model did not choose useful grounded reads before verified report acceptance. Keep operator-started cancellation qualification separate from autonomous selection. Verify source/evidence and resolve these gaps before considering broader workflow expansion."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -600,12 +612,74 @@
     "current_runnability_remeasured": false
   },
   "ci": {
-    "commit_skip_ci": true,
-    "observed_remote_workflow_runs": 0,
-    "qualification": "Application CI has not run; no CI pass is claimed. Broad autoBuild real-browser paths remain deferred and unqualified; retained local results are scoped evidence",
-    "scope": "Application source CI only; excludes static Atlas Pages publishing"
+    "commit_skip_ci": false,
+    "branch_commit_skip_ci": true,
+    "branch_skip_reason": "Avoid duplicate pre-merge workflows; not a branch CI pass",
+    "observed_remote_workflow_runs": 1,
+    "scope": "Existing complete application workflow on exact merged source; Atlas publishing is separate",
+    "qualification": "Application CI failed: five jobs passed; Windows CTest recorded 153 passed entries, two failures and two optional FFmpeg skips. The green-CI milestone remains unmet.",
+    "workflow": {
+      "observed_utc": "2026-11-02T06:30:37.5020894Z",
+      "run": {
+        "id": 41397195633,
+        "name": "Build and test",
+        "head_sha": "29df918f62c2dbc2eece734122bb583b934512d8",
+        "status": "completed",
+        "conclusion": "failure",
+        "event": "push",
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41397195633"
+      },
+      "jobs": [
+        {
+          "id": 125120972373,
+          "name": "Public text relay and connector",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125120972537,
+          "name": "Linux / isolated journal persistence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125120972539,
+          "name": "Windows / WebDemo operator paths",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125120972548,
+          "name": "Setup scripts / PowerShell 5.1",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125120972598,
+          "name": "Discord voice / offline transport",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125120972666,
+          "name": "Windows / MinGW",
+          "status": "completed",
+          "conclusion": "failure"
+        }
+      ]
+    },
+    "audit": {
+      "summary": "Application CI failed: five jobs passed; Windows CTest recorded 153 passed entries, two failures and two optional FFmpeg skips. The green-CI milestone remains unmet.",
+      "details": [
+        "All six existing jobs ran on the exact PR 15 merge without a CI skip marker. Public text relay, Linux journal persistence, Windows operator paths, PowerShell 5.1 and offline Discord voice jobs passed. The native all-target build, controlled-loopback conversation relay and GNU ld relink checks passed; the CTest step failed.",
+        "All 157 expected registrations matched discovery. CTest recorded 153 successful entries, two failed entries and two SKIP_RETURN_CODE=77 entries: ReviaVideoDecoderTests and Revia.VideoPreview lacked optional FFmpeg/ffprobe prerequisites. The native frameworks additionally reported 21 optional subcheck skips: one VTube Studio, three torch-policy, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed its five cases. Skips are not passes or proof of those optional capabilities.",
+        "ReviaAudiencePrivacyTests failed while opening its complete PNG after the fixture changed the working directory. Relative source paths under the CI ccache configuration are the leading explanation, not a newly observed privacy disclosure. Revia.InteractiveBrowser failed its stale-target attempted-status assertion: native accounting treats a dispatched mutation as attempted even when stale generation is rejected. The compound assertion does not establish a second DOM mutation. Both failures, source identities and the original logs are retained; no assertions were weakened and no rerun is claimed.",
+        "This CI run tests source 29df918f62c2dbc2eece734122bb583b934512d8. The nine-path delegation candidate and its combined local fixture checks remain unpublished and outside this CI run. The real-model reviewed-report scenario remains unestablished. Operator-started cancellation retains its separate mechanical scope; installed-app, autonomous cancellation, GPU-stop and release qualification remain open."
+      ]
+    },
+    "later_Atlas_docs_only_commit_is_application_CI_head": false
   },
-  "excluded_later_work": "Only reviewed PR10/11/12/13 and ACT2 PR14 source changes are integrated; other later work is excluded",
+  "excluded_later_work": "Only PR15 test/catalog maintenance was added in this publication. The separate local delegation candidate remains unmerged and excluded from this main CI.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -741,25 +815,27 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
-    "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
+    "main_commit": "29df918f62c2dbc2eece734122bb583b934512d8",
+    "main_tree": "2df6daec7c2102591aa96ff5e6d480d77c4fc0d6",
     "merge_order": [
       10,
       11,
       12,
       13,
-      14
+      14,
+      15
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
       "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
       "12": "0b908ef779ea10564d7746834065adcf02abb07c",
       "13": "23f20c91c81c6f0002335daa0c77360decc32240",
-      "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3"
+      "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+      "15": "29df918f62c2dbc2eece734122bb583b934512d8"
     },
     "method": "normal merge commits; reviewed source heads preserved",
-    "merge_commit_skip_ci": true,
-    "application_ci_run": false,
+    "merge_commit_skip_ci": false,
+    "application_ci_run": true,
     "installed_app_updated": false,
     "runtime_release_qualified": false
   },
@@ -961,44 +1037,169 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "Evidence boundary: ACT2 reuses its preceding direct recorder GREEN: 15 functions, not a registered CTest/catalog entry. Foundation remained held. Earlier MEM3/MED6 evidence keeps its original scope. These component relinks do not establish a combined build, full suite, CI, live capture, runtime/release readiness or performance.",
+  "current_evidence_boundary": "Privacy maintenance is test/catalog-only and retains a direct14-function suite, not14CTests or a fresh catalog pass. Application CI is recorded separately on exact source29df918. The local real-model report remains unestablished and its operator-started cancellation observation does not establish autonomous cancellation or inference-stop. Component and live evidence scopes remain distinct; installed app and release status are unchanged.",
   "next_milestone": {
-    "state": "REQUESTED_NOT_RUN",
-    "requested_order": [
-      {
-        "step": 1,
-        "request": "Diagnose and fix the retained AudiencePrivacy failure on current main.",
-        "state": "REQUESTED_NOT_RUN"
-      },
-      {
-        "step": 2,
-        "request": "Run complete application CI on latest main with no skipped checks.",
-        "state": "REQUESTED_NOT_RUN"
-      },
-      {
-        "step": 3,
-        "request": "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
-        "state": "REQUESTED_NOT_RUN"
-      },
-      {
-        "step": 4,
-        "request": "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
-        "state": "REQUESTED_NOT_RUN"
-      },
-      {
-        "step": 5,
-        "request": "Only then consider broader multi-workflow expansion.",
-        "state": "REQUESTED_NOT_RUN"
-      }
-    ],
-    "authorization_scope": "Finite CI and real-local-model validation are approved next, subject to setup, resource and cost inspection; no such execution has occurred in this milestone.",
-    "setup_resource_cost_inspection_status": "NOT RUN",
-    "complete_application_CI_status": "NOT RUN; requested without skipped checks",
-    "finite_local_model_delegation_chat_report_cancel_status": "NOT RUN",
-    "Atlas_evidence_source_handoff_verification_status": "REQUESTED after the validation receipts",
-    "multi_workflow_expansion": "CONSIDER ONLY AFTER prior steps; no implementation or scheduler expansion started",
+    "state": "PARTIAL_VALIDATION",
+    "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
+    "complete_application_CI": {
+      "id": 41397195633,
+      "name": "Build and test",
+      "head_sha": "29df918f62c2dbc2eece734122bb583b934512d8",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41397195633"
+    },
+    "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
+    "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
+    "Atlas_evidence_source_handoff_verification": "Prepared from retained reviewed receipts; deployed-byte and actual-browser checks follow publication",
+    "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
     "ready_hierarchy_claim": false,
     "production_readiness_claim": false,
-    "current_milestone_execution_claim": "ACT2 and prior evidence remain as recorded; this next plan adds no CI/model/runtime result"
+    "release_qualified": false
+  },
+  "historical_integration_before_AudiencePrivacy": {
+    "recorded_utc": "2026-11-01T23:55:52+00:00",
+    "scope": "Earlier ACT2 checkpoint and requested plan before these validation observations",
+    "source": {
+      "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+      "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+      "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
+      "source_files": 1403,
+      "raw_source_sha256": "8c1bd9553178609befc759a05b4e05850acb3654868664e7b751b3a28155691a",
+      "git_lf_source_sha256": "e4966f4954dc83878ac362cf1df99271840525517bb77dba1cc3b4613eb04fc7",
+      "incremental_changed_paths": [
+        67,
+        8,
+        5,
+        4,
+        3
+      ],
+      "reliability_repairs": 12,
+      "installed_app_updated": false,
+      "release_qualified": false,
+      "file_count_scope": "Pinned repository files, including code, configuration, docs and assets"
+    },
+    "integration": {
+      "main_commit": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+      "main_tree": "01548868e9be13c15303d14c152eca6e48e287ea",
+      "merge_order": [
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "merge_commits": {
+        "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+        "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+        "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+        "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+        "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3"
+      },
+      "method": "normal merge commits; reviewed source heads preserved",
+      "merge_commit_skip_ci": true,
+      "application_ci_run": false,
+      "installed_app_updated": false,
+      "runtime_release_qualified": false
+    },
+    "ci": {
+      "commit_skip_ci": true,
+      "observed_remote_workflow_runs": 0,
+      "qualification": "Application CI has not run; no CI pass is claimed. Broad autoBuild real-browser paths remain deferred and unqualified; retained local results are scoped evidence",
+      "scope": "Application source CI only; excludes static Atlas Pages publishing"
+    },
+    "next": {
+      "sequence": [
+        "Diagnose and fix the retained AudiencePrivacy failure on current main.",
+        "Run complete application CI on latest main with no skipped checks.",
+        "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
+        "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
+        "Only then consider broader multi-workflow expansion."
+      ],
+      "name": "Validate current main before considering broader workflows",
+      "state": "REQUESTED / NOT RUN",
+      "detail": "After ACT2 closeout: (1) diagnose and fix AudiencePrivacy; (2) run complete application CI on latest main without skipped checks; (3) check finite real-local-model delegation alongside chat, review its report and cancel an active job; (4) verify Atlas evidence, source and handoffs; (5) only then consider multi-workflow expansion. Setup, resource and cost inspection precede the approved finite CI/model validation. None has run in this milestone; no ready hierarchy, production readiness or scheduler expansion is claimed."
+    },
+    "next_milestone": {
+      "state": "REQUESTED_NOT_RUN",
+      "requested_order": [
+        {
+          "step": 1,
+          "request": "Diagnose and fix the retained AudiencePrivacy failure on current main.",
+          "state": "REQUESTED_NOT_RUN"
+        },
+        {
+          "step": 2,
+          "request": "Run complete application CI on latest main with no skipped checks.",
+          "state": "REQUESTED_NOT_RUN"
+        },
+        {
+          "step": 3,
+          "request": "Check one finite real-local-model delegation while chat continues; review its report and cancel an active job.",
+          "state": "REQUESTED_NOT_RUN"
+        },
+        {
+          "step": 4,
+          "request": "Verify Atlas evidence, source references and handoffs against the resulting receipts.",
+          "state": "REQUESTED_NOT_RUN"
+        },
+        {
+          "step": 5,
+          "request": "Only then consider broader multi-workflow expansion.",
+          "state": "REQUESTED_NOT_RUN"
+        }
+      ],
+      "authorization_scope": "Finite CI and real-local-model validation are approved next, subject to setup, resource and cost inspection; no such execution has occurred in this milestone.",
+      "setup_resource_cost_inspection_status": "NOT RUN",
+      "complete_application_CI_status": "NOT RUN; requested without skipped checks",
+      "finite_local_model_delegation_chat_report_cancel_status": "NOT RUN",
+      "Atlas_evidence_source_handoff_verification_status": "REQUESTED after the validation receipts",
+      "multi_workflow_expansion": "CONSIDER ONLY AFTER prior steps; no implementation or scheduler expansion started",
+      "ready_hierarchy_claim": false,
+      "production_readiness_claim": false,
+      "current_milestone_execution_claim": "ACT2 and prior evidence remain as recorded; this next plan adds no CI/model/runtime result"
+    }
+  },
+  "audience_fixture_validation": {
+    "id": "AUDIENCE-FIXTURE",
+    "code_scope": "Test and catalog maintenance only; no production privacy implementation change",
+    "review_refs": {
+      "pull_request": 15,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/15",
+      "head": "9170bb45429b168227c2445f4634761c8f407a3e",
+      "merge": "29df918f62c2dbc2eece734122bb583b934512d8",
+      "tree": "2df6daec7c2102591aa96ff5e6d480d77c4fc0d6",
+      "merged": true
+    },
+    "evidence": "Retained approved-context meaningful RED and GREEN direct suite; initial default-context connection failure and expected HTTP500 fixture warning preserved",
+    "catalog_scope": "Only this module and conversation/all-reviewed memberships; registration/owned-loopback requirements and historical result freshness preserved",
+    "limits": "Malformed reference-image refusal is not general named-reference privacy or complete valid-image editing qualification",
+    "retained_local_component_evidence": {
+      "direct_suite_functions": 14,
+      "ctest_invocation": false,
+      "fresh_catalog_run": false
+    },
+    "current_application_CI": "Recorded separately under ci on exact merged source; do not sum with retained local component evidence"
+  },
+  "local_model_validation": {
+    "source_scope": "Separate unpublished local delegation checkpoint; not current main/CI qualification",
+    "later_delegation_source_published": false,
+    "ordinary_chat_and_first_delegation_observed": true,
+    "continued_chat_observed": true,
+    "reviewed_report_established": false,
+    "useful_file_read_selected_after_listing": false,
+    "end_to_end_milestone_met": false,
+    "operator_cancel": {
+      "operator_started": true,
+      "model_selected": false,
+      "native_cancel_mechanical_scope_passed": true,
+      "finite_quiet_observed": true,
+      "accepted_late_result_published": false,
+      "GPU_inference_stop_qualified": false,
+      "typed_chat_cancellation_qualified": false,
+      "physical_GUI_button_qualified": false
+    },
+    "performance_claim": false
   }
 }
