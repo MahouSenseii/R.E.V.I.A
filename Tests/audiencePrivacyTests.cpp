@@ -41,6 +41,14 @@ constexpr const char* PrivateCause = "private_cause_fixture_a532";
 constexpr const char* AuthoredCharacter = "AUTHORED_CHARACTER_FIXTURE_84F0";
 constexpr const char* AuthoredPreference = "authored astronomy";
 
+embeddingSettings AudienceFixtureEmbeddings()
+{
+    embeddingSettings settings;
+    settings.bEnabled = false;
+    settings.bAutoStartServer = false;
+    return settings;
+}
+
 class WorkingDirectory
 {
   public:
@@ -460,7 +468,7 @@ void TestRegenerateAndEditRetractOnlyTheLatestExchange()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"regenerate-fixture", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "fixture-chat");
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     const std::string first = "What does a static library contain?";
@@ -530,7 +538,7 @@ void TestNewChatStartsAFreshContextAndKeepsTheOldOne()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"new-chat-fixture", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "first-chat");
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     Check(session.Submit("Remember the sentinel_old_chat_4c1 topic.").succeeded, "The first chat turn failed.");
@@ -570,8 +578,8 @@ void TestAttachmentsStayInThePrivateConversation()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"attachment-fixture", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
-    ReviaSessionTestAccess::ConfigureAttachments(session, true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
+    ReviaSessionTestAccess::ConfigureAttachments(session, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     const auto notes = directory.root / "launch-notes.md";
     {
@@ -632,8 +640,8 @@ void TestStoredImagesSurviveReplayAndRespectConversationLifetime()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"image-continuity", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
-    ReviaSessionTestAccess::ConfigureAttachments(session, true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
+    ReviaSessionTestAccess::ConfigureAttachments(session, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "image-chat");
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     (void)ReviaSessionTestAccess::IntroduceTaskSpeaker(session, "Morgan");
@@ -799,8 +807,8 @@ void TestImageClarificationsDoNotCallTheBackend()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"image-clarification", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
-    ReviaSessionTestAccess::ConfigureAttachments(session, true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
+    ReviaSessionTestAccess::ConfigureAttachments(session, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::OpenConversationArchive(session, directory.root / "conversations.db", "clarification-chat");
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     (void)ReviaSessionTestAccess::IntroduceTaskSpeaker(session, "Morgan");
@@ -900,8 +908,8 @@ void TestImageReferencesDoNotBecomeUnrelatedGenerationOrConceptUploads()
     WorkingDirectory cwd(directory.root);
     Backend backend("fixture-main");
     ReviaSession session(CompanionPaths(directory.root, {"image-routing", "Fixture Revia", "assistant", false}));
-    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port);
-    ReviaSessionTestAccess::ConfigureAttachments(session, true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(session, backend.port, true, true, AudienceFixtureEmbeddings());
+    ReviaSessionTestAccess::ConfigureAttachments(session, true, AudienceFixtureEmbeddings());
     ReviaSessionTestAccess::MarkStudioStarted(session, true);
     (void)ReviaSessionTestAccess::IntroduceTaskSpeaker(session, "Morgan");
     const auto projections = std::make_shared<std::atomic<int>>(0);
@@ -945,9 +953,12 @@ void TestImageReferencesDoNotBecomeUnrelatedGenerationOrConceptUploads()
              "Turn it into a watercolor.", "Convert it into a watercolor.", "Redraw it in blue."})
     {
         const auto refused = session.Submit(input);
-        Check(!refused.succeeded && refused.reason.find("Reference-image") != std::string::npos &&
-                  backend.Requests().size() == beforeReferences && projections->load() == beforeProjections,
-            "A named or ordinal reference reached prompt-only generation, a model request or the Canvas projection.");
+        Check(!refused.succeeded, "A named or ordinal reference unexpectedly succeeded: " + input);
+        Check(refused.reason.find("Reference-image") != std::string::npos ||
+                  refused.reason.find("reference image") != std::string::npos,
+            "A named or ordinal reference did not explain its reference-image refusal: " + input + " (" + refused.reason + ")");
+        Check(backend.Requests().size() == beforeReferences, "A named or ordinal reference reached a model request: " + input);
+        Check(projections->load() == beforeProjections, "A named or ordinal reference reached the Image or Canvas projection: " + input);
     }
     for (const std::string input : {"How does image compression work?", "Tell me a story about a picture book."})
     {

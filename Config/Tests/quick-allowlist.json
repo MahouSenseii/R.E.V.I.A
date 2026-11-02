@@ -58,7 +58,8 @@
         "revia_web_guest",
         "revia_web_guest_privacy",
         "Revia.OutputBoundaries",
-        "Revia.IdentityFinalSave"
+        "Revia.IdentityFinalSave",
+        "ReviaAudiencePrivacyTests"
       ]
     },
     "memory": {
@@ -355,7 +356,8 @@
         "Revia.SettingsDialog",
         "Revia.ShellWidgets",
         "Revia.TestCatalogSlash",
-        "Revia.SvgRenderer"
+        "Revia.SvgRenderer",
+        "ReviaAudiencePrivacyTests"
       ]
     },
     "benchmark-contract": {
@@ -674,13 +676,13 @@
       }
     },
     "ReviaAudiencePrivacyTests": {
-      "purpose": "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable",
+      "purpose": "Public and private conversation, attachment and image-reference boundaries with owned synthetic HTTP fixtures; embeddings are disabled.",
       "prerequisites": [
         "Fixture-owned ephemeral loopback must be permitted; existing services are never used.",
-        "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable; no proven command env switch disables the hardcoded settings."
+        "Rebuild ReviaAudiencePrivacyTests from the current isolated-fixture source before running."
       ],
       "execution": {
-        "approval": "held",
+        "approval": "reviewed-controlled",
         "adapter": "native",
         "cwd": "registered",
         "environment": {},
@@ -692,7 +694,7 @@
         ],
         "registrationDigest": "e45f89019a19739316dc31ea1666c352fc64c04cc155675cd4981863a7068842",
         "interpreterArguments": [],
-        "holdReason": "Most conversation/image tests use owned fake HTTP and synthetic attachments, but ReviaSession fixtures pass default enabled embeddings to ConfigureStartupBrains/ConfigureAttachments. Thus unowned127.0.0.1:8081 remains reachable; no proven command env switch disables the hardcoded settings.",
+        "holdReason": "",
         "requiresOwnedLoopback": true
       },
       "history": {
@@ -4826,7 +4828,9 @@
             "reason": "Registered focused fixture binary must exist."
           }
         ],
-        "requiredPrograms": ["node.exe"],
+        "requiredPrograms": [
+          "node.exe"
+        ],
         "registrationDigest": "7cf91ec52fe9f8d8c84780f2f4da8484ae23f6a8af30090265ee2703dced80fb",
         "interpreterArguments": [],
         "holdReason": "",
