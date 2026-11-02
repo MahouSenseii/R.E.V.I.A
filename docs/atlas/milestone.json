@@ -1813,5 +1813,59 @@
       "exit_code_capture_proven": false
     },
     "delegation_candidate_published": false
+  },
+  "current_local_candidate": {
+    "recorded_utc": "2026-11-02T17:41:37+00:00",
+    "summary": "Reviewed delegation fixes touch nine files and remain local and unmerged; the failed stopping paragraph is excluded. Reviewed-report success remains unmet.",
+    "state": "LOCAL_REVIEWED_NOT_MERGED",
+    "changed_paths": 9,
+    "merged_production_repair_count_changed": false,
+    "useful_behaviors": [
+      "Preserve bounded receipt path identities within 16 KiB.",
+      "Separate native same-turn handoff status from model prose.",
+      "Retain the primary original request alongside the subordinate model summary without widening native authority."
+    ],
+    "prompt_experiment": {
+      "state": "CLOSED",
+      "failed_stopping_paragraph_included": false,
+      "earlier_reviewed_discovery_grounding_text_retained": true
+    },
+    "latest_related_actual_case": {
+      "label": "rpt2",
+      "relationship": "Related experimental candidate, not an exact run of the nine-file candidate with the failed paragraph removed.",
+      "native_delegation": "PASS",
+      "chat_while_task_active": "PASS; overlap reply was useful",
+      "successful_native_directory_listings": 1,
+      "native_file_reads": 0,
+      "reviewed_accepted_report": "FAIL; not established",
+      "host_acceptance": "Strict verification withheld acceptance; no fabricated or unverified report was accepted.",
+      "owned_processes_after_cleanup": 0,
+      "initial_ordinary_definition_answer": "Delivered, but weak/evasive; separate from the useful overlap reply."
+    },
+    "related_module_evidence": {
+      "passed_modules": 3,
+      "reused_modules": 3,
+      "fresh_exact_candidate_module_runs": 0,
+      "qualification": "Reused related-candidate evidence only; not fresh exact-nine-without-paragraph results."
+    },
+    "main_ci_boundary": {
+      "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+      "passed": 155,
+      "skipped": 2,
+      "qualifies_local_candidate": false
+    },
+    "separate_open_issue": {
+      "name": "Deep-root checkpoint exposure",
+      "state": "OPEN",
+      "exposure": "Accepted deep application runtime roots can exceed the checkpoint temporary-path budget; shared AtomicSave exposure remains.",
+      "harness_recovery": "Short-path harness recovery cleared the experiment blocker; it is not a product persistence fix or general long-path qualification."
+    },
+    "limits": [
+      "No publication, merge or installed-app update is performed by this prepared payload.",
+      "Useful reviewed-report success and broader runtime/release qualification remain open.",
+      "No production-readiness, overall-percentage or comparative performance claim."
+    ],
+    "base_main": "097937b8cde958c7deff9ade84e85f27327fe266",
+    "patch_sha256": "4684bdba9286921ac112d625249bbffa8f120693b3a75eb8c2c9842353ebb70b"
   }
 }

@@ -32,6 +32,8 @@
 #include "Internet/lookupQueryResolver.h"
 #include "Memory/temporalQuery.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -1547,6 +1549,12 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     // permissions, admission and audit. The deterministic routers below stay for every
     // turn without tools, and come back for this one if the backend turns tools down.
     std::optional<agents::ToolLoop> toolLoop;
+    const auto delegationCue = agents::ReadDelegationCue(policyInput);
+    const bool delegationRequested = !proactive && !compositionOnly && !turnPolicy.publicAudience &&
+                                     delegationCue == agents::DelegationCue::UseAgents &&
+                                     agents::RequestedReplyContract(policyInput).rootKind == agents::ReplyFormat::Conversation;
+    bool delegationAttempted = false;
+    std::string submittedTaskId;
     const auto latestUser =
         std::find_if(promptContext.rbegin(), promptContext.rend(), [](const auto& message) { return message.role == "user"; });
     const bool suppliedPixels =
@@ -1591,7 +1599,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         // "use your agents" opens it in On request mode, "answer this directly" closes it in
         // any mode, and Auto leaves the choice to the model through the tool's description.
         permissions.delegationMode = grant.delegationMode;
-        permissions.delegationCue = agents::ReadDelegationCue(policyInput);
+        permissions.delegationCue = delegationCue;
         permissions.delegatedTaskKnown = grant.delegatedTaskKnown;
         // Whether code can run this turn, and if not, why: the one place this is said.
         if (permissions.sandbox.interpreter && grant.executors.sandbox.runPython)
@@ -1664,13 +1672,30 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             // words, so the report answers what they asked, and the audience the turn was
             // admitted for. Copied, because the task outlives this turn.
             executors.delegateTask =
-                [delegate = std::move(executors.delegateTask), request = policyInput, revision = turnPolicy.audienceRevision](
+                [&delegationAttempted, &submittedTaskId, currentTurn, delegate = std::move(executors.delegateTask), request = policyInput,
+                    revision = turnPolicy.audienceRevision](
                     agents::DelegationSubmission submission, const agents::ToolCallContext& call)
             {
                 submission.userRequest = request;
                 submission.originTurnId = call.turnId;
                 submission.audienceRevision = revision;
-                return delegate(submission, call);
+                delegationAttempted = true;
+                auto receipt = delegate(submission, call);
+                // Read only the native owner's receipt, never the model's claims or a task
+                // left over from another turn. Duplicate calls retain the confirmed handoff.
+                if (receipt.succeeded && call.turnId == currentTurn)
+                {
+                    const auto payload = nlohmann::json::parse(receipt.content, nullptr, false);
+                    if (payload.is_object() && payload.contains("status") && payload["status"].is_string() &&
+                        payload.contains("task_id") && payload["task_id"].is_string())
+                    {
+                        const auto status = payload["status"].get<std::string>();
+                        const auto id = payload["task_id"].get<std::string>();
+                        if ((status == "submitted" || status == "already_submitted") && !id.empty())
+                            submittedTaskId = id;
+                    }
+                }
+                return receipt;
             };
         }
         agents::ToolRegistry registry = agents::ToolRegistry::Project(permissions, executors);
@@ -1902,6 +1927,22 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         responseDelivered = finished.fromAssistant && finished.succeeded && !finished.text.empty();
         generatedMediaCommitted = responseDelivered && !finished.generatedMediaReferences.empty();
+        if ((delegationRequested || delegationAttempted) && turnPolicy.audienceRevision != 0 && admitted())
+        {
+            RuntimeEvent event;
+            event.kind = RuntimeEventKind::DelegationOutcome;
+            event.stamp = latencyOrigin;
+            event.audienceRevision = turnPolicy.audienceRevision;
+            event.turnId = currentTurn;
+            event.conversationTurnId = currentTurn;
+            event.component = "Delegation outcome";
+            event.phase = !submittedTaskId.empty() ? "Submitted" : (delegationAttempted ? "Refused" : "NotSubmitted");
+            event.message = !submittedTaskId.empty() ? "A new task was started for this request."
+                            : delegationAttempted ? "No successful handoff was confirmed for this request."
+                                                  : "No new task was started for this request.";
+            event.detail = submittedTaskId;
+            events.Publish(std::move(event));
+        }
         return finished;
     };
 
@@ -2280,6 +2321,8 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             toolLoop->SetAuditHandler(
                 [&](const agents::ToolAuditRecord& record)
                 {
+                    if (record.turnId == currentTurn && record.tool == "delegate_task")
+                        delegationAttempted = true;
                     log.Log("Tool call turn #" + std::to_string(record.turnId) + " | tool=" + record.tool + " | id=" + record.callId +
                             " | arguments_sha256=" + record.argumentsDigest + " | executed=" + (record.executed ? "yes" : "no") +
                             " | outcome=" + OneLine(record.outcome));

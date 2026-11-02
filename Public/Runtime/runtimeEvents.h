@@ -77,7 +77,10 @@ enum class RuntimeEventKind
     // because a performance is a timeline a shell can follow, not a line of dialogue.
     Performance,
     AgentWorkflow,
-    Error
+    Error,
+    // Host receipt for one conversational handoff: phase is Submitted, Refused or
+    // NotSubmitted. Only Submitted carries the actual task ID in detail.
+    DelegationOutcome
 };
 
 struct RuntimeEvent
