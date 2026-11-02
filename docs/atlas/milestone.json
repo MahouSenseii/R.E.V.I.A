@@ -1,16 +1,14 @@
 {
   "schema_version": 2,
-  "milestone": "Native stale-input guard and exact-source application CI checkpoint",
-  "recorded_utc": "2026-11-02T08:31:32.223879+00:00",
+  "milestone": "StopCleanup fixture maintenance and exact-source application CI checkpoint",
+  "recorded_utc": "2026-11-02T14:33:39.886887+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
-    "main_tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+    "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+    "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
     "source_files": 1409,
-    "raw_source_sha256": "9bb545ff58c771d0501ffae89b56ae1aac4e921a591350fcf08c382718412726",
-    "git_lf_source_sha256": "901a78c130ed266ff2404ffd1f13462c7c31675e00b282cdbf06275e0c1e2dc4",
     "incremental_changed_paths": [
       67,
       8,
@@ -18,19 +16,26 @@
       4,
       3,
       3,
-      3
+      3,
+      1
     ],
     "reliability_repairs": 13,
     "installed_app_updated": false,
     "release_qualified": false,
-    "file_count_scope": "Current reviewed reconstruction covers all 1,409 Git blob paths. The earlier historical 1,403-file subset and its six excluded Atlas/workflow additions are preserved under historical_integration_before_CIRecovery. Raw and recorded raw-or-LF map hashes identify reviewed reconstruction bytes, not an asserted hosted checkout byte hash; non-UTF8 format fixtures are retained.",
+    "file_count_scope": "Current source Git identity covers 1,409 blobs. Current file-level provenance identifies the reviewed/published fixture only; no full hosted checkout byte hash is inferred. Earlier complete reconstruction maps and historical 1,403-file subset, including non-UTF8/raw-or-recorded-LF caveats, remain dated history.",
     "repository_tree_blobs": 1409,
     "test_catalog_maintenance_pr": 15,
     "production_privacy_changed_by_PR15": false,
     "CI_identity": {
-      "commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
-      "tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
-      "reviewed_snapshot_is_not_asserted_hosted_checkout_byte_hash": true
+      "commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+      "full_hosted_checkout_byte_hash_claimed": false
+    },
+    "fixture_provenance": {
+      "path": "Tests/Fixture/desktopStopTests.cpp",
+      "reviewed_raw_sha256": "be7ec1570da3c3e5f435b25dfba9cbb02407914045c3c3d505aac811a5403034",
+      "published_LF_sha256": "2c15e223d4ab35d375add5d7b93b3206ab4c1cc73adfb002bd7bc170ff40fbb8",
+      "published_git_blob": "6a213297d9b5465ac284b97bed08748cb5c1f2ee"
     }
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
@@ -465,14 +470,14 @@
   ],
   "next": {
     "sequence": [
-      "Correct and validate bounded StopCleanup fixture setup without weakening assertion or native guard; separate proposal not published",
+      "Retain metadata-child diagnostics and check the existing CognitionCampaignReceipts fixture; cause unknown, no blind full-suite replay",
       "Diagnose useful grounded read selection and reviewed-report failure",
       "Keep operator-started cancellation separate from autonomous model-selected flow",
       "Verify source/evidence before considering broader workflow expansion"
     ],
     "name": "Resolve validation gaps before expanding workflows",
     "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
-    "detail": "Correct and validate the bounded StopCleanup fixture setup while preserving its original cancellation/uncertainty assertion and the native preflight guard. That correction is pending and excluded from this publication. Then diagnose useful grounded read selection and verified report acceptance on the separate local model checkpoint. Keep operator-started cancellation distinct from autonomous selection. Broader workflow expansion remains deferred until its own reviewed evidence exists."
+    "detail": "Retain metadata-child stdout, stderr, exit state and readiness exceptions before cleanup, then check only the existing CognitionCampaignReceipts fixture under finite owned temporary state. Its current startup failure has no established cause; do not blindly replay the complete suite or weaken assertions. Useful grounded read selection and verified report acceptance remain open on the separate local model checkpoint. Keep operator-started cancellation distinct from autonomous selection; broader workflow expansion remains deferred."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -613,70 +618,71 @@
     "branch_commit_skip_ci": true,
     "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
     "observed_remote_workflow_runs": 1,
-    "scope": "Unchanged complete application workflow on exact source commit and Git tree; not the later Atlas-only commit or unpublished local delegation checkpoint",
-    "qualification": "Both original CI failures passed. The complete workflow remains red: 154 CTest entries passed, one StopCleanup fixture check failed and two optional FFmpeg entries were skipped.",
+    "scope": "Existing complete application workflow on exact merged Git commit/tree; not later Atlas-only commit or unpublished delegation checkpoint",
+    "qualification": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
     "workflow": {
-      "observed_utc": "2026-11-02T08:31:16.4591686Z",
+      "observed_utc": "2026-11-02T14:33:38.2424576Z",
       "run": {
-        "id": 41410363660,
+        "id": 41458776477,
         "name": "Build and test",
-        "head_sha": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
         "status": "completed",
         "conclusion": "failure",
         "event": "push",
-        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41410363660"
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
       },
       "jobs": [
         {
-          "id": 125161768520,
-          "name": "Windows / MinGW",
-          "status": "completed",
-          "conclusion": "failure"
-        },
-        {
-          "id": 125161768626,
-          "name": "Discord voice / offline transport",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125161768670,
+          "id": 125322157371,
           "name": "Windows / WebDemo operator paths",
           "status": "completed",
           "conclusion": "success"
         },
         {
-          "id": 125161768698,
+          "id": 125322157860,
           "name": "Linux / isolated journal persistence",
           "status": "completed",
           "conclusion": "success"
         },
         {
-          "id": 125161768774,
+          "id": 125322157906,
+          "name": "Windows / MinGW",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "id": 125322158079,
           "name": "Public text relay and connector",
           "status": "completed",
           "conclusion": "success"
         },
         {
-          "id": 125161769025,
+          "id": 125322158120,
           "name": "Setup scripts / PowerShell 5.1",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125322158204,
+          "name": "Discord voice / offline transport",
           "status": "completed",
           "conclusion": "success"
         }
       ]
     },
     "audit": {
-      "summary": "Both original CI failures passed. The complete workflow remains red: 154 CTest entries passed, one StopCleanup fixture check failed and two optional FFmpeg entries were skipped.",
+      "summary": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
       "details": [
-        "All six existing jobs ran on the exact PR 16 merge without a CI skip marker. Five jobs passed. The Windows native all-target build, controlled-loopback conversation relay, evidence retention and GNU ld relink checks passed; its complete CTest step failed. This is one normal run, not a rerun of unchanged failing main.",
-        "All 157 expected registrations matched discovery: 154 passed, one failed, two SKIP_RETURN_CODE=77 entries lacked optional FFmpeg/ffprobe. The native frameworks also recorded 21 optional subcheck skips: one VTube Studio, three torch, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed five cases. These skips do not qualify their optional capabilities.",
-        "ReviaAudiencePrivacyTests and Revia.InteractiveBrowser both passed. The remaining Revia.StopCleanup case requests Fill with no admitted session, generation or element, while its finite worker publishes no elements. Source tracing shows the tightened preflight rejects that setup before the intended response-cancellation scenario. Its original assertion, including cancellation-after-receipt and conservative uncertainty, remains intact. The post-dispatch implementation is unchanged. Existing telemetry does not establish a separately measured pipe-boundary trace; fixture correction and validation are the next bounded step, not a reason to weaken the assertion or native guard.",
-        "The actual tested identity is source commit 477861d4f3c5f5e350a60581ed24caff32bf6e60, tree d85b49432a8e186f0cb742cf19a1102417c916af. Reviewed raw/normalized reconstruction maps are separate provenance. The nine-path delegation candidate remains local and excluded. A useful real-model reviewed report remains unestablished; operator-started cancellation has only its recorded mechanical scope. Installed-app, normal-runtime, GPU-stop and release qualification remain open."
+        "All six existing jobs ran on the exact PR 17 merge without a CI skip marker. Five jobs passed. The complete Windows native build, controlled-loopback conversation relay, evidence retention and GNU ld relink verification passed; the full CTest step failed. No assertions were weakened or tests quarantined, and no unchanged-main replay is claimed.",
+        "All 157 expected entries matched discovery: 154 passed, one failed and two FFmpeg/ffprobe prerequisite entries returned the approved skip code. Native frameworks additionally recorded 21 optional subcheck skips: one VTube Studio, three torch, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed five cases. Optional skips do not establish those capabilities.",
+        "The sole failure is Revia.CognitionCampaignReceipts: its disposable loopback metadata server did not become ready. It failed before the campaign/runner assertions. The fixture discarded readiness exceptions and did not retain child stdout, stderr or exit state before cleanup, so the evidence cannot distinguish binding failure, child exit or HTTP readiness timeout. The unchanged script passed an earlier run, which does not prove the present cause. No product regression or specific transient cause has been established. The next bounded validation is to retain those diagnostics and run this existing fixture, rather than blindly replay the complete suite or relax its assertion.",
+        "PR 17 changes one test enum line: the generic post-dispatch cancellation case uses an admitted Navigate operation. Its finite worker, response callback, cancelled-after-receipt condition and every uncertainty assertion remain intact. The local RED failure and GREEN result are retained separately; current full CI independently confirms StopCleanup passed. This is fixture maintenance, not another production feature or repair count increment.",
+        "The actual tested identity is commit f0a826a00067618c521e4fe1230fbf6ddcd8bc4a and tree 8f53873aba8f3f214756ae6c8451baaf2cbc083e. Earlier local reconstruction maps retain their own snapshot scope and older documentation bytes. The nine-path delegation candidate is still local and excluded; a useful real-model reviewed report remains unestablished. Operator-started cancellation has only its recorded mechanical scope. Installed-app, normal-runtime, GPU-stop and release qualification remain open."
       ]
     },
     "later_Atlas_docs_only_commit_is_application_CI_head": false
   },
-  "excluded_later_work": "The nine-file local delegation checkpoint remains unpublished and excluded from current source and application CI. This publication adds only PR16 three-file browser/fixture recovery and the two public Atlas summaries.",
+  "excluded_later_work": "Only the PR17 one-line test fixture maintenance and two Atlas summaries are included in this publication. The nine-file local delegation candidate remains unpublished and excluded from current source and CI.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -812,8 +818,8 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
-    "main_tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+    "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+    "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
     "merge_order": [
       10,
       11,
@@ -821,7 +827,8 @@
       13,
       14,
       15,
-      16
+      16,
+      17
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
@@ -830,7 +837,8 @@
       "13": "23f20c91c81c6f0002335daa0c77360decc32240",
       "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
       "15": "29df918f62c2dbc2eece734122bb583b934512d8",
-      "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60"
+      "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+      "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": false,
@@ -1038,18 +1046,18 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR16 adds one production native stale-input preflight guard plus PNG fixture/test maintenance. Actual hosted CI identity is Git commit 477861d4f3c5f5e350a60581ed24caff32bf6e60 and tree d85b49432a8e186f0cb742cf19a1102417c916af. Reviewed raw1409 and recorded raw-or-LF maps identify the reconstruction only. Local focused headless checks and retained startup/profile failures remain separate. The local reviewed-report milestone is unmet, its nine-path delegation source is unpublished, and narrow operator-started cancellation does not establish autonomous cancellation or GPU inference-stop. Installed app and release status are unchanged.",
+  "current_evidence_boundary": "PR17 changes one StopCleanup fixture line, preserving all callback/worker/assertion and production bytes. Thirteen production repairs and20 capability records remain. Actual hosted CI identity is Git commit f0a826a00067618c521e4fe1230fbf6ddcd8bc4a / tree 8f53873aba8f3f214756ae6c8451baaf2cbc083e. Local RED/GREEN is focused offscreen native/finite-worker evidence, not a fresh whole-app build or measured pipe telemetry. Reviewed full snapshot bytes had older Atlas and were not published wholesale; prior raw/LF maps remain historical. Local delegation9/report and narrow operator cancellation limits remain; installed app and release status unchanged.",
   "next_milestone": {
     "state": "PARTIAL_VALIDATION",
     "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
     "complete_application_CI": {
-      "id": 41410363660,
+      "id": 41458776477,
       "name": "Build and test",
-      "head_sha": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+      "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
       "status": "completed",
       "conclusion": "failure",
       "event": "push",
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41410363660"
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
     },
     "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
     "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
@@ -1058,7 +1066,9 @@
     "ready_hierarchy_claim": false,
     "production_readiness_claim": false,
     "release_qualified": false,
-    "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance"
+    "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
+    "remaining_CI_validation": "CognitionCampaignReceipts disposable metadata readiness failure; exact cause unknown; diagnostic-first existing-fixture check next, not executed by this publication",
+    "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability"
   },
   "historical_integration_before_AudiencePrivacy": {
     "recorded_utc": "2026-11-01T23:55:52+00:00",
@@ -1391,6 +1401,215 @@
     },
     "delegation_candidate_published": false,
     "installed_app_changed": false,
-    "remaining_StopCleanup_fixture_correction": "PENDING; separate local proposal excluded from this publication; original assertion and native guard retained"
+    "remaining_StopCleanup_fixture_correction": "MERGED in PR17 as one test enum line; original assertion/native guard retained; actual new CI outcome recorded under current ci"
+  },
+  "historical_integration_before_StopCleanupFixture": {
+    "recorded_utc": "2026-11-02T08:31:32.223879+00:00",
+    "scope": "Dated PR16 source, reviewed reconstruction maps and failed CI before PR17 fixture correction",
+    "source": {
+      "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+      "main_commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+      "main_tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+      "source_files": 1409,
+      "raw_source_sha256": "9bb545ff58c771d0501ffae89b56ae1aac4e921a591350fcf08c382718412726",
+      "git_lf_source_sha256": "901a78c130ed266ff2404ffd1f13462c7c31675e00b282cdbf06275e0c1e2dc4",
+      "incremental_changed_paths": [
+        67,
+        8,
+        5,
+        4,
+        3,
+        3,
+        3
+      ],
+      "reliability_repairs": 13,
+      "installed_app_updated": false,
+      "release_qualified": false,
+      "file_count_scope": "Current reviewed reconstruction covers all 1,409 Git blob paths. The earlier historical 1,403-file subset and its six excluded Atlas/workflow additions are preserved under historical_integration_before_CIRecovery. Raw and recorded raw-or-LF map hashes identify reviewed reconstruction bytes, not an asserted hosted checkout byte hash; non-UTF8 format fixtures are retained.",
+      "repository_tree_blobs": 1409,
+      "test_catalog_maintenance_pr": 15,
+      "production_privacy_changed_by_PR15": false,
+      "CI_identity": {
+        "commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+        "reviewed_snapshot_is_not_asserted_hosted_checkout_byte_hash": true
+      }
+    },
+    "integration": {
+      "main_commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+      "main_tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+      "merge_order": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "merge_commits": {
+        "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+        "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+        "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+        "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+        "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+        "15": "29df918f62c2dbc2eece734122bb583b934512d8",
+        "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60"
+      },
+      "method": "normal merge commits; reviewed source heads preserved",
+      "merge_commit_skip_ci": false,
+      "application_ci_run": true,
+      "installed_app_updated": false,
+      "runtime_release_qualified": false
+    },
+    "ci": {
+      "commit_skip_ci": false,
+      "branch_commit_skip_ci": true,
+      "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
+      "observed_remote_workflow_runs": 1,
+      "scope": "Unchanged complete application workflow on exact source commit and Git tree; not the later Atlas-only commit or unpublished local delegation checkpoint",
+      "qualification": "Both original CI failures passed. The complete workflow remains red: 154 CTest entries passed, one StopCleanup fixture check failed and two optional FFmpeg entries were skipped.",
+      "workflow": {
+        "observed_utc": "2026-11-02T08:31:16.4591686Z",
+        "run": {
+          "id": 41410363660,
+          "name": "Build and test",
+          "head_sha": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41410363660"
+        },
+        "jobs": [
+          {
+            "id": 125161768520,
+            "name": "Windows / MinGW",
+            "status": "completed",
+            "conclusion": "failure"
+          },
+          {
+            "id": 125161768626,
+            "name": "Discord voice / offline transport",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125161768670,
+            "name": "Windows / WebDemo operator paths",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125161768698,
+            "name": "Linux / isolated journal persistence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125161768774,
+            "name": "Public text relay and connector",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125161769025,
+            "name": "Setup scripts / PowerShell 5.1",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "audit": {
+        "summary": "Both original CI failures passed. The complete workflow remains red: 154 CTest entries passed, one StopCleanup fixture check failed and two optional FFmpeg entries were skipped.",
+        "details": [
+          "All six existing jobs ran on the exact PR 16 merge without a CI skip marker. Five jobs passed. The Windows native all-target build, controlled-loopback conversation relay, evidence retention and GNU ld relink checks passed; its complete CTest step failed. This is one normal run, not a rerun of unchanged failing main.",
+          "All 157 expected registrations matched discovery: 154 passed, one failed, two SKIP_RETURN_CODE=77 entries lacked optional FFmpeg/ffprobe. The native frameworks also recorded 21 optional subcheck skips: one VTube Studio, three torch, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed five cases. These skips do not qualify their optional capabilities.",
+          "ReviaAudiencePrivacyTests and Revia.InteractiveBrowser both passed. The remaining Revia.StopCleanup case requests Fill with no admitted session, generation or element, while its finite worker publishes no elements. Source tracing shows the tightened preflight rejects that setup before the intended response-cancellation scenario. Its original assertion, including cancellation-after-receipt and conservative uncertainty, remains intact. The post-dispatch implementation is unchanged. Existing telemetry does not establish a separately measured pipe-boundary trace; fixture correction and validation are the next bounded step, not a reason to weaken the assertion or native guard.",
+          "The actual tested identity is source commit 477861d4f3c5f5e350a60581ed24caff32bf6e60, tree d85b49432a8e186f0cb742cf19a1102417c916af. Reviewed raw/normalized reconstruction maps are separate provenance. The nine-path delegation candidate remains local and excluded. A useful real-model reviewed report remains unestablished; operator-started cancellation has only its recorded mechanical scope. Installed-app, normal-runtime, GPU-stop and release qualification remain open."
+        ]
+      },
+      "later_Atlas_docs_only_commit_is_application_CI_head": false
+    },
+    "ci_recovery": {
+      "review_refs": {
+        "pull_request": 16,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/16",
+        "head": "de0cf12c55e0ff7f6137fbec3ed46f9a5ce569b6",
+        "merge": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+        "merged": true
+      },
+      "changed_paths": [
+        "Private/Browser/browserSession.cpp",
+        "Tests/audiencePrivacyTests.cpp",
+        "Tests/browserExecutionTests.cpp"
+      ],
+      "production_repairs_added": 1,
+      "production_privacy_changed": false,
+      "browser_scope": "The native click/fill path now checks cached observation revision, session, generation, exact URL and issued element under the operation lock before pipe dispatch. Known-stale input is refused while preserving the current observation. Worker live URL/DOM revalidation and conservative post-dispatch uncertainty remain. The prior attempted-status assertion failure did not establish a duplicate DOM mutation.",
+      "fixture_scope": "AudiencePrivacy moved its two complete-PNG fixture reads before the fixture changes working directory; all assertions and 14 direct functions remain. Relative-context RED reproduced the open failure; relative and absolute GREEN contexts completed the direct suite. This is test maintenance, not a production privacy change.",
+      "local_component_scope": "Focused local relinks passed Execution and Owner checks in fresh short owned scratch contexts. Contract evidence is retained from earlier in the same recovery batch, not rerun in the short-context pass. The task-local worker copy added only headless startup; production worker JavaScript was unchanged. These component checks are separate from the complete hosted application workflow.",
+      "retained_failures_and_limits": "Retained failures include an initial headless navigation/startup failure with unproven cause and a long-profile creation failure with a controlled native path-limit diagnostic. The exact earlier generated basename was not retained, so causal attribution remains qualified. No production startup repair, arbitrary-long-path support, normal-browser or physical-GUI qualification, or performance improvement is claimed.",
+      "actual_hosted_CI_identity": {
+        "commit": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "tree": "d85b49432a8e186f0cb742cf19a1102417c916af",
+        "run_id": 41410363660
+      },
+      "delegation_candidate_published": false,
+      "installed_app_changed": false,
+      "remaining_StopCleanup_fixture_correction": "PENDING; separate local proposal excluded from this publication; original assertion and native guard retained"
+    },
+    "next": {
+      "sequence": [
+        "Correct and validate bounded StopCleanup fixture setup without weakening assertion or native guard; separate proposal not published",
+        "Diagnose useful grounded read selection and reviewed-report failure",
+        "Keep operator-started cancellation separate from autonomous model-selected flow",
+        "Verify source/evidence before considering broader workflow expansion"
+      ],
+      "name": "Resolve validation gaps before expanding workflows",
+      "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
+      "detail": "Correct and validate the bounded StopCleanup fixture setup while preserving its original cancellation/uncertainty assertion and the native preflight guard. That correction is pending and excluded from this publication. Then diagnose useful grounded read selection and verified report acceptance on the separate local model checkpoint. Keep operator-started cancellation distinct from autonomous selection. Broader workflow expansion remains deferred until its own reviewed evidence exists."
+    },
+    "next_milestone": {
+      "state": "PARTIAL_VALIDATION",
+      "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
+      "complete_application_CI": {
+        "id": 41410363660,
+        "name": "Build and test",
+        "head_sha": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "status": "completed",
+        "conclusion": "failure",
+        "event": "push",
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41410363660"
+      },
+      "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
+      "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
+      "Atlas_evidence_source_handoff_verification": "Prepared from retained reviewed receipts; deployed-byte and actual-browser checks follow publication",
+      "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
+      "ready_hierarchy_claim": false,
+      "production_readiness_claim": false,
+      "release_qualified": false,
+      "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance"
+    }
+  },
+  "stop_cleanup_fixture_validation": {
+    "review_refs": {
+      "pull_request": 17,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/17",
+      "head": "02703b89f92aa378cd94b9da6df7ddcc0b301dc5",
+      "merge": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+      "merged": true
+    },
+    "scope": "One enum assignment selects admitted Navigate for the existing generic post-dispatch cancellation fixture. The finite worker, receipt callback, original cancellation/uncertainty assertions and both existing function calls remain unchanged. This tests generic mutation cancellation; it does not separately qualify Fill-specific cancellation races or change the production preflight guard.",
+    "retained_local_evidence": "The existing offscreen Qt/native-owner module with a finite owned stdlib Node worker failed before this line change and passed afterward. These are two existing functions in one module, not two new CTests. Cleanup was verified with zero owned survivors. This was a focused cached-object relink; it is separate from the complete hosted workflow and does not qualify real-browser, real-model or physical-GUI behavior. No pipe-boundary timing/byte instrumentation or performance gain is claimed.",
+    "functions_in_existing_module": 2,
+    "production_repairs_added": 0,
+    "production_source_changed": false,
+    "worker_callback_assertions_changed": false,
+    "Fill_specific_cancellation_qualified": false,
+    "measured_pipe_boundary_trace_claimed": false,
+    "full_local_snapshot_overlaid": false,
+    "delegation_candidate_published": false
   }
 }
