@@ -32,6 +32,17 @@ std::string BoundedText(const std::string& text, std::size_t maximum)
 {
     return utf8::Prefix(utf8::Sanitize(text.substr(0, maximum)), maximum);
 }
+
+void AddPathIdentity(Json& receipt, const char* field, const std::filesystem::path& path)
+{
+    if (path.empty())
+        return;
+    const auto identity = actions::PathToUtf8(path);
+    receipt["pathDigests"][field] = audit::ContentDigest(identity);
+    receipt[field] = utf8::IsValid(identity) ? Json(identity) : Json(nullptr);
+    if (receipt[field].is_null())
+        receipt["truncated"] = true;
+}
 }
 
 std::string WorkerToolSchema(const bool allowWrites, const bool allowProcess)
@@ -133,6 +144,13 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
     Json receipt = {{"actionId", BoundedText(request.id, 128)}, {"action", actions::ToString(request.type)},
         {"succeeded", outcome.Succeeded()}, {"attempted", outcome.result.attempted}, {"message", BoundedText(outcome.Message(), 1024)},
         {"contentDigest", audit::ContentDigest(outcome.result.content)}, {"output", output}, {"truncated", truncated}};
+    if (request.type == actions::ActionType::ExecuteProcess)
+    {
+        AddPathIdentity(receipt, "executable", request.process.executable);
+        AddPathIdentity(receipt, "working_directory", request.process.workingDirectory);
+    }
+    else
+        AddPathIdentity(receipt, "source", request.source);
     if (outcome.result.process)
     {
         const auto& process = *outcome.result.process;
@@ -144,12 +162,32 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
         receipt["cancelled"] = process.cancelled;
     }
     auto encoded = receipt.dump();
-    while (encoded.size() > WorkerToolOutputReservation)
+    while (encoded.size() > WorkerToolOutputReservation && !output.empty())
     {
         output = utf8::Prefix(output, output.size() / 2);
         receipt["output"] = output;
         receipt["truncated"] = true;
         encoded = receipt.dump();
+    }
+    auto message = receipt.at("message").get<std::string>();
+    while (encoded.size() > WorkerToolOutputReservation && !message.empty())
+    {
+        message = utf8::Prefix(message, message.size() / 2);
+        receipt["message"] = message;
+        receipt["truncated"] = true;
+        encoded = receipt.dump();
+    }
+    // Identity text is complete or unavailable; its full digest always remains.
+    for (const auto* field : {"working_directory", "executable", "source"})
+    {
+        if (encoded.size() <= WorkerToolOutputReservation)
+            break;
+        if (receipt.contains(field) && !receipt[field].is_null())
+        {
+            receipt[field] = nullptr;
+            receipt["truncated"] = true;
+            encoded = receipt.dump();
+        }
     }
     return encoded;
 }

@@ -1967,6 +1967,7 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         return;
     if ((event.kind == revia::runtime::RuntimeEventKind::AssistantMessage ||
             event.kind == revia::runtime::RuntimeEventKind::ReplyFragment ||
+            event.kind == revia::runtime::RuntimeEventKind::DelegationOutcome ||
             event.kind == revia::runtime::RuntimeEventKind::InvestigationChecking ||
             event.kind == revia::runtime::RuntimeEventKind::InvestigationFindings) &&
         event.audienceRevision == 0)
@@ -1981,6 +1982,14 @@ void ReviaWindow::HandleRuntimeEvent(const revia::runtime::RuntimeEvent& event)
         const bool placed = event.component == "Delegation" && ObserveDelegation(event);
         RefreshAgentWorkflowViews(placed);
         RefreshStateBadge();
+        return;
+    }
+    if (event.kind == revia::runtime::RuntimeEventKind::DelegationOutcome)
+    {
+        if (event.stamp.companionId.empty() || event.conversationTurnId == 0)
+            return;
+        // This is a host receipt, separate from her prose and the workflow-owned task card.
+        AppendChat(QStringLiteral("Task status"), QString::fromStdString(event.message), false);
         return;
     }
     RefreshPresenceUi();

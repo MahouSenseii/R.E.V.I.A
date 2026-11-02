@@ -3,6 +3,8 @@
 #include "testSupport.h"
 
 #include <nlohmann/json.hpp>
+#include <utility>
+#include <vector>
 
 void RunAgentToolWorkerTests()
 {
@@ -51,4 +53,41 @@ void RunAgentToolWorkerTests()
     outcome.runtimeError = "observer failed";
     Check(nlohmann::json::parse(agents::WorkerToolReceipt(read, outcome)).at("succeeded") == false,
         "A runtime reporting failure became verified tool success.");
+    outcome.runtimeError.clear();
+    outcome.result.content.clear();
+    const std::vector<std::string> paths = {"C:/workspace/quote\"and/slash\n.conf",
+        "C:/workspace/\xE7\x95\x8C\xF0\x9F\x99\x82.conf", "C:/" + std::string(1500, '\x01')};
+    for (const auto& path : paths)
+    {
+        read.source = actions::Utf8ToPath(path);
+        const auto encoded = agents::WorkerToolReceipt(read, outcome);
+        const auto identity = nlohmann::json::parse(encoded);
+        Check(identity.contains("source") && identity.at("source").is_string() && identity.at("source") == path &&
+                  identity.contains("pathDigests") && identity.at("pathDigests").at("source") == audit::ContentDigest(path) &&
+                  encoded.size() <= agents::WorkerToolOutputReservation,
+            "A complete valid UTF-8 path that fits the receipt was lost, silently shortened or hashed incorrectly.");
+    }
+    actions::ActionRequest processIdentity;
+    processIdentity.id = "host-process-identity";
+    processIdentity.type = actions::ActionType::ExecuteProcess;
+    const auto longExecutable = "C:/" + std::string(2040, '\x01');
+    const auto longDirectory = "C:/" + std::string(2040, '\x02');
+    processIdentity.process.executable = actions::Utf8ToPath(longExecutable);
+    processIdentity.process.workingDirectory = actions::Utf8ToPath(longDirectory);
+    const auto processReceipt = agents::WorkerToolReceipt(processIdentity, outcome);
+    const auto identities = nlohmann::json::parse(processReceipt);
+    bool unavailable = false;
+    for (const auto& [field, value] : std::vector<std::pair<std::string, std::string>>{
+             {"executable", longExecutable}, {"working_directory", longDirectory}})
+    {
+        Check(identities.contains(field) && identities.contains("pathDigests") &&
+                  identities.at("pathDigests").at(field) == audit::ContentDigest(value),
+            "A process receipt lost the full executable/working-directory identity digest.");
+        Check(identities.at(field).is_null() || (identities.at(field).is_string() && identities.at(field) == value),
+            "A shortened process path was exposed as a complete usable identity.");
+        unavailable = unavailable || identities.at(field).is_null();
+    }
+    Check(unavailable && processReceipt.size() <= agents::WorkerToolOutputReservation && identities.at("succeeded") == true &&
+              identities.at("attempted") == true,
+        "Unfittable identity metadata did not become explicitly unavailable within the existing encoded receipt bound.");
 }
