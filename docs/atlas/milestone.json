@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
-  "milestone": "Cognition fixture startup observability and exact-source application CI checkpoint",
-  "recorded_utc": "2026-11-02T15:40:15.190628+00:00",
+  "milestone": "PR20 delegation grounding merged with exact-candidate application CI",
+  "recorded_utc": "2026-11-02T19:13:03+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
-    "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
-    "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
-    "source_files": 1409,
+    "state": "PR20 merged; thirteen earlier counted repairs plus three bounded delegation corrections; installed Revia unchanged",
+    "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+    "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+    "source_files": 1410,
     "incremental_changed_paths": [
       67,
       8,
@@ -18,18 +18,24 @@
       3,
       3,
       1,
-      1
+      1,
+      9
     ],
     "reliability_repairs": 13,
     "installed_app_updated": false,
     "release_qualified": false,
-    "file_count_scope": "Current source Git identity covers 1,409 blobs. Current file-level provenance identifies the reviewed/published fixture only; no full hosted checkout byte hash is inferred. Earlier complete reconstruction maps and historical 1,403-file subset, including non-UTF8/raw-or-recorded-LF caveats, remain dated history.",
-    "repository_tree_blobs": 1409,
+    "file_count_scope": "Merged Git tree contains 1,410 blobs across code, tests, configuration, docs and assets. Git commit/tree identity is distinct from full hosted checkout byte provenance. Candidate CI and merge differ only in preserved newer research.html.",
+    "repository_tree_blobs": 1410,
     "test_catalog_maintenance_pr": 15,
     "production_privacy_changed_by_PR15": false,
     "CI_identity": {
-      "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
-      "tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+      "commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+      "role": "Primary normal push application CI; PR checkout recorded separately",
+      "PR_checkout_commit": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+      "PR_checkout_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+      "content_transfer_to_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "fresh_merge_main_CI_run_claimed": false,
       "full_hosted_checkout_byte_hash_claimed": false
     },
     "fixture_provenance": {
@@ -37,7 +43,14 @@
       "reviewed_raw_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
       "published_LF_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
       "published_git_blob": "a8e1b15b3b04b29cfd74618be08992649ba072e0"
-    }
+    },
+    "bounded_delegation_corrections": 3,
+    "latest_change_scope": {
+      "source_and_tests": 9,
+      "Atlas_summaries": 2,
+      "total_reviewed_targets": 11
+    },
+    "fixture_provenance_scope": "Historical PR18 fixture provenance retained unchanged; current nine-file delegation provenance is tracked by PR20 and candidate CI identities."
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "counts": {
@@ -471,14 +484,14 @@
   ],
   "next": {
     "sequence": [
-      "Review the separate unpublished delegation checkpoint and the useful reviewed-report evidence gap",
-      "Define a bounded reviewed real-model report scenario before any new execution or publication",
+      "Keep useful reviewed-report milestone open after PR20 source integration",
+      "Define a bounded reviewed model qualification scope before any new real-model execution",
       "Keep operator-started cancellation distinct from autonomous selection",
       "Verify source and evidence before considering broader workflow expansion"
     ],
     "name": "Resolve validation gaps before expanding workflows",
     "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
-    "detail": "Review the separate unpublished local delegation checkpoint and establish useful grounded read selection and verified report acceptance as the next product milestone. The successful hosted synthetic fixture is not that real-model scenario and does not identify the earlier startup failure cause. Any new model replay or source publication needs its own reviewed scope. Operator-started cancellation and broader workflow readiness retain their existing limits."
+    "detail": "PR20 source and candidate application CI are integrated. Useful grounded read selection and strict verified report acceptance remain unmet. The prompt experiment is closed and its failed stopping paragraph excluded; no new model replay was performed. Operator-started cancellation and broader workflow readiness retain their existing limits."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -616,75 +629,152 @@
   },
   "ci": {
     "commit_skip_ci": false,
-    "branch_commit_skip_ci": true,
-    "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
-    "observed_remote_workflow_runs": 1,
-    "scope": "Existing complete application workflow on exact merged Git commit/tree; not later Atlas-only commit or unpublished delegation checkpoint",
-    "qualification": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+    "branch_commit_skip_ci": false,
+    "branch_skip_reason": "No skip directive; both automatic normal push and pull-request application workflows ran.",
+    "observed_remote_workflow_runs": 2,
+    "scope": "Exact paragraph-free nine-file candidate application CI; feature push and provisional PR checkout are distinct from final merge identity.",
+    "qualification": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
     "workflow": {
-      "observed_utc": "2026-11-02T15:40:13.5859016Z",
+      "observed_utc": "2026-11-02T19:05:07.158Z",
       "run": {
-        "id": 41469601683,
-        "name": "Build and test",
-        "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+        "id": 41500218515,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500218515",
+        "event": "push",
+        "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+        "checkout_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
         "status": "completed",
         "conclusion": "success",
-        "event": "push",
-        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
+        "counts": {
+          "jobs_pass": 6,
+          "jobs_fail": 0,
+          "ctest_expected": 157,
+          "ctest_discovered": 157,
+          "ctest_pass": 155,
+          "ctest_fail": 0,
+          "prerequisite_skip": 2,
+          "nested_native_optional_skips": 21
+        },
+        "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183"
       },
       "jobs": [
         {
-          "id": 125359391255,
-          "name": "Setup scripts / PowerShell 5.1",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125359391873,
-          "name": "Windows / MinGW",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125359391890,
-          "name": "Linux / isolated journal persistence",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125359391907,
-          "name": "Windows / WebDemo operator paths",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125359392079,
+          "id": 125465472303,
           "name": "Discord voice / offline transport",
           "status": "completed",
           "conclusion": "success"
         },
         {
-          "id": 125359392086,
+          "id": 125465472467,
+          "name": "Windows / WebDemo operator paths",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465472530,
           "name": "Public text relay and connector",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465472546,
+          "name": "Windows / MinGW",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465472582,
+          "name": "Linux / isolated journal persistence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465472684,
+          "name": "Setup scripts / PowerShell 5.1",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "additional_PR_workflow": {
+      "id": 41500237179,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500237179",
+      "event": "pull_request",
+      "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "checkout_sha": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+      "status": "completed",
+      "conclusion": "success",
+      "counts": {
+        "jobs_pass": 6,
+        "jobs_fail": 0,
+        "ctest_expected": 157,
+        "ctest_discovered": 157,
+        "ctest_pass": 155,
+        "ctest_fail": 0,
+        "prerequisite_skip": 2,
+        "nested_native_optional_skips": 21
+      },
+      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+      "jobs": [
+        {
+          "id": 125465536856,
+          "name": "Linux / isolated journal persistence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465537137,
+          "name": "Setup scripts / PowerShell 5.1",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465537185,
+          "name": "Windows / MinGW",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465537271,
+          "name": "Windows / WebDemo operator paths",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465537281,
+          "name": "Public text relay and connector",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125465537619,
+          "name": "Discord voice / offline transport",
           "status": "completed",
           "conclusion": "success"
         }
       ]
     },
     "audit": {
-      "summary": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+      "summary": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
       "details": [
-        "The unchanged application workflow ran once on the exact PR 18 merge, without a skip marker. The complete build, controlled-loopback relay, inventory validation, CTest, artifact upload and GNU linker check passed.",
-        "All 157 expected CTest registrations were discovered: 155 passed, none failed and two FFmpeg prerequisite entries were skipped. Twenty-one nested optional subchecks also remained skipped because their VTube Studio, torch, Pillow or real training/export/evaluation prerequisites were unavailable or opt-in. The public-text job retained one Windows-only skip; its separate Windows operator job passed.",
-        "The instrumented metadata listener became ready on its first attempt after 664ms. Its bound marker was retained, with empty stderr and no readiness errors; the complete receipt fixture passed. This is one successful observation, not proof of the previous failure's cause or a performance improvement.",
-        "PR 18 adds startup observability in one test script; it adds no production repair. The readiness budget, campaign assertions, production runner and cleanup are unchanged. The earlier failed CI receipt and local diagnostic-observer failures are retained as separate historical evidence.",
-        "Actual child exit-code capture remains unproven: the local injected child failure exposed a null exit-code value despite an exited state. No value is inferred or presented as captured.",
-        "The nine-path local delegation checkpoint is excluded from this merged source and CI. Useful real-model reviewed-report success, installed-app use, runtime/release qualification and broader workflow readiness remain open."
+        "Push CI tested feature commit 8994579ed362744b297bbca28bb5dd017bf0b6e1; PR CI checked out 98b1a97482dafaa8af03eb6a666f4dd91bef6296. Both used tree 39091a99ac54b12a964fa639ddbf5c5ee0597183. Merged application/build/test/dependency/workflow contents match exactly; the complete merged tree differs only in newer research.html. This is qualification transferred by content, not a fresh merge/main CI run.",
+        "Both runs tested the paragraph-free candidate and the nine reviewed source/test changes. Earlier three-module local passes remain historical reused evidence.",
+        "Two FFmpeg-dependent entries and 21 nested optional VTube Studio, torch, Pillow or real training/export/evaluation subchecks remain skipped; skips are not passes.",
+        "Prior metadata-startup and diagnostic-observer failures remain historical; their cause and local child exit-code capture remain unproven.",
+        "Hosted CI does not remeasure local catalog availability, prove the failed reviewed real-model report, install Revia or qualify physical/runtime/release use."
       ]
     },
-    "later_Atlas_docs_only_commit_is_application_CI_head": false
+    "content_transfer_to_merge": {
+      "merge_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "merge_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+      "application_build_test_dependency_workflow_identical": true,
+      "only_complete_tree_difference": "docs/atlas/research.html",
+      "research_blob": "7af5b10d0dfbf8c1955a6489978b934fb0f6a2f7",
+      "fresh_merge_main_run_claimed": false
+    },
+    "later_Atlas_docs_only_commit_is_application_CI_head": false,
+    "later_main_or_docs_CI": "Not recorded in this checkpoint; capture any automatic later run separately."
   },
-  "excluded_later_work": "Only PR18 diagnostics-only test-fixture maintenance and two Atlas summaries are included in this publication. The nine-file local delegation candidate remains unpublished and excluded from current source and CI.",
+  "excluded_later_work": "Failed new stopping paragraph excluded; earlier reviewed discovery-grounding text retained. PR20 contains nine source/test files and two Atlas summaries. Newer RNL research HTML preserved separately; no RNL code or workflow change in this post-merge two-file refresh. No new model execution or installed-app update.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -820,8 +910,8 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
-    "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+    "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+    "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
     "merge_order": [
       10,
       11,
@@ -831,7 +921,8 @@
       15,
       16,
       17,
-      18
+      18,
+      20
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
@@ -842,13 +933,25 @@
       "15": "29df918f62c2dbc2eece734122bb583b934512d8",
       "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
       "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
-      "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10"
+      "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+      "20": "6a9aff7c74888e5c6c109d8931629e017b377fab"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": false,
     "application_ci_run": true,
     "installed_app_updated": false,
-    "runtime_release_qualified": false
+    "runtime_release_qualified": false,
+    "merge_order_scope": "Tracked repair/tooling checkpoints; intervening preserved research-only commits are not enumerated.",
+    "merge_parents": [
+      "3fa78bd42bbbe52581c01942d48353fc3154a24b",
+      "8994579ed362744b297bbca28bb5dd017bf0b6e1"
+    ],
+    "merged_at": "2026-11-02T19:06:17Z",
+    "application_ci_head": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+    "application_ci_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+    "CI_transfer_by_content_only": true,
+    "fresh_merge_main_CI_run_claimed": false,
+    "submitted_formal_PR_approval": false
   },
   "historical_integration_before_MEM3_MED6": {
     "milestone": "Nine reliability repairs integrated into GitHub main",
@@ -961,7 +1064,9 @@
       "TEST-CATALOG"
     ],
     "capabilities": 20,
-    "PR16_scope": "One distinct production browser repair; PNG fixture/test maintenance adds no separate repair or capability"
+    "PR16_scope": "One distinct production browser repair; PNG fixture/test maintenance adds no separate repair or capability",
+    "current_scope": "Thirteen earlier counted production repairs remain unchanged; three bounded delegation corrections are tracked separately, not nine new repairs.",
+    "bounded_delegation_corrections": 3
   },
   "historical_integration_before_ACT2": {
     "milestone": "Eleven reliability repairs integrated into GitHub main",
@@ -1050,28 +1155,29 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR18 adds fixture startup observability only; no production repair or capability increment. Thirteen production repairs and20 capabilities remain. Actual hosted source identity is Git commit c5c515068c94dcdb706e5d6b97e1718197ed8e10 / tree 542651b3037bd9e5f7ae0a81990cb8e24d3b211f. Exact one-file reviewed/published bytes are distinct from full checkout provenance. Local positive and expected-failure controls, corrected observer failures, unknown original cause and unproven local child exit-code capture retain their own scope. Local delegation9/report and mechanical operator-cancel limits remain; installed app and release status unchanged.",
+  "current_evidence_boundary": "PR20 merged three bounded delegation corrections across nine source/test files plus two Atlas summaries. Thirteen earlier counted repairs and 20 capabilities remain; nine files are not nine new repairs. Source is merge 6a9aff7c74888e5c6c109d8931629e017b377fab / tree 88c6bc751714481f1742a1c347d8b8b70168e3d7. Push CI tested feature commit 8994579ed362744b297bbca28bb5dd017bf0b6e1; PR CI checked out 98b1a97482dafaa8af03eb6a666f4dd91bef6296. Both used tree 39091a99ac54b12a964fa639ddbf5c5ee0597183. Merged application/build/test/dependency/workflow contents match exactly; the complete merged tree differs only in newer research.html. This is qualification transferred by content, not a fresh merge/main CI run. Earlier failures, rpt2 reviewed-report failure and mechanical operator-cancel limits remain; installed app and runtime/release status unchanged.",
   "next_milestone": {
     "state": "PARTIAL_VALIDATION",
     "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
     "complete_application_CI": {
-      "id": 41469601683,
-      "name": "Build and test",
-      "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+      "id": 41500218515,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500218515",
+      "event": "push",
+      "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "checkout_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
       "status": "completed",
       "conclusion": "success",
-      "event": "push",
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
+      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183"
     },
-    "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
+    "finite_real_model_report": "NOT_ESTABLISHED; related rpt2 experiment failed, not a run of current paragraph-free source",
     "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
-    "Atlas_evidence_source_handoff_verification": "Prepared from retained reviewed receipts; deployed-byte and actual-browser checks follow publication",
+    "Atlas_evidence_source_handoff_verification": "PR20 merge and all 1,410 leaf entries verified by integrator; same-two-file post-merge summary prepared locally for publication and deployed-byte checks.",
     "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
     "ready_hierarchy_claim": false,
     "production_readiness_claim": false,
     "release_qualified": false,
     "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
-    "remaining_CI_validation": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+    "remaining_CI_validation": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total. Qualification transfers to the merge by identical application contents; no fresh merge/main CI run claimed.",
     "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
     "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
   },
@@ -1200,8 +1306,8 @@
     "current_application_CI": "Recorded separately under ci on exact merged source; do not sum with retained local component evidence"
   },
   "local_model_validation": {
-    "source_scope": "Separate unpublished local delegation checkpoint; not current main/CI qualification",
-    "later_delegation_source_published": false,
+    "source_scope": "Historical related local model cases; rpt2 used the earlier experimental stopping paragraph, now excluded. Not runs of the current paragraph-free merged source.",
+    "later_delegation_source_published": true,
     "ordinary_chat_and_first_delegation_observed": true,
     "continued_chat_observed": true,
     "reviewed_report_established": false,
@@ -1217,7 +1323,22 @@
       "typed_chat_cancellation_qualified": false,
       "physical_GUI_button_qualified": false
     },
-    "performance_claim": false
+    "performance_claim": false,
+    "current_source_qualified_by_candidate_CI": true,
+    "current_real_model_report_qualified": false,
+    "latest_related_case": {
+      "label": "rpt2",
+      "relationship": "Related experimental candidate, not an exact run of the nine-file candidate with the failed paragraph removed.",
+      "native_delegation": "PASS",
+      "chat_while_task_active": "PASS; overlap reply was useful",
+      "successful_native_directory_listings": 1,
+      "native_file_reads": 0,
+      "reviewed_accepted_report": "FAIL; not established",
+      "host_acceptance": "Strict verification withheld acceptance; no fabricated or unverified report was accepted.",
+      "owned_processes_after_cleanup": 0,
+      "initial_ordinary_definition_answer": "Delivered, but weak/evasive; separate from the useful overlap reply."
+    },
+    "new_model_trials_in_this_integration": 0
   },
   "historical_integration_before_CIRecovery": {
     "recorded_utc": "2026-11-02T06:32:09.360662+00:00",
@@ -1815,9 +1936,9 @@
     "delegation_candidate_published": false
   },
   "current_local_candidate": {
-    "recorded_utc": "2026-11-02T17:41:37+00:00",
-    "summary": "Reviewed delegation fixes touch nine files and remain local and unmerged; the failed stopping paragraph is excluded. Reviewed-report success remains unmet.",
-    "state": "LOCAL_REVIEWED_NOT_MERGED",
+    "recorded_utc": "2026-11-02T19:13:03+00:00",
+    "summary": "PR20 merged three bounded delegation corrections across nine files; installed Revia is unchanged and reviewed-report success remains unmet.",
+    "state": "MERGED_SOURCE_NOT_INSTALLED",
     "changed_paths": 9,
     "merged_production_repair_count_changed": false,
     "useful_behaviors": [
@@ -1846,13 +1967,25 @@
       "passed_modules": 3,
       "reused_modules": 3,
       "fresh_exact_candidate_module_runs": 0,
-      "qualification": "Reused related-candidate evidence only; not fresh exact-nine-without-paragraph results."
+      "qualification": "Reused related-candidate evidence only; not fresh exact-nine-without-paragraph results.",
+      "historical_snapshot": true,
+      "recorded_before_current_CI": true,
+      "scope": "Three related local module passes reused before new full candidate CI; fresh_exact_candidate_module_runs=0 describes that historical local phase only."
     },
     "main_ci_boundary": {
-      "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
-      "passed": 155,
-      "skipped": 2,
-      "qualifies_local_candidate": false
+      "commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+      "push_run": 41500218515,
+      "PR_run": 41500237179,
+      "PR_checkout_commit": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+      "passed_per_run": 155,
+      "failed_per_run": 0,
+      "skipped_per_run": 2,
+      "nested_optional_skips_per_run": 21,
+      "qualifies_paragraph_free_candidate": true,
+      "transfer_to_merge_by_identical_application_content": true,
+      "fresh_merge_main_run_claimed": false,
+      "real_model_reviewed_report_qualified": false
     },
     "separate_open_issue": {
       "name": "Deep-root checkpoint exposure",
@@ -1861,11 +1994,280 @@
       "harness_recovery": "Short-path harness recovery cleared the experiment blocker; it is not a product persistence fix or general long-path qualification."
     },
     "limits": [
-      "No publication, merge or installed-app update is performed by this prepared payload.",
+      "Source merged through PR20; merging does not install the app or qualify real-model reports, runtime or release.",
       "Useful reviewed-report success and broader runtime/release qualification remain open.",
       "No production-readiness, overall-percentage or comparative performance claim."
     ],
     "base_main": "097937b8cde958c7deff9ade84e85f27327fe266",
-    "patch_sha256": "4684bdba9286921ac112d625249bbffa8f120693b3a75eb8c2c9842353ebb70b"
+    "patch_sha256": "4684bdba9286921ac112d625249bbffa8f120693b3a75eb8c2c9842353ebb70b",
+    "bounded_delegation_corrections": 3,
+    "review_refs": {
+      "branch": "codex/delegation-grounding-20261102",
+      "pull_request": 20,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/20",
+      "candidate_commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "candidate_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+      "merge_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "merge_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+      "merged_at": "2026-11-02T19:06:17Z",
+      "formal_PR_approval_submitted": false
+    }
+  },
+  "historical_integration_before_DelegationGrounding": {
+    "superseded_at_utc": "2026-11-02T19:13:03+00:00",
+    "scope": "Pre-PR20 current summaries retained without alteration; all original failures and evidence keep their dated context.",
+    "values": {
+      "milestone": "Cognition fixture startup observability and exact-source application CI checkpoint",
+      "recorded_utc": "2026-11-02T15:40:15.190628+00:00",
+      "source": {
+        "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+        "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+        "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+        "source_files": 1409,
+        "incremental_changed_paths": [
+          67,
+          8,
+          5,
+          4,
+          3,
+          3,
+          3,
+          1,
+          1
+        ],
+        "reliability_repairs": 13,
+        "installed_app_updated": false,
+        "release_qualified": false,
+        "file_count_scope": "Current source Git identity covers 1,409 blobs. Current file-level provenance identifies the reviewed/published fixture only; no full hosted checkout byte hash is inferred. Earlier complete reconstruction maps and historical 1,403-file subset, including non-UTF8/raw-or-recorded-LF caveats, remain dated history.",
+        "repository_tree_blobs": 1409,
+        "test_catalog_maintenance_pr": 15,
+        "production_privacy_changed_by_PR15": false,
+        "CI_identity": {
+          "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+          "tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+          "full_hosted_checkout_byte_hash_claimed": false
+        },
+        "fixture_provenance": {
+          "path": "Tests/cognitionLiveCampaign.test.ps1",
+          "reviewed_raw_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+          "published_LF_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+          "published_git_blob": "a8e1b15b3b04b29cfd74618be08992649ba072e0"
+        }
+      },
+      "ci": {
+        "commit_skip_ci": false,
+        "branch_commit_skip_ci": true,
+        "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
+        "observed_remote_workflow_runs": 1,
+        "scope": "Existing complete application workflow on exact merged Git commit/tree; not later Atlas-only commit or unpublished delegation checkpoint",
+        "qualification": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+        "workflow": {
+          "observed_utc": "2026-11-02T15:40:13.5859016Z",
+          "run": {
+            "id": 41469601683,
+            "name": "Build and test",
+            "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+            "status": "completed",
+            "conclusion": "success",
+            "event": "push",
+            "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
+          },
+          "jobs": [
+            {
+              "id": 125359391255,
+              "name": "Setup scripts / PowerShell 5.1",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125359391873,
+              "name": "Windows / MinGW",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125359391890,
+              "name": "Linux / isolated journal persistence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125359391907,
+              "name": "Windows / WebDemo operator paths",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125359392079,
+              "name": "Discord voice / offline transport",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125359392086,
+              "name": "Public text relay and connector",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        "audit": {
+          "summary": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+          "details": [
+            "The unchanged application workflow ran once on the exact PR 18 merge, without a skip marker. The complete build, controlled-loopback relay, inventory validation, CTest, artifact upload and GNU linker check passed.",
+            "All 157 expected CTest registrations were discovered: 155 passed, none failed and two FFmpeg prerequisite entries were skipped. Twenty-one nested optional subchecks also remained skipped because their VTube Studio, torch, Pillow or real training/export/evaluation prerequisites were unavailable or opt-in. The public-text job retained one Windows-only skip; its separate Windows operator job passed.",
+            "The instrumented metadata listener became ready on its first attempt after 664ms. Its bound marker was retained, with empty stderr and no readiness errors; the complete receipt fixture passed. This is one successful observation, not proof of the previous failure's cause or a performance improvement.",
+            "PR 18 adds startup observability in one test script; it adds no production repair. The readiness budget, campaign assertions, production runner and cleanup are unchanged. The earlier failed CI receipt and local diagnostic-observer failures are retained as separate historical evidence.",
+            "Actual child exit-code capture remains unproven: the local injected child failure exposed a null exit-code value despite an exited state. No value is inferred or presented as captured.",
+            "The nine-path local delegation checkpoint is excluded from this merged source and CI. Useful real-model reviewed-report success, installed-app use, runtime/release qualification and broader workflow readiness remain open."
+          ]
+        },
+        "later_Atlas_docs_only_commit_is_application_CI_head": false
+      },
+      "integration": {
+        "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+        "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+        "merge_order": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "merge_commits": {
+          "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+          "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+          "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+          "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+          "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+          "15": "29df918f62c2dbc2eece734122bb583b934512d8",
+          "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+          "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+          "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10"
+        },
+        "method": "normal merge commits; reviewed source heads preserved",
+        "merge_commit_skip_ci": false,
+        "application_ci_run": true,
+        "installed_app_updated": false,
+        "runtime_release_qualified": false
+      },
+      "current_local_candidate": {
+        "recorded_utc": "2026-11-02T17:41:37+00:00",
+        "summary": "Reviewed delegation fixes touch nine files and remain local and unmerged; the failed stopping paragraph is excluded. Reviewed-report success remains unmet.",
+        "state": "LOCAL_REVIEWED_NOT_MERGED",
+        "changed_paths": 9,
+        "merged_production_repair_count_changed": false,
+        "useful_behaviors": [
+          "Preserve bounded receipt path identities within 16 KiB.",
+          "Separate native same-turn handoff status from model prose.",
+          "Retain the primary original request alongside the subordinate model summary without widening native authority."
+        ],
+        "prompt_experiment": {
+          "state": "CLOSED",
+          "failed_stopping_paragraph_included": false,
+          "earlier_reviewed_discovery_grounding_text_retained": true
+        },
+        "latest_related_actual_case": {
+          "label": "rpt2",
+          "relationship": "Related experimental candidate, not an exact run of the nine-file candidate with the failed paragraph removed.",
+          "native_delegation": "PASS",
+          "chat_while_task_active": "PASS; overlap reply was useful",
+          "successful_native_directory_listings": 1,
+          "native_file_reads": 0,
+          "reviewed_accepted_report": "FAIL; not established",
+          "host_acceptance": "Strict verification withheld acceptance; no fabricated or unverified report was accepted.",
+          "owned_processes_after_cleanup": 0,
+          "initial_ordinary_definition_answer": "Delivered, but weak/evasive; separate from the useful overlap reply."
+        },
+        "related_module_evidence": {
+          "passed_modules": 3,
+          "reused_modules": 3,
+          "fresh_exact_candidate_module_runs": 0,
+          "qualification": "Reused related-candidate evidence only; not fresh exact-nine-without-paragraph results."
+        },
+        "main_ci_boundary": {
+          "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+          "passed": 155,
+          "skipped": 2,
+          "qualifies_local_candidate": false
+        },
+        "separate_open_issue": {
+          "name": "Deep-root checkpoint exposure",
+          "state": "OPEN",
+          "exposure": "Accepted deep application runtime roots can exceed the checkpoint temporary-path budget; shared AtomicSave exposure remains.",
+          "harness_recovery": "Short-path harness recovery cleared the experiment blocker; it is not a product persistence fix or general long-path qualification."
+        },
+        "limits": [
+          "No publication, merge or installed-app update is performed by this prepared payload.",
+          "Useful reviewed-report success and broader runtime/release qualification remain open.",
+          "No production-readiness, overall-percentage or comparative performance claim."
+        ],
+        "base_main": "097937b8cde958c7deff9ade84e85f27327fe266",
+        "patch_sha256": "4684bdba9286921ac112d625249bbffa8f120693b3a75eb8c2c9842353ebb70b"
+      },
+      "local_model_validation": {
+        "source_scope": "Separate unpublished local delegation checkpoint; not current main/CI qualification",
+        "later_delegation_source_published": false,
+        "ordinary_chat_and_first_delegation_observed": true,
+        "continued_chat_observed": true,
+        "reviewed_report_established": false,
+        "useful_file_read_selected_after_listing": false,
+        "end_to_end_milestone_met": false,
+        "operator_cancel": {
+          "operator_started": true,
+          "model_selected": false,
+          "native_cancel_mechanical_scope_passed": true,
+          "finite_quiet_observed": true,
+          "accepted_late_result_published": false,
+          "GPU_inference_stop_qualified": false,
+          "typed_chat_cancellation_qualified": false,
+          "physical_GUI_button_qualified": false
+        },
+        "performance_claim": false
+      },
+      "current_evidence_boundary": "PR18 adds fixture startup observability only; no production repair or capability increment. Thirteen production repairs and20 capabilities remain. Actual hosted source identity is Git commit c5c515068c94dcdb706e5d6b97e1718197ed8e10 / tree 542651b3037bd9e5f7ae0a81990cb8e24d3b211f. Exact one-file reviewed/published bytes are distinct from full checkout provenance. Local positive and expected-failure controls, corrected observer failures, unknown original cause and unproven local child exit-code capture retain their own scope. Local delegation9/report and mechanical operator-cancel limits remain; installed app and release status unchanged.",
+      "excluded_later_work": "Only PR18 diagnostics-only test-fixture maintenance and two Atlas summaries are included in this publication. The nine-file local delegation candidate remains unpublished and excluded from current source and CI.",
+      "next": {
+        "sequence": [
+          "Review the separate unpublished delegation checkpoint and the useful reviewed-report evidence gap",
+          "Define a bounded reviewed real-model report scenario before any new execution or publication",
+          "Keep operator-started cancellation distinct from autonomous selection",
+          "Verify source and evidence before considering broader workflow expansion"
+        ],
+        "name": "Resolve validation gaps before expanding workflows",
+        "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
+        "detail": "Review the separate unpublished local delegation checkpoint and establish useful grounded read selection and verified report acceptance as the next product milestone. The successful hosted synthetic fixture is not that real-model scenario and does not identify the earlier startup failure cause. Any new model replay or source publication needs its own reviewed scope. Operator-started cancellation and broader workflow readiness retain their existing limits."
+      },
+      "next_milestone": {
+        "state": "PARTIAL_VALIDATION",
+        "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
+        "complete_application_CI": {
+          "id": 41469601683,
+          "name": "Build and test",
+          "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+          "status": "completed",
+          "conclusion": "success",
+          "event": "push",
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
+        },
+        "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
+        "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
+        "Atlas_evidence_source_handoff_verification": "Prepared from retained reviewed receipts; deployed-byte and actual-browser checks follow publication",
+        "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
+        "ready_hierarchy_claim": false,
+        "production_readiness_claim": false,
+        "release_qualified": false,
+        "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
+        "remaining_CI_validation": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+        "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
+        "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
+      },
+      "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
+      "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified"
+    }
   }
 }
