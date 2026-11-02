@@ -49,6 +49,15 @@ generated networks, not Revia/model traffic or language quality. See the
 This one study is concluded. No further model, training or integration work runs
 automatically; relevance to real Revia inputs is a later decision.
 
+The reviewed [applicability audit](APPLICABILITY-001.md) preserves that positive
+finding while identifying no current demonstrated Revia matrix-cache target.
+Existing prefix reuse and exact-input embedding caching already cover relevant
+work. Two source-supported leads remain: qualify existing prefix reuse, and
+establish embedding-cache lifecycle coverage. Observations, hypotheses, smallest
+discriminators and unknown installed-runtime identity are recorded separately.
+No proposed fixture or model experiment has run; the next authorized activity
+is only a read-only embedding lifecycle investigation after documentation publication.
+
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored
 cache changed recurrent behavior. Complete model files measured 200/131/113 bytes;
