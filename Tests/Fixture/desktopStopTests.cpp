@@ -360,7 +360,7 @@ readline.createInterface({input: process.stdin}).on('line', line => {
                     "late old-generation termination must not kill the replacement worker");
                 request.type = actions::ActionType::BrowserNavigate;
             }
-            request.type = actions::ActionType::BrowserFill;
+            request.type = actions::ActionType::BrowserNavigate;
             bool cancelledAfterReceipt = false;
             request.beforeEffect = [&](const std::string& url)
             {
