@@ -23,13 +23,23 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | RNL prototype review; FIRST-001 proposed below |
+| Experimental | Hypothesis, static review or proposed experiment | FIRST-001 setup checked; blocked at original-input gate |
 | Measured | Reproducible result with pinned inputs, method and limits | None |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
 These stages are separate decisions. A completed run, smaller matrix payload or
 passing toy test does not promote an idea automatically.
+
+The execution request has reached the input gate. Refreshed Library preparation
+still requires a download; it does not supply local bytes. The current official
+helper is unchanged from the failed transfer, Windows Python lacks its required
+extended-attribute operation, and no existing WSL runtime is available. No helper
+was patched and the known-identical failure was not rerun. No benchmark has run.
+The [FIRST-001 protocol](FIRST-001.md) and [setup status](FIRST-001-status.json)
+record the next steps and preserve unmeasured fields as null. An owner-provided
+original ZIP at an explicitly confirmed local path, or a supported Library
+materialization runtime, is needed before source review and execution.
 
 ## Static baseline and provenance
 
