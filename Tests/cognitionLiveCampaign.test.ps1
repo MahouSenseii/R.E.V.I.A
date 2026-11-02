@@ -45,6 +45,7 @@ exit 0
 param([int]$Port, [string]$Model, [string]$InventoryControl)
 $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $Port)
 $listener.Start()
+[Console]::Out.WriteLine('Disposable metadata listener bound.')
 $inventoryQueries = 0
 try {
     while ($true) {
@@ -83,13 +84,36 @@ try {
     $shell = (Get-Process -Id $PID).Path
     $inventoryControl = Join-Path $taskDirectory 'inventory-control.txt'
     'stable' | Set-Content $inventoryControl -Encoding UTF8
-    $server = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-File', ('"' + $serverScript + '"'), $port, ('"' + $model + '"'), ('"' + $inventoryControl + '"')) -WindowStyle Hidden -PassThru
+    $serverStdout = Join-Path $taskDirectory 'server.stdout.log'
+    $serverStderr = Join-Path $taskDirectory 'server.stderr.log'
+    $startup = [Diagnostics.Stopwatch]::StartNew()
+    $server = Start-Process -FilePath $shell -ArgumentList @('-NoProfile', '-File', ('"' + $serverScript + '"'), $port, ('"' + $model + '"'), ('"' + $inventoryControl + '"')) -WindowStyle Hidden -PassThru -RedirectStandardOutput $serverStdout -RedirectStandardError $serverStderr
     $ready = $false
+    $readinessErrors = @()
     for ($attempt = 0; $attempt -lt 40; ++$attempt) {
         try { $null = Invoke-RestMethod "http://127.0.0.1:$port/v1/models" -TimeoutSec 1; $ready = $true; break }
-        catch { Start-Sleep -Milliseconds 100 }
+        catch {
+            $message = $_.Exception.Message
+            if ($message.Length -gt 512) { $message = $message.Substring(0, 512) + ' [truncated]' }
+            $readinessErrors += $message
+            Start-Sleep -Milliseconds 100
+        }
     }
-    if (-not $ready) { throw 'Disposable metadata fixture server did not start.' }
+    $server.Refresh()
+    [string]$serverOutput = Get-Content -LiteralPath $serverStdout -Raw
+    [string]$serverError = Get-Content -LiteralPath $serverStderr -Raw
+    $startupDiagnostic = [ordered]@{
+        ready = $ready; elapsedMs = $startup.ElapsedMilliseconds; attempts = [Math]::Min($attempt + 1, 40)
+        pid = $server.Id; port = $port; exited = $server.HasExited
+        exitCode = $(if ($server.HasExited) { $server.ExitCode } else { $null })
+        readinessErrors = $readinessErrors
+        stdout = $serverOutput.Substring(0, [Math]::Min($serverOutput.Length, 4096))
+        stderr = $serverError.Substring(0, [Math]::Min($serverError.Length, 4096))
+        stdoutTruncated = $serverOutput.Length -gt 4096
+        stderrTruncated = $serverError.Length -gt 4096
+    }
+    'Disposable metadata startup: ' + ($startupDiagnostic | ConvertTo-Json -Depth 3 -Compress)
+    if (-not $ready) { throw 'Disposable metadata fixture server did not start; see retained startup diagnostic.' }
     $launch = Join-Path $taskDirectory 'launch.json'
     @{ server = $shell; model = $model; pid = $server.Id; started = $server.StartTime.ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content $launch -Encoding UTF8
     $settings = Join-Path $taskDirectory 'settings.json'
