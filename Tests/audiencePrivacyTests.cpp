@@ -977,6 +977,10 @@ void TestImageReferencesDoNotBecomeUnrelatedGenerationOrConceptUploads()
 
 void TestImageTurnsCannotOfferPromptOnlyGeneration()
 {
+    std::ifstream imageFixture(std::filesystem::path(__FILE__).parent_path() / "Fixtures/Attachments/tiny.png", std::ios::binary);
+    Check(static_cast<bool>(imageFixture), "The direct-pixel fixture's complete PNG could not be read.");
+    const auto pixels =
+        std::make_shared<const std::string>(std::string((std::istreambuf_iterator<char>(imageFixture)), std::istreambuf_iterator<char>()));
     Fixture fixture(false, 32768, true);
     fixture.runtime.SetChatToolProvider(
         [](const std::function<bool()>&, std::stop_token)
@@ -1006,10 +1010,6 @@ void TestImageTurnsCannotOfferPromptOnlyGeneration()
                   .succeeded &&
               hasImageTool(),
         "The source-free control did not offer configured image generation.");
-    std::ifstream imageFixture(std::filesystem::path(__FILE__).parent_path() / "Fixtures/Attachments/tiny.png", std::ios::binary);
-    Check(static_cast<bool>(imageFixture), "The direct-pixel fixture's complete PNG could not be read.");
-    const auto pixels =
-        std::make_shared<const std::string>(std::string((std::istreambuf_iterator<char>(imageFixture)), std::istreambuf_iterator<char>()));
     const auto beforePixels = fixture.backend.Requests().size();
     Check(fixture.runtime
               .ReplyForAudience("Describe the uploaded image.", {}, scope.audience, {}, fixture.profile, true, false, {}, {}, {}, {}, scope,
@@ -1088,6 +1088,10 @@ void TestImageTurnsCannotOfferPromptOnlyGeneration()
 
 void TestFactualImagePurposePreservesReferencesAndConversationalControls()
 {
+    std::ifstream imageFixture(std::filesystem::path(__FILE__).parent_path() / "Fixtures/Attachments/tiny.png", std::ios::binary);
+    Check(static_cast<bool>(imageFixture), "The image-purpose fixture's complete PNG could not be read.");
+    const auto pixels =
+        std::make_shared<const std::string>(std::string((std::istreambuf_iterator<char>(imageFixture)), std::istreambuf_iterator<char>()));
     Fixture fixture(false, 32768, true, 0.75F);
     memory::MemoryScope scope;
     scope.companionId = "fixture-companion";
@@ -1122,10 +1126,6 @@ void TestFactualImagePurposePreservesReferencesAndConversationalControls()
         "The image-purpose fixture did not seed an explicit constraint available only in evicted continuity.");
     fixture.runtime.SetSavedFileContextProvider(
         [] { return perception::SavedFileReference{true, "SAVED_REFERENCE_PURPOSE_FIXTURE: const int snapshotValue = 7;"}; });
-    std::ifstream imageFixture(std::filesystem::path(__FILE__).parent_path() / "Fixtures/Attachments/tiny.png", std::ios::binary);
-    Check(static_cast<bool>(imageFixture), "The image-purpose fixture's complete PNG could not be read.");
-    const auto pixels =
-        std::make_shared<const std::string>(std::string((std::istreambuf_iterator<char>(imageFixture)), std::istreambuf_iterator<char>()));
     const std::vector<conversationImage> images = {{"tiny.png", "image/png", pixels, 4, 3}};
     const std::string reference = std::string(identity::markers::AttachmentGrounding) + "\nATTACHMENT_REFERENCE_PURPOSE_FIXTURE";
     const std::string factualQuestion = "Read all printed text and list every visible shape in the uploaded image.";

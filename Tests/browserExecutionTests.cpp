@@ -49,6 +49,27 @@ void RunBrowserExecutionTests()
     const auto stale = runtime.Execute(request, true);
     tests::Check(!stale.Succeeded() && !stale.result.attempted, "A stale browser target was dispatched twice.");
     receipt = *filled.result.browser;
+    tests::Check(!stale.result.browser || !stale.result.browser->uncertainEffect,
+        "A locally rejected stale target was reported as a possibly dispatched effect.");
+    for (const std::string mismatch : {"session", "url", "element"})
+    {
+        auto wrong = request;
+        wrong.browser.generation = receipt.generation;
+        if (mismatch == "session")
+            wrong.browser.session = "another-owned-session";
+        else if (mismatch == "url")
+            wrong.browser.url = url + "different-page";
+        else
+            wrong.browser.element = "unobserved-element";
+        const auto refused = runtime.Execute(wrong, true);
+        tests::Check(!refused.Succeeded() && !refused.result.attempted &&
+                         (!refused.result.browser || !refused.result.browser->uncertainEffect),
+            "A known " + mismatch + " mismatch reached the browser worker.");
+    }
+    const auto retained = session->Observation();
+    tests::Check(retained && retained->session == receipt.session && retained->generation == receipt.generation &&
+                     retained->fingerprint == receipt.fingerprint,
+        "A local stale-target refusal discarded the current usable observation.");
     const auto button =
         std::find_if(receipt.elements.begin(), receipt.elements.end(), [](const auto& value) { return value.name == "Save"; });
     tests::Check(button != receipt.elements.end(), "The Save button was not observed.");

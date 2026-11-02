@@ -400,6 +400,20 @@ actions::ActionResult BrowserSession::Execute(const actions::ActionRequest& requ
         state->grant = encodedGrant;
     }
     const auto& input = request.browser;
+    if (request.type == actions::ActionType::BrowserClick || request.type == actions::ActionType::BrowserFill)
+    {
+        // Reject what the owner already knows is stale before dispatch. The worker still
+        // revalidates the live page, and any failure after dispatch remains uncertain.
+        const auto& observed = state->observation;
+        if (!observed || state->observationRevision.load() != revision || input.session != observed->session ||
+            input.generation != observed->generation || input.url != observed->url ||
+            std::none_of(observed->elements.begin(), observed->elements.end(),
+                [&](const auto& element) { return element.id == input.element; }))
+        {
+            result.message = "The browser target observation is stale; observe again before interacting.";
+            return result;
+        }
+    }
     const char* operation = request.type == actions::ActionType::BrowserNavigate  ? "navigate"
                             : request.type == actions::ActionType::BrowserObserve ? "observe"
                             : request.type == actions::ActionType::BrowserClick   ? "click"
