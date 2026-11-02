@@ -16,38 +16,37 @@ Useful results may become small, separately reviewed Revia changes later.
   updates change only that page. Existing Atlas milestone claims, totals and
   `milestone.json` are outside this workstream. Initial navigation and publication
   wiring are a separately scoped documentation change.
-- No uploaded source has been executed, no dependencies installed, and no GPU,
-  training, model download, or running workload used for this setup.
+- FIRST-001 ran reviewed CPU toy code in owned workers. No dependencies, GPU,
+  training, model download, or other running workload was used.
 
 ## Status ledger - 2026-11-02
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | FIRST-001 setup checked; blocked at original-input gate |
-| Measured | Reproducible result with pinned inputs, method and limits | None |
+| Experimental | Hypothesis, static review or proposed experiment | New packed-runtime instrumentation; no language-model claim |
+| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 toy equivalence/storage results; timing and total-RAM limits remain |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
 These stages are separate decisions. A completed run, smaller matrix payload or
 passing toy test does not promote an idea automatically.
 
-The execution request has reached the input gate. Refreshed Library preparation
-still requires a download; it does not supply local bytes. The current official
-helper is unchanged from the failed transfer, Windows Python lacks its required
-extended-attribute operation, and no existing WSL runtime is available. No helper
-was patched and the known-identical failure was not rerun. No benchmark has run.
-The [FIRST-001 protocol](FIRST-001.md) and [setup status](FIRST-001-status.json)
-record the next steps and preserve unmeasured fields as null. An owner-provided
-original ZIP at an explicitly confirmed local path, or a supported Library
-materialization runtime, is needed before source review and execution.
+The owner supplied the original local ZIP. After safe extraction, source review
+and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored
+cache changed recurrent behavior. Complete model files measured 200/131/113 bytes;
+neither faster execution nor lower process memory was demonstrated. See the
+[results and limits](RESULTS-FIRST-001.md), [evidence](results/FIRST-001/summary.json)
+and [current status](FIRST-001-status.json). The earlier blocked transfer and null
+results remain in commit `2f2b550`; the official transfer helper was not patched.
 
 ## Static baseline and provenance
 
-The supplied HTML illustration is readable through Library. Local attachment
-materialization is blocked by the transfer helper's unsupported Windows extended
-attribute operation; the ZIP is not available as readable source in this checkout.
-The C++ findings below are **inherited from the earlier static audit**, not
-independently re-verified here. None are runtime measurements.
+The original archive is 15,706 bytes, SHA-256
+`a750f92354510db6337bb57d589d010ccc8caf8d5ec76aee407984e069678208`.
+Its seven entries were path-checked, hashed and inspected before execution.
+Original bytes remain unchanged outside the repository; source is not vendored.
+The earlier static findings below are now confirmed against actual source. Their
+runtime limits and measured counterexamples are recorded separately in the report.
 
 - The prototype is a handcrafted 3-input, 3-state, 3-expert top-1 codebook network.
   It has no tokenizer, training, text inference or GGUF support, and does not run
@@ -56,29 +55,29 @@ independently re-verified here. None are runtime measurements.
   all experts resident. Codebooks, routing, state, metadata and allocation overhead
   also count. Matrix disk size is not process memory or VRAM.
 - The HTML reports 3 multiply-accumulates while its matrix loop performs 9. The
-  C++ audit reports zero-input skipping; router, activation and state costs remain
+  C++ source implements zero-input skipping; router, activation and state costs remain
   additional work. These counters are not a measured speedup.
 - The repeated-input cache freezes state even though routing and output depend on
   state. Near-repeat skipping has no established error bound. Both require
   trajectory checks, not just a final output comparison.
-- The inherited C++ audit found the inspect-size expression
+- The C++ source uses the inspect-size expression
   `E*(N+3)/4` instead of per-expert packing `E*((N+3)/4)`.
 - A full 113-byte binary compared with a 108-byte FP32 matrix is disclosed in the
   prototype; those quantities have different boundaries. Existing tests do not
   establish numeric state equivalence, language quality or VRAM savings.
 
-First recover and statically review the exact ZIP bytes through a supported
-transfer route. Record input SHA-256 digests and tool versions before proposing
-execution. Unavailable inputs stay unavailable; do not reconstruct them from this
-summary or quietly substitute another prototype.
+The original CLI always caches, starts state at zero and prints three decimals.
+It supplies smoke evidence, not full-precision recurrence proof. Separately
+reviewed instrumentation and an independent FP32 oracle provide that experiment's
+traces. The original source was not changed to correct its findings.
 
 ## FIRST-001 - CPU equivalence and honest accounting
 
 **Question:** Can packed indices preserve this toy network's full computation,
 and what does each representation actually cost?
 
-Proposed only; no benchmark harness or uploaded program has run. After input
-recovery and execution review, compare three representations of the **same
+The bounded experiment has run, with the limits recorded in its report. The
+protocol compares three representations of the **same
 decoded weights**: packed codebook indices, unpacked uint8 indices and FP32
 weights. Keep expert selection, routing, initial state, activation, accumulation
 order and inputs fixed. Disable state-skipping caches for the reference comparison.
@@ -117,16 +116,18 @@ result and its counterexample; do not relax criteria after seeing results.
 dependency/download, unexpected service access or interference with other work.
 Stop rather than expand scope. Record failures, interruptions and unmeasured fields.
 
-Planning budgets, **not measured usage**: at most one CPU thread, a 256 MiB working
+Declared budgets: at most one CPU compute thread, a 256 MiB working
 RSS cap, at most 10 minutes execution, and less than 10 MiB of result artifacts.
-Zero GPU use, training or downloads. These caps may yield an incomplete run.
+Zero GPU use, training or model downloads. These caps may yield an incomplete run.
 Keep a small evidence record with source/input digests, environment, command,
 settings, timestamps, exit status, trajectories and accounting/timing summaries;
 reuse existing catalog/evidence conventions instead of building a new framework.
 
 ## Downstream comparison and promotion
 
-Only after FIRST-001 passes should a separate proposal compare a relevant change
+FIRST-001 provides toy equivalence, not a demonstrated net runtime benefit. No
+candidate is promoted. A separate proposal would need a relevant measured benefit
+before comparing a change
 against a pinned Qwen/llama.cpp baseline with identical model, prompts, context,
 sampling, hardware and measurement boundaries. The toy is not a text-model
 baseline. Model RAM/VRAM, runtime and evaluation costs remain unknown until those

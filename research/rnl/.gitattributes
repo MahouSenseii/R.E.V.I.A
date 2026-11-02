@@ -1,0 +1,5 @@
+# Preserve the exact reviewed/built source bytes referenced by the evidence.
+first001.cpp -text
+check_first001.py -text
+run_bounded.py -text
+test_run_bounded.py -text

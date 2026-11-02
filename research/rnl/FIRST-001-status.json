@@ -1,43 +1,18 @@
 {
   "experiment": "FIRST-001",
   "recorded_date_utc": "2026-11-02",
-  "status": "blocked_before_input_review",
-  "stage": "Experimental",
-  "source_base": "1074b12182300edbc25bceabc01b95599f552b08",
-  "setup": {
-    "fresh_preparation": "Both original references resolve; transfer requires a signed download, not direct local placement.",
-    "current_official_transfer_helper_unchanged": true,
-    "transfer_helper_sha256": "acd44c7471495a240e4f2d97037fe6f83c48793ab98938801e5393f5584a029b",
-    "companion_helper_sha256": "cf40f74293ed9f4739c9ce2bca38003155a278420c375fb412de633efed7dbf8",
-    "python_version": "3.12.10",
-    "windows_python_os_setxattr_available": false,
-    "existing_wsl_available": false,
-    "prior_transfer_outcome": "Failed before input installation: official helper calls unavailable os.setxattr on Windows.",
-    "current_transfer_outcome": "Not re-executed: identical current helper and unchanged unsupported runtime; no supported local-byte completion available.",
-    "helper_modified": false
-  },
-  "inputs": [
-    {"name": "RNL_Revia_Neural_Language_v0.1(1).zip", "required_for_cpp_experiment": true, "reported_bytes": 15706, "local_bytes_verified": false, "sha256": null},
-    {"name": "index(1).html", "required_for_cpp_experiment": false, "reported_bytes": 13061, "local_bytes_verified": false, "sha256": null}
-  ],
-  "execution": {
-    "uploaded_code_executed": false,
-    "benchmark_executed": false,
-    "execution_approval_determined": false,
-    "reason": "Original ZIP bytes are missing, so the independent source review and exact execution command cannot be completed.",
-    "training_or_gpu_work": false,
-    "dependencies_installed": false
-  },
-  "results": {
-    "trajectory_equivalence": null,
-    "cache_negative_controls": null,
-    "complete_serialized_model_bytes": null,
-    "runtime_representation_bytes": null,
-    "peak_working_set_bytes": null,
-    "latency": null,
-    "performance_improvement": null
-  },
-  "next_required_input": "Owner-provided original ZIP at an explicitly confirmed local path, or a supported Library materialization runtime. Review original bytes before compiling or executing; do not reconstruct missing software from the static audit.",
+  "status": "measured_with_limits",
+  "source_archive_sha256": "a750f92354510db6337bb57d589d010ccc8caf8d5ec76aee407984e069678208",
+  "source_reviewed": true,
+  "uploaded_source_compiled_and_executed": true,
+  "training_or_gpu_work": false,
+  "dependencies_installed": false,
+  "summary": "results/FIRST-001/summary.json",
+  "report": "RESULTS-FIRST-001.md",
+  "previous_blocked_setup_preserved_in_commit": "2f2b550e08c1e6f81aa2b9bc92f6a317f96a3398",
+  "correctness": "F/U/P matched bit-for-bit across 236 steps each; six independent oracle tests passed",
+  "cache": "Not equivalent to recomputing the recurrence; 123 divergent state steps",
+  "performance": "No speed or whole-process memory improvement demonstrated; disk-load latency and empty-worker RSS remain unmeasured",
   "candidate_for_revia": false,
   "integrated_into_revia": false
 }

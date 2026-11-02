@@ -1,0 +1,825 @@
+{
+  "experiment": "FIRST-001",
+  "status": "measured_with_limits",
+  "stage": "Measured (toy only)",
+  "started_utc": "2026-11-02T18:31:03.547875+00:00",
+  "finished_utc": "2026-11-02T18:31:07.888260+00:00",
+  "source": {
+    "archive_sha256": "a750f92354510db6337bb57d589d010ccc8caf8d5ec76aee407984e069678208",
+    "archive_bytes": 15706,
+    "entries": [
+      {
+        "path": "revia_neuromap_v01/CMakeLists.txt",
+        "bytes": 305,
+        "sha256": "70291bb024df52de38946b5bf91fa1b054df5426105830a7b67bb872ced90ea6",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/README.md",
+        "bytes": 8273,
+        "sha256": "7c98084795302bbb3ff80b734b8bf5dc39f259f88a203c62bc87c22719167ce7",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/examples/revia_demo.rnb",
+        "bytes": 113,
+        "sha256": "624a406e865feb8c3274537e2d0667b56992744f2277aa42d1da1f25469e12dd",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/examples/revia_demo.rnl",
+        "bytes": 414,
+        "sha256": "8e87efedd139f05ade0d312661acf28974073ad32eca4c9427efafa1c11d6652",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/src/rnl.cpp",
+        "bytes": 13549,
+        "sha256": "d5ee18bbe9df39eb9d99b571c93ae1f0bbeec97bf19b387587a71d4563d61b0f",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/tests/test_reference.py",
+        "bytes": 2495,
+        "sha256": "1864b9efb0c485870ec661facfea629b1887058fa8ad4b0809e41900839a136a",
+        "directory": false
+      },
+      {
+        "path": "revia_neuromap_v01/visualizer/index.html",
+        "bytes": 13061,
+        "sha256": "da67edc58abfc6d53cc7a110d23dcc0cbd28e7385db6a212a04e20810d03fe6c",
+        "directory": false
+      }
+    ],
+    "originals_unchanged": true,
+    "original_cpp_sha256": "d5ee18bbe9df39eb9d99b571c93ae1f0bbeec97bf19b387587a71d4563d61b0f",
+    "original_executable_sha256": "a6765b9a5945fa2d19e208b86b12a26b8b47cdfd36414fd9dc4c0a9dd3f02302",
+    "worker_cpp_sha256": "83a19e05c5fc4102d1cd96e02e7b63c31cfe4361677dce6baf7247441eb71575",
+    "worker_executable_sha256": "2906360cb8ddf4f58e257a4adfa71c13e4a88e5b69a0e8f68e89e11a8b79885b",
+    "oracle_sha256": "149e5a564c58217d572fdcab9c8dcf2947d0e177a95ac8c05df6536b36ed3fae"
+  },
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "architecture": "AMD64",
+    "compiler": "MSVC 19.50.35730.0, tools 14.50.35717",
+    "compile_flags": [
+      "/std:c++20",
+      "/EHsc",
+      "/W4",
+      "/O2",
+      "/fp:strict",
+      "/INCREMENTAL:NO"
+    ],
+    "python": "3.12.10",
+    "original_executable_bytes": 340992,
+    "worker_executable_bytes": 367616,
+    "build_warnings": "Six inherited size_t-to-unsigned warnings; an instrumentation signedness warning was corrected before accepted execution. Original source was not patched."
+  },
+  "correctness": {
+    "oracle_tests": 6,
+    "oracle_exit": 0,
+    "cases_per_variant": 16,
+    "steps_per_variant": 236,
+    "initial_states": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0.25,
+        -0.5,
+        0.75
+      ]
+    ],
+    "no_cache_variants": [
+      "F",
+      "U",
+      "P"
+    ],
+    "pairwise_float_bits_identical": true,
+    "max_absolute_state_output_error": 0.0,
+    "source_reference_limit": "Full precision comes from reviewed instrumentation plus an independent FP32 oracle; the original CLI prints only three decimals and is a separate smoke observation."
+  },
+  "cache_negative_control": {
+    "variant": "C",
+    "cached_steps": 126,
+    "state_divergent_steps": 123,
+    "state_divergent_cases": 9,
+    "max_state_error": 0.49487074516,
+    "max_output_error": 0.18494480342,
+    "lossless_recurrence_equivalent": false,
+    "cases": [
+      {
+        "case": "Z",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0,
+        "first_divergence": null
+      },
+      {
+        "case": "R",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.493536443,
+        "first_divergence": {
+          "input": [
+            1,
+            0,
+            0
+          ],
+          "cache_state": [
+            0.342717379,
+            0,
+            0
+          ],
+          "recomputed_state": [
+            0.546377659,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "case": "A",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0.0,
+        "first_divergence": null
+      },
+      {
+        "case": "B",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 3,
+        "first_divergent_step_zero_based": 3,
+        "max_state_error": 0.151511133,
+        "first_divergence": {
+          "input": [
+            0,
+            0,
+            0
+          ],
+          "cache_state": [
+            0.226956204,
+            0,
+            0
+          ],
+          "recomputed_state": [
+            0.150331125,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "case": "N-below",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.493536443,
+        "first_divergence": {
+          "input": [
+            1,
+            0.049999997,
+            0
+          ],
+          "cache_state": [
+            0.342717379,
+            0,
+            0
+          ],
+          "recomputed_state": [
+            0.546377659,
+            0.0224812664,
+            0
+          ]
+        }
+      },
+      {
+        "case": "N-at",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.493536443,
+        "first_divergence": {
+          "input": [
+            1,
+            0.0500000007,
+            0
+          ],
+          "cache_state": [
+            0.342717379,
+            0,
+            0
+          ],
+          "recomputed_state": [
+            0.546377659,
+            0.0224812683,
+            0
+          ]
+        }
+      },
+      {
+        "case": "N-above",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0.0,
+        "first_divergence": null
+      },
+      {
+        "case": "Router",
+        "initial_state": [
+          0,
+          0,
+          0
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0,
+        "first_divergence": null
+      },
+      {
+        "case": "Z",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.49487074516,
+        "first_divergence": {
+          "input": [
+            0,
+            0,
+            0
+          ],
+          "cache_state": [
+            0.165588439,
+            -0.330958843,
+            0.495899975
+          ],
+          "recomputed_state": [
+            0.109691702,
+            -0.219175503,
+            0.328249663
+          ]
+        }
+      },
+      {
+        "case": "R",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.49487074516,
+        "first_divergence": {
+          "input": [
+            1,
+            0,
+            0
+          ],
+          "cache_state": [
+            0.491478443,
+            -0.330958843,
+            0.495899975
+          ],
+          "recomputed_state": [
+            0.634167254,
+            -0.219175503,
+            0.328249663
+          ]
+        }
+      },
+      {
+        "case": "A",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0.0,
+        "first_divergence": null
+      },
+      {
+        "case": "B",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 3,
+        "first_divergent_step_zero_based": 3,
+        "max_state_error": 0.15857848500000002,
+        "first_divergence": {
+          "input": [
+            0,
+            0,
+            0
+          ],
+          "cache_state": [
+            0.292207897,
+            -0.145179123,
+            0.217382729
+          ],
+          "recomputed_state": [
+            0.193529382,
+            -0.0961740017,
+            0.143992007
+          ]
+        }
+      },
+      {
+        "case": "N-below",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.49487074516,
+        "first_divergence": {
+          "input": [
+            1,
+            0.049999997,
+            0
+          ],
+          "cache_state": [
+            0.491478443,
+            -0.330958843,
+            0.495899975
+          ],
+          "recomputed_state": [
+            0.634167254,
+            -0.196754977,
+            0.328249663
+          ]
+        }
+      },
+      {
+        "case": "N-at",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 15,
+        "first_divergent_step_zero_based": 1,
+        "max_state_error": 0.49487074516,
+        "first_divergence": {
+          "input": [
+            1,
+            0.0500000007,
+            0
+          ],
+          "cache_state": [
+            0.491478443,
+            -0.330958843,
+            0.495899975
+          ],
+          "recomputed_state": [
+            0.634167254,
+            -0.196754977,
+            0.328249663
+          ]
+        }
+      },
+      {
+        "case": "N-above",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0.0,
+        "first_divergence": null
+      },
+      {
+        "case": "Router",
+        "initial_state": [
+          0.25,
+          -0.5,
+          0.75
+        ],
+        "cached_steps": 0,
+        "first_divergent_step_zero_based": null,
+        "max_state_error": 0.0,
+        "first_divergence": null
+      }
+    ],
+    "interpretation": "Authored event-skipping semantics differ from recomputing recurrence on every invocation; do not count skipped work as a lossless optimization."
+  },
+  "storage": {
+    "F": {
+      "schema": "experimental RNLF",
+      "serialized_bytes": 200,
+      "matrix_payload_bytes": 108,
+      "codebook_bytes": 0,
+      "gates_bytes": 36,
+      "headers_names_bytes": 56,
+      "padding_bits": 0,
+      "runtime_matrix_capacity_bytes": 108,
+      "runtime_codebook_capacity_bytes": 0,
+      "runtime_gate_capacity_bytes": 36,
+      "runtime_object_capacity_bytes": 480,
+      "runtime_state_cache_capacity_bytes": 36,
+      "runtime_event_scratch_capacity_peak_bytes": 60,
+      "runtime_allocator_overhead_bytes": null,
+      "runtime_string_allocation_bytes": null,
+      "peak_process_rss_bytes": null,
+      "resident_experts": 3,
+      "capacity_sums_are_not_process_memory": true,
+      "trace_and_serialization_buffers_excluded_from_capacity_sums": true
+    },
+    "U": {
+      "schema": "experimental RNLU",
+      "serialized_bytes": 131,
+      "matrix_payload_bytes": 27,
+      "codebook_bytes": 12,
+      "gates_bytes": 36,
+      "headers_names_bytes": 56,
+      "padding_bits": 0,
+      "runtime_matrix_capacity_bytes": 27,
+      "runtime_codebook_capacity_bytes": 12,
+      "runtime_gate_capacity_bytes": 36,
+      "runtime_object_capacity_bytes": 408,
+      "runtime_state_cache_capacity_bytes": 36,
+      "runtime_event_scratch_capacity_peak_bytes": 60,
+      "runtime_allocator_overhead_bytes": null,
+      "runtime_string_allocation_bytes": null,
+      "peak_process_rss_bytes": null,
+      "resident_experts": 3,
+      "capacity_sums_are_not_process_memory": true,
+      "trace_and_serialization_buffers_excluded_from_capacity_sums": true
+    },
+    "P": {
+      "schema": "original RNL1",
+      "serialized_bytes": 113,
+      "matrix_payload_bytes": 9,
+      "codebook_bytes": 12,
+      "gates_bytes": 36,
+      "headers_names_bytes": 56,
+      "padding_bits": 18,
+      "runtime_matrix_capacity_bytes": 9,
+      "runtime_codebook_capacity_bytes": 12,
+      "runtime_gate_capacity_bytes": 36,
+      "runtime_object_capacity_bytes": 480,
+      "runtime_state_cache_capacity_bytes": 36,
+      "runtime_event_scratch_capacity_peak_bytes": 60,
+      "runtime_allocator_overhead_bytes": null,
+      "runtime_string_allocation_bytes": null,
+      "peak_process_rss_bytes": null,
+      "resident_experts": 3,
+      "capacity_sums_are_not_process_memory": true,
+      "trace_and_serialization_buffers_excluded_from_capacity_sums": true
+    },
+    "C": {
+      "schema": "experimental RNLU",
+      "serialized_bytes": 131,
+      "matrix_payload_bytes": 27,
+      "codebook_bytes": 12,
+      "gates_bytes": 36,
+      "headers_names_bytes": 56,
+      "padding_bits": 0,
+      "runtime_matrix_capacity_bytes": 27,
+      "runtime_codebook_capacity_bytes": 12,
+      "runtime_gate_capacity_bytes": 36,
+      "runtime_object_capacity_bytes": 408,
+      "runtime_state_cache_capacity_bytes": 36,
+      "runtime_event_scratch_capacity_peak_bytes": 60,
+      "runtime_allocator_overhead_bytes": null,
+      "runtime_string_allocation_bytes": null,
+      "peak_process_rss_bytes": null,
+      "resident_experts": 3,
+      "capacity_sums_are_not_process_memory": true,
+      "trace_and_serialization_buffers_excluded_from_capacity_sums": true
+    }
+  },
+  "timing": {
+    "F": {
+      "step_ns_median": 277.237,
+      "step_ns_min": 269.362,
+      "step_ns_max": 300.042,
+      "in_memory_parse_ns_median": 20100,
+      "in_memory_parse_ns_min": 18000,
+      "in_memory_parse_ns_max": 31600,
+      "full_instrumented_peak_working_set_min": 4255744,
+      "full_instrumented_peak_working_set_max": 4259840
+    },
+    "U": {
+      "step_ns_median": 279.393,
+      "step_ns_min": 273.39,
+      "step_ns_max": 282.524,
+      "in_memory_parse_ns_median": 24700,
+      "in_memory_parse_ns_min": 12600,
+      "in_memory_parse_ns_max": 27100,
+      "full_instrumented_peak_working_set_min": 4259840,
+      "full_instrumented_peak_working_set_max": 4263936
+    },
+    "P": {
+      "step_ns_median": 279.987,
+      "step_ns_min": 274.368,
+      "step_ns_max": 284.64,
+      "in_memory_parse_ns_median": 19000,
+      "in_memory_parse_ns_min": 18500,
+      "in_memory_parse_ns_max": 23500,
+      "full_instrumented_peak_working_set_min": 4263936,
+      "full_instrumented_peak_working_set_max": 4268032
+    }
+  },
+  "timing_raw": {
+    "F": [
+      {
+        "batch": 0,
+        "load_ns": 18000,
+        "step_total_ns": 27442200,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4255744,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.10899999999674037
+      },
+      {
+        "batch": 1,
+        "load_ns": 31600,
+        "step_total_ns": 30004200,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4255744,
+        "peak_committed_bytes": 765952,
+        "supervised_elapsed_seconds": 0.09299999999348074
+      },
+      {
+        "batch": 2,
+        "load_ns": 20100,
+        "step_total_ns": 27822700,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4259840,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.09399999998277053
+      },
+      {
+        "batch": 3,
+        "load_ns": 19400,
+        "step_total_ns": 26936200,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4259840,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.09399999998277053
+      },
+      {
+        "batch": 4,
+        "load_ns": 24900,
+        "step_total_ns": 27723700,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4259840,
+        "peak_committed_bytes": 774144,
+        "supervised_elapsed_seconds": 0.09299999999348074
+      }
+    ],
+    "U": [
+      {
+        "batch": 0,
+        "load_ns": 12600,
+        "step_total_ns": 27939300,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4263936,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.09299999999348074
+      },
+      {
+        "batch": 1,
+        "load_ns": 16900,
+        "step_total_ns": 28189900,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4259840,
+        "peak_committed_bytes": 761856,
+        "supervised_elapsed_seconds": 0.0940000000409782
+      },
+      {
+        "batch": 2,
+        "load_ns": 24900,
+        "step_total_ns": 27339000,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4263936,
+        "peak_committed_bytes": 778240,
+        "supervised_elapsed_seconds": 0.0940000000409782
+      },
+      {
+        "batch": 3,
+        "load_ns": 27100,
+        "step_total_ns": 27557500,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4263936,
+        "peak_committed_bytes": 778240,
+        "supervised_elapsed_seconds": 0.10899999999674037
+      },
+      {
+        "batch": 4,
+        "load_ns": 24700,
+        "step_total_ns": 28252400,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4259840,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.0940000000409782
+      }
+    ],
+    "P": [
+      {
+        "batch": 0,
+        "load_ns": 18500,
+        "step_total_ns": 28178600,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4268032,
+        "peak_committed_bytes": 765952,
+        "supervised_elapsed_seconds": 0.09399999998277053
+      },
+      {
+        "batch": 1,
+        "load_ns": 22700,
+        "step_total_ns": 27436800,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4268032,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.14100000000325963
+      },
+      {
+        "batch": 2,
+        "load_ns": 19000,
+        "step_total_ns": 28464000,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4263936,
+        "peak_committed_bytes": 765952,
+        "supervised_elapsed_seconds": 0.125
+      },
+      {
+        "batch": 3,
+        "load_ns": 23500,
+        "step_total_ns": 27809900,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4263936,
+        "peak_committed_bytes": 765952,
+        "supervised_elapsed_seconds": 0.10899999999674037
+      },
+      {
+        "batch": 4,
+        "load_ns": 18700,
+        "step_total_ns": 27998700,
+        "iterations": 100000,
+        "peak_working_set_bytes": 4268032,
+        "peak_committed_bytes": 770048,
+        "supervised_elapsed_seconds": 0.0940000000409782
+      }
+    ]
+  },
+  "timing_limits": {
+    "steps_per_batch": 100000,
+    "batches_per_no_cache_variant": 5,
+    "order": [
+      "FUP",
+      "UPF",
+      "PFU",
+      "FPU",
+      "PUF"
+    ],
+    "load_boundary": "In-memory experimental-container parse/allocation only; no disk IO or destruction",
+    "step_boundary": "Event computation plus checksum; no trace serialization or VM construction",
+    "clock_period_nominal_ns": 1,
+    "empirical_timer_resolution_ns": null,
+    "disk_load_latency_ns": null,
+    "speedup_established": false,
+    "independent_statistics_or_confidence_intervals": false,
+    "background_host_load": "Not controlled or inspected; other workloads were preserved"
+  },
+  "memory_limits": {
+    "full_process_peaks_include": "Transient source parsing, serialization, tracing, executable/runtime and model objects",
+    "empty_worker_rss_bytes": null,
+    "startup_argument_refusal_control_is_not_empty_baseline": true,
+    "allocator_and_string_overhead_bytes": null,
+    "total_model_residency_bytes": null,
+    "rss_reduction_established": false,
+    "original_runtime_matrix_indices_bytes": 27,
+    "experimental_packed_variant_matrix_capacity_bytes": 9,
+    "capacity_component_subtotals_are_not_total_ram": {
+      "F": 720,
+      "U": 579,
+      "P": 633,
+      "C": 579
+    }
+  },
+  "packing_counterexample": {
+    "state": 1,
+    "input": 3,
+    "experts": 3,
+    "actual_matrix_payload_bytes": 3,
+    "reported_matrix_payload_bytes": 4,
+    "file_bytes": 107
+  },
+  "resources": {
+    "supervised_main_attempt_runs": 26,
+    "zero_exit_runs": 24,
+    "expected_exit2_controls": 2,
+    "all_limits_verified_and_exits_confirmed": true,
+    "worker_working_set_and_commit_cap_bytes": 268435456,
+    "logical_cpu_affinity_mask": 1,
+    "single_os_thread_proven": false,
+    "worker_source_has_no_thread_creation": true,
+    "elapsed_main_attempt_seconds": 4.344000000040978,
+    "evidence_bytes_at_attempt_end": 2516328,
+    "evidence_bytes_with_derived_summary": 2532398,
+    "main_attempt_budget_seconds": 600,
+    "result_budget_exclusive_bytes": 10485760,
+    "direct_output_limit_per_worker_exclusive_bytes": 1048576,
+    "captured_stream_and_metadata_limit_per_worker_exclusive_bytes": 65536,
+    "guard_hash": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
+    "guard_is_resource_control_not_security_sandbox": true,
+    "supervisor_control_tests": 5,
+    "supervisor_controls_passed": true,
+    "earlier_setup_failures_retained": true
+  },
+  "unmeasured": [
+    "Disk-load latency",
+    "Empty-worker RSS",
+    "Exact allocator/string allocation",
+    "Filesystem allocated blocks",
+    "Language quality",
+    "Qwen/llama.cpp comparison",
+    "VRAM",
+    "Training"
+  ],
+  "artifacts": {
+    "C/model.rnb": {
+      "bytes": 131,
+      "sha256": "31a7cd3a16edbb1643b615f478652a6374c625d9ddd5f120c21aa13624d3e4ae"
+    },
+    "C/result.json": {
+      "bytes": 116372,
+      "sha256": "953d8e48be2f0064e9a2045de74b2a9285f5873b4734fb8850a70c9ebca1e843"
+    },
+    "F/model.rnb": {
+      "bytes": 200,
+      "sha256": "8334709a27b8639513ca8a9a612201c139ad2b7e90984cb42109cce9cb343eec"
+    },
+    "F/result.json": {
+      "bytes": 126620,
+      "sha256": "bb0b478735e064587ce680e55f5bfb8393c1231a2293ab63cd783d46a883c5cf"
+    },
+    "P/model.rnb": {
+      "bytes": 113,
+      "sha256": "624a406e865feb8c3274537e2d0667b56992744f2277aa42d1da1f25469e12dd"
+    },
+    "P/result.json": {
+      "bytes": 126615,
+      "sha256": "51f83e10a57e8ef3277e5c8bd8d446d01e8295f7cf7fa2a9eb6270b27ea490bf"
+    },
+    "U/model.rnb": {
+      "bytes": 131,
+      "sha256": "31a7cd3a16edbb1643b615f478652a6374c625d9ddd5f120c21aa13624d3e4ae"
+    },
+    "U/result.json": {
+      "bytes": 126620,
+      "sha256": "f8620df4a443ae25334d7eafd10c8543c12fc4a782e5d19166f8f0b54d764d98"
+    }
+  },
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "conclusion": "Equivalent toy representations and smaller serialized model bytes; cache is not lossless recurrence reuse. No speed or total-RAM benefit demonstrated. No model or Revia improvement claim."
+}

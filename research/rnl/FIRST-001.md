@@ -1,9 +1,11 @@
 # FIRST-001: representation equivalence and accounting
 
-Status: **prepared; not run**. Exact ZIP source is unavailable in this checkout.
-This protocol extends [the charter](README.md), without executing uploaded code,
-reconstructing missing source, or changing any running Revia workload. All measured
-fields below remain `null`. This is one CPU toy experiment, not model training.
+Status: **run with explicit limits**; see [results](RESULTS-FIRST-001.md) and
+[evidence](results/FIRST-001/summary.json). The tables and JSON below retain the
+pre-run template; their nulls are placeholders, not current measurements.
+This protocol extends [the charter](README.md). Original ZIP bytes were recovered
+from the owner's confirmed local file and reviewed before execution. This remains
+one CPU toy experiment, not model training or a change to any Revia workload.
 
 ## Input and execution gate
 
@@ -116,7 +118,12 @@ before collecting comparisons. If five batches cannot finish under the common
 budget, or timer/noise dominates, record `incomplete` or `inconclusive`; claim no
 speedup. Do not clear system caches or alter other processes to stabilize timing.
 
-## Windows resource controls - proposed, not implemented or exercised
+## Windows resource controls
+
+The [supervisor](run_bounded.py) implemented these worker limits, verified their
+readbacks, and passed five own-worker controls before uploaded-source execution.
+Direct outputs have separate pre-write and aggregate checks. See results for
+measurement gaps; an argument-refusal probe is not an empty-worker RSS baseline.
 
 Caps for the complete experiment attempt: one CPU compute thread, 256 MiB worker
 working set, 600 seconds wall time including warm-up/calibration/all variants,
