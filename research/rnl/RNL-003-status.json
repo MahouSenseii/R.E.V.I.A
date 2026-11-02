@@ -1,0 +1,22 @@
+{
+  "experiment": "RNL-003",
+  "status": "measured_conditional_synthetic_cpu_benefit",
+  "protocol_commit": "94ce9ea25546bd97228091b7d4ce81a4e332abee",
+  "report": "RESULTS-RNL-003.md",
+  "summary": "results/RNL-003/summary.json",
+  "validation_steps": 2400,
+  "U_M_bitwise_equal": true,
+  "timing_scenarios": 12,
+  "supported_repeat_scenarios": 8,
+  "zero_repeat_controls": 4,
+  "all_scenarios_resolution_adequate": true,
+  "repeat_median_paired_U_over_M_range": [
+    1.2129947655923246,
+    3.993684296516407
+  ],
+  "total_memory_saving_established": false,
+  "Revia_or_model_quality_tested": false,
+  "training_or_gpu_work": false,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false
+}

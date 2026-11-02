@@ -5,3 +5,5 @@ run_bounded.py -text
 test_run_bounded.py -text
 cache002.cpp -text
 check_cache002.py -text
+scale003.cpp -text
+check_scale003.py -text

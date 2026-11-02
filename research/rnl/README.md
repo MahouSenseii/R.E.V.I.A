@@ -24,7 +24,7 @@ Useful results may become small, separately reviewed Revia changes later.
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
 | Experimental | Hypothesis, static review or proposed experiment | Packed-runtime and matrix-cache instrumentation; no language-model claim |
-| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence and RNL-002 exact-cache contract; no runtime benefit established |
+| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract and RNL-003 conditional synthetic CPU benefit |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -38,8 +38,16 @@ rerouting and updating state. M matched the uncached reference bit-for-bit over
 control. This is numeric equivalence on a pinned toy, not a speed or RAM result.
 See the [RNL-002 report](RESULTS-RNL-002.md), [pre-registered protocol](RNL-002.md),
 [status](RNL-002-status.json) and [evidence](results/RNL-002/summary.json).
-One experiment is concluded; a representative size/throughput study is a separate
-next decision. No further model, training or integration work runs automatically.
+RNL-003 then measured the complete event at synthetic square sizes 16, 64, 256
+and 1024 with fixed 0%, 50% and 90% repeated-event controls. All 2,400 validation
+steps matched bit-for-bit. Eight repeat conditions passed the predeclared local
+benefit rule (median paired U/M 1.213-3.994); all four zero-hit controls had no
+benefit. M added retained buffers and demonstrated no RAM saving. These are
+generated networks, not Revia/model traffic or language quality. See the
+[RNL-003 report](RESULTS-RNL-003.md), [protocol](RNL-003.md),
+[status](RNL-003-status.json) and [evidence](results/RNL-003/summary.json).
+This one study is concluded. No further model, training or integration work runs
+automatically; relevance to real Revia inputs is a later decision.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored
@@ -135,9 +143,9 @@ reuse existing catalog/evidence conventions instead of building a new framework.
 
 ## Downstream comparison and promotion
 
-FIRST-001 provides toy equivalence, not a demonstrated net runtime benefit. No
-candidate is promoted. A separate proposal would need a relevant measured benefit
-before comparing a change
+FIRST-001 provides toy equivalence; RNL-003 provides conditional synthetic runtime
+benefit. No candidate is promoted. A separate proposal would need a relevant
+measured benefit on Revia's actual computation before comparing a change
 against a pinned Qwen/llama.cpp baseline with identical model, prompts, context,
 sampling, hardware and measurement boundaries. The toy is not a text-model
 baseline. Model RAM/VRAM, runtime and evaluation costs remain unknown until those
