@@ -223,14 +223,14 @@ struct ReviaSessionTestAccess
     {
         return session.SubmitTurn(input, agents::InputSource::Typed, {}, std::move(references), std::move(admission));
     }
-    // Main with or without its vision projector, and no embedding server, so document
-    // search is lexical and deterministic.
-    static void ConfigureAttachments(ReviaSession& session, bool vision)
+    // Main with or without its vision projector. Callers can explicitly disable
+    // embeddings to keep document search lexical and deterministic.
+    static void ConfigureAttachments(ReviaSession& session, bool vision, const embeddingSettings& embedding = embeddingSettings{})
     {
         session.settings.llm.bVisionEnabled = vision;
         session.settings.embedding.bEnabled = false;
         session.router.ApplyLLMSettings(
-            session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embeddingSettings{}, aiProfile{}, true, true);
+            session.settings.llm, session.fastLlmSettings, session.expertLlmSettings, embedding, aiProfile{}, true, true);
     }
     static void UseVirtualMachine(ReviaSession& session, std::shared_ptr<workspace::VirtualMachineRuntime> machine)
     { session.virtualMachine = std::move(machine); }
