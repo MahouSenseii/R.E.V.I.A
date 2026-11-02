@@ -36,7 +36,7 @@ jobs:
           from pathlib import Path
           import json, re
           root = Path('docs/atlas')
-          allowed = {'index.html', 'atlas.css', 'public.css', 'atlas.js', 'milestone.json'}
+          allowed = {'index.html', 'atlas.css', 'public.css', 'atlas.js', 'milestone.json', 'research.html'}
           files = [p for p in root.rglob('*') if p.is_file()]
           assert {p.relative_to(root).as_posix() for p in files} == allowed
           assert not any(p.is_symlink() for p in root.rglob('*'))

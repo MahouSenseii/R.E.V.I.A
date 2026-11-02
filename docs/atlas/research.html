@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Revia RNL research: isolated experiments, evidence, limits and reviewed candidates for later integration.">
+<title>Revia Atlas - RNL research</title>
+<link rel="stylesheet" href="atlas.css"><link rel="stylesheet" href="public.css"><script src="atlas.js" defer></script>
+</head>
+<body class="mode-plain">
+<a class="skip-link" href="#main-content">Skip to content</a>
+<button id="atlas-nav-toggle" type="button" aria-controls="atlas-sidebar" aria-expanded="false">Navigation</button><div id="atlas-nav-backdrop" hidden></div>
+<aside id="atlas-sidebar" aria-label="Atlas navigation" tabindex="-1">
+<button id="atlas-nav-close" type="button">Close navigation</button>
+<div class="brand">R.E.V.I.A<br>Atlas</div><p class="meta">Public progress snapshot<br>Product improvements first</p>
+<nav class="atlas-pages-nav" aria-label="Sections">
+<section class="nav-group"><h2>Milestone handoff</h2><a href="index.html#current">Current milestone</a><a href="index.html#changes">Repairs and tooling</a><a href="index.html#capabilities">Capabilities</a><a href="index.html#checks">Regression checks</a><a href="index.html#remaining">Remaining issues</a><a href="index.html#next">Next product work</a></section>
+<section class="nav-group"><h2>Research</h2><a href="research.html" aria-current="page">RNL research</a><a href="#status">Evidence stages</a><a href="#experiment">First experiment</a><a href="#evidence">What we know</a><a href="#promotion">Path into Revia</a></section>
+<section class="nav-group"><h2>Project</h2><a href="https://github.com/MahouSenseii/R.E.V.I.A">GitHub repository</a><a href="milestone.json">Structured milestone</a></section>
+</nav></aside>
+<main id="main-content">
+<header><h1>RNL research</h1><p class="privacy">Manual research snapshot - 2026-11-02. No live monitoring or automatic model updates.</p>
+<p class="lead"><strong>Experimental. No measured performance improvement yet.</strong> A separate research branch will test whether compact weights or selective computation can help Revia. The prototype is a tiny authored network; it does not train or run her language model.</p>
+<div class="toolbar"><div><label for="atlas-search">Find a research stage</label><input id="atlas-search" type="search" autocomplete="off"></div><button id="reset-filters" type="button">Reset search</button></div><p id="result-count" class="status" aria-live="polite"></p>
+</header>
+<section id="status" tabindex="-1" aria-labelledby="status-heading"><h2 id="status-heading">Evidence stages</h2>
+<article class="compact-item" data-search="Experimental RNL prototype static source review proposed first experiment"><h3>Experimental</h3><p>Workstream opened. Source review identified accounting and state-caching problems. The first experiment is specified and has not run.</p></article>
+<article class="compact-item" data-search="Measured no benchmarks memory latency quality results"><h3>Measured</h3><p>None. Source calculations are not runtime measurements, model quality evidence or GPU memory results.</p></article>
+<article class="compact-item" data-search="Candidate for Revia no reviewed improvement promotion"><h3>Candidate for Revia</h3><p>None. A candidate needs reproducible evidence against the unchanged Qwen/llama.cpp path, including quality, safety and privacy checks.</p></article>
+<article class="compact-item" data-search="Integrated no research change in Revia reviewed approval rollback"><h3>Integrated</h3><p>None. Proven work may later be proposed as a small, separately reviewed change with approval and rollback.</p></article>
+<p id="empty-results" class="empty-results" hidden>No research stages match this search.</p>
+</section>
+<section id="experiment" tabindex="-1" aria-labelledby="experiment-heading"><h2 id="experiment-heading">First experiment</h2>
+<p><strong>FIRST-001: check the numbers and preserve the state.</strong> Compare the same tiny network using packed codebook indices, unpacked indices and ordinary numerical weights. Check every output and state update before comparing total memory and elapsed time.</p>
+<p>Repeated and nearly repeated inputs must expose whether caching changes the answer. A smaller weight payload alone does not count as a useful improvement. This toy check cannot establish language-model quality or predict savings for Qwen.</p>
+<details><summary>Method, limits and stop criteria</summary>
+<p>Use identical handcrafted parameters, deterministic expert tie-breaking and state updates. Include all experts, router weights, codebook, headers, buffers and state in the accounting. Check cold starts, alternating inputs, nonzero initial state, repeated inputs and perturbations around the novelty threshold. Compare full output and state trajectories against an uncached reference; the authored cache is expected to fail this equivalence check.</p>
+<p>Record file bytes, resident representation bytes, peak process memory and warmed end-to-end latency separately. Count executed matrix operations and router/state work separately. Any timing comparison needs repeated independent samples and its uncertainty. Do not infer a speedup from operation counts.</p>
+<p>Pass the correctness gate only if the exact computation agrees within a predeclared absolute tolerance of 1e-6, counters match the executed loops and accounting reconciles. A state mismatch disqualifies the affected caching claim. A valid negative result is useful. Stop on missing provenance, invalid counters, unbounded approximation error or a resource-limit breach; no savings claim follows.</p>
+<p>Planning budget, not a measurement: one CPU thread, 256 MiB process-memory cap, ten minutes maximum execution and under 10 MiB of results. No GPU, training, dependency installation, model downloads or access to another running test. Local attachment transfer is blocked by a Windows metadata-helper limitation, so no uploaded program has run.</p>
+</details>
+<p>Next gate after the toy check: design one comparison against a pinned Qwen model and llama.cpp build. Model hash, settings, held-out cases and resource budget must be recorded first. That comparison is not scheduled or run.</p>
+</section>
+<section id="evidence" tabindex="-1" aria-labelledby="evidence-heading"><h2 id="evidence-heading">What we know</h2>
+<p>The supplied HTML describes a three-input, three-state, three-expert illustration with handcrafted weights. The C++ findings below come from the earlier source review and have not been independently rechecked in this workstream.</p>
+<details><summary>Static findings and their evidence limits</summary>
+<ul>
+<li>The HTML matrix loop performs nine multiply-add iterations for a new event while its one-hot-input counter displays three. Routing, activation and state-update overhead are outside that counter.</li>
+<li>The earlier C++ review found that nine packed matrix bytes become 27 one-byte indices when loaded, with all experts resident. Neither number is total runtime memory.</li>
+<li>The authored novelty cache skips state updates on repeated inputs even though routing and output depend on state. Its approximate threshold supplies no error bound.</li>
+<li>The earlier C++ review found that inspection uses <code>E*(N+3)/4</code> instead of per-expert packing <code>E*((N+3)/4)</code>, with integer division.</li>
+<li>The illustration honestly labels 113 full-file bytes versus 108 matrix-only FP32 bytes. These compare different scopes and do not prove total savings.</li>
+<li>No tokenizer, learned weights, training loop, text inference or GGUF support is demonstrated. Existing toy checks do not establish a numerical state trajectory, language quality or VRAM use.</li>
+</ul>
+<p>These are static observations, not new execution results. Local ZIP materialization is incomplete; no local source digest or independent C++ audit is claimed.</p>
+</details>
+<details><summary>Related research and existing Revia evaluation paths</summary>
+<p><a href="https://arxiv.org/abs/2401.06118">AQLM</a> studies learned additive quantization. <a href="https://arxiv.org/abs/2101.03961">Switch Transformers</a> studies sparse expert routing. They motivate questions; their results do not validate this prototype. <a href="https://arxiv.org/abs/2305.14314">QLoRA</a> is a separate adapter-training approach, not an RNL result.</p>
+<p>Reuse Revia's <a href="https://github.com/MahouSenseii/R.E.V.I.A/blob/main/docs/EVALUATION_GATE.md">answer-quality gate</a>, <a href="https://github.com/MahouSenseii/R.E.V.I.A/blob/main/Config/Evaluation/golden-set.jsonl">golden cases</a> and <a href="https://github.com/MahouSenseii/R.E.V.I.A/blob/main/docs/OFFLINE_TRAINING.md">offline-learning lineage and review rules</a> when applicable. Their existing evidence retains its original scope.</p>
+</details>
+</section>
+<section id="promotion" tabindex="-1" aria-labelledby="promotion-heading"><h2 id="promotion-heading">Path into Revia</h2>
+<p>Keep useful ideas eligible for later integration. First reproduce the benefit against an unchanged baseline and record tradeoffs. Then review the held-out quality, safety and privacy results and propose a small change. Integration needs explicit authorization and a tested rollback; passing an experiment never merges or replaces a model automatically.</p>
+<p>Memory, corrections and future evaluated adapters remain a separate practical learning path. Any future training needs consent-aware data lineage and withdrawal checks. Deleting an example later does not erase its influence from trained weights.</p>
+<details><summary>Branch and page boundary</summary><p>Research lives on <a href="https://github.com/MahouSenseii/R.E.V.I.A/tree/research/rnl-sandbox"><code>research/rnl-sandbox</code></a>, based on reviewed main commit <a href="https://github.com/MahouSenseii/R.E.V.I.A/commit/281514d3be4e651ae9cfd18219a41e99d08e652c"><code>281514d</code></a>. The <a href="https://github.com/MahouSenseii/R.E.V.I.A/blob/research/rnl-sandbox/research/rnl/README.md">research charter</a> owns the experiment contract. Atlas updates for this workstream edit only <code>docs/atlas/research.html</code>. The initial tab requires one navigation link and one public-artifact allowlist entry; existing milestone data and shared presentation remain separate.</p></details>
+</section>
+<footer>Research evidence is independent of the current Revia reliability and delegation milestones. This page does not change their claims or pass counts.</footer>
+</main>
+<script>
+addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('atlas-search');
+  const label = () => {
+    if (!input.value.trim()) document.getElementById('result-count').textContent = '4 research stage summaries';
+  };
+  input.addEventListener('input', label);
+  document.getElementById('reset-filters').addEventListener('click', label);
+  label();
+});
+</script>
+</body></html>
