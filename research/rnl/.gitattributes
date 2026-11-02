@@ -7,3 +7,8 @@ cache002.cpp -text
 check_cache002.py -text
 scale003.cpp -text
 check_scale003.py -text
+prefix004.py -text
+test_prefix004.py -text
+prefix004-fixtures.json -text
+PREFIX-004-identity.json -text
+PREFIX-004.md -text

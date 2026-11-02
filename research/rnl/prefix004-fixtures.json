@@ -1,0 +1,141 @@
+{
+  "experiment": "PREFIX-004",
+  "source": "Tools/Quality/contextBenchmark.py PROBES[0], messages_for(distractors=2); fixed type-only ORBIT subset",
+  "variants": {
+    "seed": [
+      {
+        "role": "system",
+        "content": "Rule A: Treat every archive note as unrelated unless it explicitly names ORBIT.\n\nRule B: Apply explicit ORBIT corrections and keep each source ID with its facts.\n\nRead this synthetic conversation carefully. Retain each person's facts separately. Later explicit corrections replace earlier claims only for the named subject. Answer the final request using the stated facts. Return only the requested JSON object, without commentary."
+      },
+      {
+        "role": "user",
+        "content": "Source D1: The ORBIT workshop is on Thursday in Lisbon. Its budget is 4000 euros and its access code is LIME-47."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted these facts and their source."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0000: unrelated inventory batch 3 has 5 ceramic tiles. Its label is SAMPLE-0000; shelf 0 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0000 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Source D2: Correction to ORBIT: it is now on Tuesday in Oslo, the budget is 7200 euros, and the access code is CEDAR-82. These replace all four earlier values."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted the correction and retained facts that were not changed."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0001: unrelated inventory batch 20 has 12 ceramic tiles. Its label is SAMPLE-0001; shelf 13 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0001 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Return JSON for ORBIT with exactly budget_eur and source. Use an integer for budget_eur and the source ID for source."
+      }
+    ],
+    "shared": [
+      {
+        "role": "system",
+        "content": "Rule A: Treat every archive note as unrelated unless it explicitly names ORBIT.\n\nRule B: Apply explicit ORBIT corrections and keep each source ID with its facts.\n\nRead this synthetic conversation carefully. Retain each person's facts separately. Later explicit corrections replace earlier claims only for the named subject. Answer the final request using the stated facts. Return only the requested JSON object, without commentary."
+      },
+      {
+        "role": "user",
+        "content": "Source D1: The ORBIT workshop is on Thursday in Lisbon. Its budget is 4000 euros and its access code is LIME-47."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted these facts and their source."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0000: unrelated inventory batch 3 has 5 ceramic tiles. Its label is SAMPLE-0000; shelf 0 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0000 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Source D2: Correction to ORBIT: it is now on Tuesday in Oslo, the budget is 7200 euros, and the access code is CEDAR-82. These replace all four earlier values."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted the correction and retained facts that were not changed."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0001: unrelated inventory batch 20 has 12 ceramic tiles. Its label is SAMPLE-0001; shelf 13 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0001 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Return JSON with exactly budget_eur and source for ORBIT. Use an integer for budget_eur and the source ID for source."
+      }
+    ],
+    "changed": [
+      {
+        "role": "system",
+        "content": "Rule B: Apply explicit ORBIT corrections and keep each source ID with its facts.\n\nRule A: Treat every archive note as unrelated unless it explicitly names ORBIT.\n\nRead this synthetic conversation carefully. Retain each person's facts separately. Later explicit corrections replace earlier claims only for the named subject. Answer the final request using the stated facts. Return only the requested JSON object, without commentary."
+      },
+      {
+        "role": "user",
+        "content": "Source D1: The ORBIT workshop is on Thursday in Lisbon. Its budget is 4000 euros and its access code is LIME-47."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted these facts and their source."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0000: unrelated inventory batch 3 has 5 ceramic tiles. Its label is SAMPLE-0000; shelf 0 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0000 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Source D2: Correction to ORBIT: it is now on Tuesday in Oslo, the budget is 7200 euros, and the access code is CEDAR-82. These replace all four earlier values."
+      },
+      {
+        "role": "assistant",
+        "content": "I have noted the correction and retained facts that were not changed."
+      },
+      {
+        "role": "user",
+        "content": "Archive note 0001: unrelated inventory batch 20 has 12 ceramic tiles. Its label is SAMPLE-0001; shelf 13 is reserved for catalog cards. A separate weather log recorded light clouds and mild wind. This archive entry makes no changes to any previously named person, project, workshop, decision or task."
+      },
+      {
+        "role": "assistant",
+        "content": "Recorded archive note 0001 as unrelated inventory and weather information."
+      },
+      {
+        "role": "user",
+        "content": "Return JSON with exactly budget_eur and source for ORBIT. Use an integer for budget_eur and the source ID for source."
+      }
+    ]
+  },
+  "expected": {
+    "budget_eur": 7200,
+    "source": "D2"
+  },
+  "sampling": {
+    "temperature": 0,
+    "seed": 42,
+    "max_tokens": 32
+  }
+}

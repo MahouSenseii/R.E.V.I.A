@@ -23,7 +23,7 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime and matrix-cache instrumentation; no language-model claim |
+| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation and PREFIX-004 preparation; no language-model quality claim |
 | Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract and RNL-003 conditional synthetic CPU benefit |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
@@ -55,8 +55,16 @@ Existing prefix reuse and exact-input embedding caching already cover relevant
 work. Two source-supported leads remain: qualify existing prefix reuse, and
 establish embedding-cache lifecycle coverage. Observations, hypotheses, smallest
 discriminators and unknown installed-runtime identity are recorded separately.
-No proposed fixture or model experiment has run; the next authorized activity
-is only a read-only embedding lifecycle investigation after documentation publication.
+No model experiment ran during that audit. The subsequent read-only embedding
+lifecycle check did not establish a supported changed-weight cache bug.
+
+PREFIX-004 is now being prepared locally to qualify existing prefix reuse with
+the verified Qwen3.5-0.8B artifact and fixed public conversations. Its
+[concrete protocol](PREFIX-004.md) and [read-only identities](PREFIX-004-identity.json)
+are proposals awaiting parent review before any model/server execution. The
+installed CUDA runtime must first be isolated into a reviewed CPU-only staging
+directory. No real-model performance result, product change or publication is
+claimed by this preparation.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored
