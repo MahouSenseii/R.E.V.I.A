@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -11,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 
 #ifdef _WIN32
@@ -100,43 +102,138 @@ ArtifactReference ReadReference(const Json& value)
 {
     return {value.at("node"), value.at("id"), value.at("version"), value.at("hash")};
 }
-bool AtomicSave(const std::filesystem::path& path, const std::string& data)
+bool AtomicSave(const std::filesystem::path& path, const std::string& data, std::string& error)
 {
-    if (path.empty() || data.size() > MaximumCheckpoint)
+    if (path.empty())
+    {
+        error = "The workflow checkpoint path is empty.";
         return false;
+    }
+    if (data.size() > MaximumCheckpoint)
+    {
+        error = "The workflow checkpoint exceeds the 524288-byte size limit.";
+        return false;
+    }
     auto temporary = path;
     temporary += ".pending-" + std::to_string(Clock::now().time_since_epoch().count());
-    std::error_code error;
+    std::error_code fileError;
     if (!path.parent_path().empty())
-        std::filesystem::create_directories(path.parent_path(), error);
-    if (error)
-        return false;
-    bool saved = false;
-#ifdef _WIN32
-    const HANDLE file = CreateFileW(temporary.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file != INVALID_HANDLE_VALUE)
+        std::filesystem::create_directories(path.parent_path(), fileError);
+    if (fileError)
     {
+        error = "The workflow checkpoint could not be saved: create_directories failed (" +
+                std::string(fileError.category().name()) + " error " + std::to_string(fileError.value()) + ").";
+        return false;
+    }
+    const char* operation = nullptr;
+    unsigned long nativeError = 0;
+    bool created = false;
+#ifdef _WIN32
+    const auto temporaryName = temporary.wstring();
+    const auto destinationName = path.wstring();
+    const HANDLE file = CreateFileW(temporaryName.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        nativeError = GetLastError();
+        operation = "CreateFileW";
+    }
+    else
+    {
+        created = true;
         DWORD written = 0;
-        saved = WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) && written == data.size() &&
-                FlushFileBuffers(file);
-        saved = CloseHandle(file) && saved;
-        if (saved)
-            saved = MoveFileExW(temporary.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        if (!WriteFile(file, data.data(), static_cast<DWORD>(data.size()), &written, nullptr))
+        {
+            nativeError = GetLastError();
+            operation = "WriteFile";
+        }
+        else if (written != data.size())
+        {
+            nativeError = ERROR_WRITE_FAULT;
+            operation = "WriteFile (short write)";
+        }
+        else if (!FlushFileBuffers(file))
+        {
+            nativeError = GetLastError();
+            operation = "FlushFileBuffers";
+        }
+        if (!CloseHandle(file))
+        {
+            const auto closeError = GetLastError();
+            if (!operation)
+            {
+                nativeError = closeError;
+                operation = "CloseHandle";
+            }
+        }
+        if (!operation && !MoveFileExW(temporaryName.c_str(), destinationName.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        {
+            nativeError = GetLastError();
+            operation = "MoveFileExW";
+        }
     }
 #else
     const int file = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (file >= 0)
+    if (file < 0)
     {
+        nativeError = errno;
+        operation = "open";
+    }
+    else
+    {
+        created = true;
         const auto written = ::write(file, data.data(), data.size());
-        saved = written == static_cast<ssize_t>(data.size()) && ::fsync(file) == 0;
-        saved = ::close(file) == 0 && saved;
-        if (saved)
-            saved = ::rename(temporary.c_str(), path.c_str()) == 0;
+        if (written < 0)
+        {
+            nativeError = errno;
+            operation = "write";
+        }
+        else if (written != static_cast<ssize_t>(data.size()))
+        {
+            nativeError = EIO;
+            operation = "write (short write)";
+        }
+        else if (::fsync(file) != 0)
+        {
+            nativeError = errno;
+            operation = "fsync";
+        }
+        if (::close(file) != 0)
+        {
+            const auto closeError = errno;
+            if (!operation)
+            {
+                nativeError = closeError;
+                operation = "close";
+            }
+        }
+        if (!operation && ::rename(temporary.c_str(), path.c_str()) != 0)
+        {
+            nativeError = errno;
+            operation = "rename";
+        }
     }
 #endif
-    if (!saved)
-        std::filesystem::remove(temporary, error);
-    return saved;
+    if (!operation)
+        return true;
+    if (created)
+        std::filesystem::remove(temporary, fileError);
+    error = "The workflow checkpoint could not be saved: " + std::string(operation) + " failed (" +
+#ifdef _WIN32
+            "Win32 error " +
+#else
+            "errno " +
+#endif
+            std::to_string(nativeError) + ").";
+#ifdef _WIN32
+    if (std::string_view(operation) == "CreateFileW" || std::string_view(operation) == "MoveFileExW")
+    {
+        const auto resolved = std::filesystem::absolute(temporary, fileError);
+        if (!fileError && (resolved.native().size() >= MAX_PATH || nativeError == ERROR_FILENAME_EXCED_RANGE))
+            error += " The fully resolved pending path is " + std::to_string(resolved.native().size()) +
+                     " UTF-16 code units; native path limits may apply. Choose a shorter writable runtime location.";
+    }
+#endif
+    return false;
 }
 }
 
@@ -1374,23 +1471,24 @@ bool AgentWorkflow::EvaluateParent(std::string& error)
 
 bool AgentWorkflow::Save(const std::filesystem::path& path, std::string& error) const
 {
-    Json value;
-    {
-        std::lock_guard lock(impl->mutex);
-        if (impl->nodes.empty())
-        {
-            error = "There is no workflow to save.";
-            return false;
-        }
-        value = impl->EncodeLocked();
-    }
     try
     {
-        if (AtomicSave(path, value.dump()))
+        Json value;
+        {
+            std::lock_guard lock(impl->mutex);
+            if (impl->nodes.empty())
+            {
+                error = "There is no workflow to save.";
+                return false;
+            }
+            value = impl->EncodeLocked();
+        }
+        if (AtomicSave(path, value.dump(), error))
         {
             error.clear();
             return true;
         }
+        return false;
     }
     catch (...)
     {

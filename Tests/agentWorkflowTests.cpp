@@ -64,6 +64,128 @@ std::filesystem::path Checkpoint(const std::string& name)
     return directory / (name + ".json");
 }
 
+std::string CheckpointBytes(const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+}
+
+void TestCheckpointSaveFailureDetails()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    Check(workflow.Start(
+              Spec(), Stamp(), [](const NodeRequest& request, std::stop_token) { return Verified(request); }, error),
+        "Save failure fixture did not start.");
+    workflow.Join();
+    Check(!workflow.Save({}, error) && error.find("empty") != std::string::npos,
+        "An empty checkpoint path did not explain the refusal.");
+    const auto blocked = Checkpoint("blocked-parent");
+    {
+        std::ofstream file(blocked, std::ios::binary | std::ios::trunc);
+        file << "owned parent blocker";
+    }
+    Check(!workflow.Save(blocked / "checkpoint.json", error) && error.find("create_directories") != std::string::npos &&
+              error.find("error") != std::string::npos && error.find(blocked.string()) == std::string::npos,
+        "A parent creation failure lost its operation/code or exposed the private path.");
+    const auto directory = Checkpoint("blocked-publication");
+    std::filesystem::create_directories(directory);
+    Check(!workflow.Save(directory, error) &&
+#ifdef _WIN32
+              error.find("MoveFileExW") != std::string::npos && error.find("Win32 error") != std::string::npos &&
+#else
+              error.find("rename") != std::string::npos && error.find("errno") != std::string::npos &&
+#endif
+              error.find(directory.string()) == std::string::npos,
+        "A publication failure lost its primary native operation/code.");
+    Check(std::filesystem::is_directory(directory), "A failed publication replaced its existing destination.");
+    const auto supported = Checkpoint("save-error-cleared");
+    Check(workflow.Save(supported, error) && error.empty(), "A supported save retained a stale failure.");
+    Check(workflow.EvaluateParent(error), "Save overwrite parent evaluation was refused.");
+    workflow.Join();
+    error = "stale save error";
+    Check(workflow.Save(supported, error) && error.empty(), "A supported overwrite failed or retained a stale error.");
+    AgentWorkflow restored;
+    Check(restored.Load(supported, error) && restored.Snapshot().requests == workflow.Snapshot().requests &&
+              Node(restored.Snapshot(), "parent").attempts.size() == 1,
+        "A supported overwrite did not persist the changed workflow.");
+}
+
+void TestCheckpointPendingPathRefusalPreservesPriorCheckpoint()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    Check(workflow.Start(
+              Spec(), Stamp(), [](const NodeRequest& request, std::stop_token) { return Verified(request); }, error),
+        "Deep checkpoint fixture did not start.");
+    workflow.Join();
+    const auto supported = Checkpoint("prior-valid-checkpoint");
+    Check(workflow.Save(supported, error), "The prior regular checkpoint could not be prepared.");
+    const auto prior = CheckpointBytes(supported);
+    const auto directory = supported.parent_path();
+    const auto prefixLength = (directory / "x").native().size() - 1;
+    const auto destinationLength = std::max(std::size_t{236}, prefixLength + 6);
+    const auto destination = directory / (std::string(destinationLength - prefixLength - 5, 'd') + ".json");
+    {
+        std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+        file << prior;
+        Check(file.good(), "The final-name-fit checkpoint fixture could not be prepared.");
+    }
+    Check(CheckpointBytes(destination) == prior && std::filesystem::is_regular_file(destination),
+        "The prior valid regular checkpoint was not present at the deep destination.");
+    Check(workflow.EvaluateParent(error), "Deep checkpoint parent evaluation was refused.");
+    workflow.Join();
+    const bool saved = workflow.Save(destination, error);
+    const auto saveError = error;
+    AgentWorkflow restored;
+    if (saved)
+    {
+        Check(error.empty() && restored.Load(destination, error) && restored.Snapshot().requests == workflow.Snapshot().requests &&
+                  Node(restored.Snapshot(), "parent").attempts.size() == 1,
+            "A natively supported deep save did not round-trip the changed workflow.");
+    }
+    else
+    {
+        Check(CheckpointBytes(destination) == prior && restored.Load(destination, error) &&
+                  restored.Snapshot().requests + 1 == workflow.Snapshot().requests &&
+                  Node(restored.Snapshot(), "parent").attempts.empty(),
+            "A refused pending path damaged or invalidated the earlier regular checkpoint.");
+#ifdef _WIN32
+        Check(saveError.find("CreateFileW") != std::string::npos && saveError.find("Win32 error") != std::string::npos &&
+                  saveError.find("UTF-16") != std::string::npos && saveError.find("shorter writable runtime location") != std::string::npos,
+            "A native pending-path refusal did not expose actionable length context.");
+#endif
+        Check(saveError.find(destination.string()) == std::string::npos && saveError.find("fixture-workflow") == std::string::npos,
+            "Checkpoint failure text exposed a private path or serialized workflow material.");
+    }
+}
+
+void TestOversizeCheckpointSaveFailure()
+{
+    auto spec = Spec();
+    for (auto& node : spec.nodes)
+    {
+        node.objective = std::string(8192, '\x01');
+        node.inputText = std::string(8192, '\x01');
+    }
+    AgentWorkflow workflow;
+    std::string error;
+    Check(workflow.Start(
+              spec, Stamp(),
+              [](const NodeRequest& request, std::stop_token)
+              {
+                  auto result = Verified(request);
+                  result.artifact.content = std::string(8192, '\x01');
+                  result.artifact.hash = AgentWorkflow::ArtifactHash(result.artifact.content);
+                  return result;
+              },
+              error),
+        "Oversize checkpoint fixture did not start.");
+    workflow.Join();
+    Check(!workflow.Save(Checkpoint("oversize-refusal"), error) && error.find("524288") != std::string::npos,
+        "An oversized serialized checkpoint did not explain its size limit.");
+}
+
 void TestIndependentWorkersOverlap()
 {
     std::mutex mutex;
@@ -837,6 +959,9 @@ void TestRetryAtVisiblePausedTeardown()
 
 void RunAgentWorkflowTests()
 {
+    TestCheckpointSaveFailureDetails();
+    TestCheckpointPendingPathRefusalPreservesPriorCheckpoint();
+    TestOversizeCheckpointSaveFailure();
     TestClaimedVerificationRequiresDeliverableSections();
     TestAcceptanceRequiresParentArtifact();
     TestDeliverableBoundsAndExactEvidence();
