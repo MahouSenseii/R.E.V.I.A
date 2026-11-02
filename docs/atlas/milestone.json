@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "milestone": "PR20 delegation grounding merged with exact-candidate application CI",
-  "recorded_utc": "2026-11-02T19:13:03+00:00",
+  "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
@@ -771,8 +771,66 @@
       "research_blob": "7af5b10d0dfbf8c1955a6489978b934fb0f6a2f7",
       "fresh_merge_main_run_claimed": false
     },
-    "later_Atlas_docs_only_commit_is_application_CI_head": false,
-    "later_main_or_docs_CI": "Not recorded in this checkpoint; capture any automatic later run separately."
+    "later_Atlas_docs_only_commit_is_application_CI_head": true,
+    "later_main_or_docs_CI": "Fresh normal main workflow41509042838 completed successfully at exacta8dc; later research-onlyb2d is not claimed freshly tested. See latest_terminal_main_checkpoint.",
+    "latest_terminal_main_checkpoint": {
+      "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
+      "run_id": 41509042838,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41509042838",
+      "event": "push",
+      "branch": "main",
+      "status": "completed",
+      "conclusion": "success",
+      "tested_commit": "a8dc66e356e5d228c027f2122d4279257fefc229",
+      "tested_tree": "1aeb563eb61bbdf3490f790bb7627765658d4c39",
+      "parent_source_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "counts": {
+        "jobs_passed": 6,
+        "jobs_failed": 0,
+        "jobs_skipped": 0,
+        "ctest_expected": 157,
+        "ctest_discovered": 157,
+        "ctest_passed": 155,
+        "ctest_failed": 0,
+        "FFmpeg_prerequisite_skips": 2,
+        "nested_optional_skips": 21,
+        "public_text_platform_case_skips": 1
+      },
+      "native_evidence": {
+        "artifact_id": 13172909780,
+        "official_zip_sha256": "c023a2341af33a48023622c7ee6a7fa0ff56b9688aa69d99306b70a4864ee639",
+        "identityTrusted": true,
+        "ctest_seconds": 655.222,
+        "checkout_build_test_HEAD_matches": true,
+        "tracked_source_diff_count": 0,
+        "all_nine_reviewed_source_hashes_match_candidate_CI": true,
+        "failed_stopping_paragraph_included": false
+      },
+      "qualified_scope": "Fresh complete normal application workflow on the exact merged-source docs head a8dc; includes GNU ld relink, evidence upload and cleanup. No skip directive on this tested commit. Optional/prerequisite skips are not passes.",
+      "limits": "Does not establish real-model reviewed-report success, live cancellation, installed-app changes, performance improvements or runtime/release qualification. Later documentation/research commits retain distinct identities.",
+      "preceding_source_merge_run": {
+        "id": 41506809034,
+        "head": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "counted_as_pass": false
+      },
+      "candidate_records": "ci.workflow and ci.additional_PR_workflow remain the original exact candidate evidence.",
+      "platform_scope": "One Windows-only case skipped in the public-text Linux job; dedicated Windows operator job passed. Platform skip is separate from CTest registrations and native nested optional cases."
+    },
+    "latest_observed_repository_head": {
+      "commit": "b2d8abc00aa63871e5836fe961f5ecd2d1853533",
+      "tree": "a058f8e12cf58ed227610ec0f09d19d532c2d776",
+      "parent": "a8dc66e356e5d228c027f2122d4279257fefc229",
+      "changed_paths": [
+        "docs/atlas/research.html"
+      ],
+      "research_blob": "f6df8e1e75eb3742c966f1145091d7643d846d4f",
+      "fresh_application_CI_for_this_commit_claimed": false,
+      "scope": "Separate RNL research update; all application files and the two Revia progression summaries were unchanged."
+    },
+    "later_Atlas_docs_only_commit_is_application_CI_head_scope": "The tested later docs head is exacta8dc. Publishing this new checkpoint does not claim a fresh run on its subsequently assigned commit.",
+    "checkpoint_prior_recorded_utc": "2026-11-02T19:13:03+00:00"
   },
   "excluded_later_work": "Failed new stopping paragraph excluded; earlier reviewed discovery-grounding text retained. PR20 contains nine source/test files and two Atlas summaries. Newer RNL research HTML preserved separately; no RNL code or workflow change in this post-merge two-file refresh. No new model execution or installed-app update.",
   "local_follow_on": {
