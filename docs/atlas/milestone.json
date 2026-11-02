@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "milestone": "StopCleanup fixture maintenance and exact-source application CI checkpoint",
-  "recorded_utc": "2026-11-02T14:33:39.886887+00:00",
+  "milestone": "Cognition fixture startup observability and exact-source application CI checkpoint",
+  "recorded_utc": "2026-11-02T15:40:15.190628+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
     "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
-    "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
-    "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+    "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+    "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
     "source_files": 1409,
     "incremental_changed_paths": [
       67,
@@ -17,6 +17,7 @@
       3,
       3,
       3,
+      1,
       1
     ],
     "reliability_repairs": 13,
@@ -27,15 +28,15 @@
     "test_catalog_maintenance_pr": 15,
     "production_privacy_changed_by_PR15": false,
     "CI_identity": {
-      "commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
-      "tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+      "commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+      "tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
       "full_hosted_checkout_byte_hash_claimed": false
     },
     "fixture_provenance": {
-      "path": "Tests/Fixture/desktopStopTests.cpp",
-      "reviewed_raw_sha256": "be7ec1570da3c3e5f435b25dfba9cbb02407914045c3c3d505aac811a5403034",
-      "published_LF_sha256": "2c15e223d4ab35d375add5d7b93b3206ab4c1cc73adfb002bd7bc170ff40fbb8",
-      "published_git_blob": "6a213297d9b5465ac284b97bed08748cb5c1f2ee"
+      "path": "Tests/cognitionLiveCampaign.test.ps1",
+      "reviewed_raw_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+      "published_LF_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+      "published_git_blob": "a8e1b15b3b04b29cfd74618be08992649ba072e0"
     }
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
@@ -470,14 +471,14 @@
   ],
   "next": {
     "sequence": [
-      "Retain metadata-child diagnostics and check the existing CognitionCampaignReceipts fixture; cause unknown, no blind full-suite replay",
-      "Diagnose useful grounded read selection and reviewed-report failure",
-      "Keep operator-started cancellation separate from autonomous model-selected flow",
-      "Verify source/evidence before considering broader workflow expansion"
+      "Review the separate unpublished delegation checkpoint and the useful reviewed-report evidence gap",
+      "Define a bounded reviewed real-model report scenario before any new execution or publication",
+      "Keep operator-started cancellation distinct from autonomous selection",
+      "Verify source and evidence before considering broader workflow expansion"
     ],
     "name": "Resolve validation gaps before expanding workflows",
     "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
-    "detail": "Retain metadata-child stdout, stderr, exit state and readiness exceptions before cleanup, then check only the existing CognitionCampaignReceipts fixture under finite owned temporary state. Its current startup failure has no established cause; do not blindly replay the complete suite or weaken assertions. Useful grounded read selection and verified report acceptance remain open on the separate local model checkpoint. Keep operator-started cancellation distinct from autonomous selection; broader workflow expansion remains deferred."
+    "detail": "Review the separate unpublished local delegation checkpoint and establish useful grounded read selection and verified report acceptance as the next product milestone. The successful hosted synthetic fixture is not that real-model scenario and does not identify the earlier startup failure cause. Any new model replay or source publication needs its own reviewed scope. Operator-started cancellation and broader workflow readiness retain their existing limits."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -619,70 +620,71 @@
     "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
     "observed_remote_workflow_runs": 1,
     "scope": "Existing complete application workflow on exact merged Git commit/tree; not later Atlas-only commit or unpublished delegation checkpoint",
-    "qualification": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
+    "qualification": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
     "workflow": {
-      "observed_utc": "2026-11-02T14:33:38.2424576Z",
+      "observed_utc": "2026-11-02T15:40:13.5859016Z",
       "run": {
-        "id": 41458776477,
+        "id": 41469601683,
         "name": "Build and test",
-        "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+        "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
         "status": "completed",
-        "conclusion": "failure",
+        "conclusion": "success",
         "event": "push",
-        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
       },
       "jobs": [
         {
-          "id": 125322157371,
-          "name": "Windows / WebDemo operator paths",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125322157860,
-          "name": "Linux / isolated journal persistence",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125322157906,
-          "name": "Windows / MinGW",
-          "status": "completed",
-          "conclusion": "failure"
-        },
-        {
-          "id": 125322158079,
-          "name": "Public text relay and connector",
-          "status": "completed",
-          "conclusion": "success"
-        },
-        {
-          "id": 125322158120,
+          "id": 125359391255,
           "name": "Setup scripts / PowerShell 5.1",
           "status": "completed",
           "conclusion": "success"
         },
         {
-          "id": 125322158204,
+          "id": 125359391873,
+          "name": "Windows / MinGW",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125359391890,
+          "name": "Linux / isolated journal persistence",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125359391907,
+          "name": "Windows / WebDemo operator paths",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125359392079,
           "name": "Discord voice / offline transport",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125359392086,
+          "name": "Public text relay and connector",
           "status": "completed",
           "conclusion": "success"
         }
       ]
     },
     "audit": {
-      "summary": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
+      "summary": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
       "details": [
-        "All six existing jobs ran on the exact PR 17 merge without a CI skip marker. Five jobs passed. The complete Windows native build, controlled-loopback conversation relay, evidence retention and GNU ld relink verification passed; the full CTest step failed. No assertions were weakened or tests quarantined, and no unchanged-main replay is claimed.",
-        "All 157 expected entries matched discovery: 154 passed, one failed and two FFmpeg/ffprobe prerequisite entries returned the approved skip code. Native frameworks additionally recorded 21 optional subcheck skips: one VTube Studio, three torch, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed five cases. Optional skips do not establish those capabilities.",
-        "The sole failure is Revia.CognitionCampaignReceipts: its disposable loopback metadata server did not become ready. It failed before the campaign/runner assertions. The fixture discarded readiness exceptions and did not retain child stdout, stderr or exit state before cleanup, so the evidence cannot distinguish binding failure, child exit or HTTP readiness timeout. The unchanged script passed an earlier run, which does not prove the present cause. No product regression or specific transient cause has been established. The next bounded validation is to retain those diagnostics and run this existing fixture, rather than blindly replay the complete suite or relax its assertion.",
-        "PR 17 changes one test enum line: the generic post-dispatch cancellation case uses an admitted Navigate operation. Its finite worker, response callback, cancelled-after-receipt condition and every uncertainty assertion remain intact. The local RED failure and GREEN result are retained separately; current full CI independently confirms StopCleanup passed. This is fixture maintenance, not another production feature or repair count increment.",
-        "The actual tested identity is commit f0a826a00067618c521e4fe1230fbf6ddcd8bc4a and tree 8f53873aba8f3f214756ae6c8451baaf2cbc083e. Earlier local reconstruction maps retain their own snapshot scope and older documentation bytes. The nine-path delegation candidate is still local and excluded; a useful real-model reviewed report remains unestablished. Operator-started cancellation has only its recorded mechanical scope. Installed-app, normal-runtime, GPU-stop and release qualification remain open."
+        "The unchanged application workflow ran once on the exact PR 18 merge, without a skip marker. The complete build, controlled-loopback relay, inventory validation, CTest, artifact upload and GNU linker check passed.",
+        "All 157 expected CTest registrations were discovered: 155 passed, none failed and two FFmpeg prerequisite entries were skipped. Twenty-one nested optional subchecks also remained skipped because their VTube Studio, torch, Pillow or real training/export/evaluation prerequisites were unavailable or opt-in. The public-text job retained one Windows-only skip; its separate Windows operator job passed.",
+        "The instrumented metadata listener became ready on its first attempt after 664ms. Its bound marker was retained, with empty stderr and no readiness errors; the complete receipt fixture passed. This is one successful observation, not proof of the previous failure's cause or a performance improvement.",
+        "PR 18 adds startup observability in one test script; it adds no production repair. The readiness budget, campaign assertions, production runner and cleanup are unchanged. The earlier failed CI receipt and local diagnostic-observer failures are retained as separate historical evidence.",
+        "Actual child exit-code capture remains unproven: the local injected child failure exposed a null exit-code value despite an exited state. No value is inferred or presented as captured.",
+        "The nine-path local delegation checkpoint is excluded from this merged source and CI. Useful real-model reviewed-report success, installed-app use, runtime/release qualification and broader workflow readiness remain open."
       ]
     },
     "later_Atlas_docs_only_commit_is_application_CI_head": false
   },
-  "excluded_later_work": "Only the PR17 one-line test fixture maintenance and two Atlas summaries are included in this publication. The nine-file local delegation candidate remains unpublished and excluded from current source and CI.",
+  "excluded_later_work": "Only PR18 diagnostics-only test-fixture maintenance and two Atlas summaries are included in this publication. The nine-file local delegation candidate remains unpublished and excluded from current source and CI.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -818,8 +820,8 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
-    "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+    "main_commit": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+    "main_tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
     "merge_order": [
       10,
       11,
@@ -828,7 +830,8 @@
       14,
       15,
       16,
-      17
+      17,
+      18
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
@@ -838,7 +841,8 @@
       "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
       "15": "29df918f62c2dbc2eece734122bb583b934512d8",
       "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
-      "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a"
+      "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": false,
@@ -1046,18 +1050,18 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR17 changes one StopCleanup fixture line, preserving all callback/worker/assertion and production bytes. Thirteen production repairs and20 capability records remain. Actual hosted CI identity is Git commit f0a826a00067618c521e4fe1230fbf6ddcd8bc4a / tree 8f53873aba8f3f214756ae6c8451baaf2cbc083e. Local RED/GREEN is focused offscreen native/finite-worker evidence, not a fresh whole-app build or measured pipe telemetry. Reviewed full snapshot bytes had older Atlas and were not published wholesale; prior raw/LF maps remain historical. Local delegation9/report and narrow operator cancellation limits remain; installed app and release status unchanged.",
+  "current_evidence_boundary": "PR18 adds fixture startup observability only; no production repair or capability increment. Thirteen production repairs and20 capabilities remain. Actual hosted source identity is Git commit c5c515068c94dcdb706e5d6b97e1718197ed8e10 / tree 542651b3037bd9e5f7ae0a81990cb8e24d3b211f. Exact one-file reviewed/published bytes are distinct from full checkout provenance. Local positive and expected-failure controls, corrected observer failures, unknown original cause and unproven local child exit-code capture retain their own scope. Local delegation9/report and mechanical operator-cancel limits remain; installed app and release status unchanged.",
   "next_milestone": {
     "state": "PARTIAL_VALIDATION",
     "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
     "complete_application_CI": {
-      "id": 41458776477,
+      "id": 41469601683,
       "name": "Build and test",
-      "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "head_sha": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
       "status": "completed",
-      "conclusion": "failure",
+      "conclusion": "success",
       "event": "push",
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41469601683"
     },
     "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
     "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
@@ -1067,8 +1071,9 @@
     "production_readiness_claim": false,
     "release_qualified": false,
     "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
-    "remaining_CI_validation": "CognitionCampaignReceipts disposable metadata readiness failure; exact cause unknown; diagnostic-first existing-fixture check next, not executed by this publication",
-    "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability"
+    "remaining_CI_validation": "Full application CI passed: all six jobs succeeded. CTest recorded 155 passes, no failures and two optional FFmpeg skips. The metadata startup check passed; its earlier failure remains unexplained.",
+    "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
+    "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
   },
   "historical_integration_before_AudiencePrivacy": {
     "recorded_utc": "2026-11-01T23:55:52+00:00",
@@ -1610,6 +1615,203 @@
     "Fill_specific_cancellation_qualified": false,
     "measured_pipe_boundary_trace_claimed": false,
     "full_local_snapshot_overlaid": false,
+    "delegation_candidate_published": false
+  },
+  "historical_integration_before_CognitionStartupDiagnostics": {
+    "recorded_utc": "2026-11-02T14:33:39.886887+00:00",
+    "scope": "Dated PR17 source and failed metadata-startup CI before diagnostics-only PR18",
+    "source": {
+      "state": "Merged into GitHub main; installed Revia unchanged; runtime and release qualification open",
+      "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+      "source_files": 1409,
+      "incremental_changed_paths": [
+        67,
+        8,
+        5,
+        4,
+        3,
+        3,
+        3,
+        1
+      ],
+      "reliability_repairs": 13,
+      "installed_app_updated": false,
+      "release_qualified": false,
+      "file_count_scope": "Current source Git identity covers 1,409 blobs. Current file-level provenance identifies the reviewed/published fixture only; no full hosted checkout byte hash is inferred. Earlier complete reconstruction maps and historical 1,403-file subset, including non-UTF8/raw-or-recorded-LF caveats, remain dated history.",
+      "repository_tree_blobs": 1409,
+      "test_catalog_maintenance_pr": 15,
+      "production_privacy_changed_by_PR15": false,
+      "CI_identity": {
+        "commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+        "tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+        "full_hosted_checkout_byte_hash_claimed": false
+      },
+      "fixture_provenance": {
+        "path": "Tests/Fixture/desktopStopTests.cpp",
+        "reviewed_raw_sha256": "be7ec1570da3c3e5f435b25dfba9cbb02407914045c3c3d505aac811a5403034",
+        "published_LF_sha256": "2c15e223d4ab35d375add5d7b93b3206ab4c1cc73adfb002bd7bc170ff40fbb8",
+        "published_git_blob": "6a213297d9b5465ac284b97bed08748cb5c1f2ee"
+      }
+    },
+    "integration": {
+      "main_commit": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+      "main_tree": "8f53873aba8f3f214756ae6c8451baaf2cbc083e",
+      "merge_order": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "merge_commits": {
+        "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+        "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+        "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+        "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+        "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+        "15": "29df918f62c2dbc2eece734122bb583b934512d8",
+        "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+        "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a"
+      },
+      "method": "normal merge commits; reviewed source heads preserved",
+      "merge_commit_skip_ci": false,
+      "application_ci_run": true,
+      "installed_app_updated": false,
+      "runtime_release_qualified": false
+    },
+    "ci": {
+      "commit_skip_ci": false,
+      "branch_commit_skip_ci": true,
+      "branch_skip_reason": "Only duplicate pre-merge suppression; no branch CI pass claim",
+      "observed_remote_workflow_runs": 1,
+      "scope": "Existing complete application workflow on exact merged Git commit/tree; not later Atlas-only commit or unpublished delegation checkpoint",
+      "qualification": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
+      "workflow": {
+        "observed_utc": "2026-11-02T14:33:38.2424576Z",
+        "run": {
+          "id": 41458776477,
+          "name": "Build and test",
+          "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
+        },
+        "jobs": [
+          {
+            "id": 125322157371,
+            "name": "Windows / WebDemo operator paths",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125322157860,
+            "name": "Linux / isolated journal persistence",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125322157906,
+            "name": "Windows / MinGW",
+            "status": "completed",
+            "conclusion": "failure"
+          },
+          {
+            "id": 125322158079,
+            "name": "Public text relay and connector",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125322158120,
+            "name": "Setup scripts / PowerShell 5.1",
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "id": 125322158204,
+            "name": "Discord voice / offline transport",
+            "status": "completed",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "audit": {
+        "summary": "AudiencePrivacy, InteractiveBrowser and StopCleanup all passed. Full application CI remains red: 154 CTest entries passed, one disposable metadata-server startup check failed and two optional FFmpeg entries were skipped.",
+        "details": [
+          "All six existing jobs ran on the exact PR 17 merge without a CI skip marker. Five jobs passed. The complete Windows native build, controlled-loopback conversation relay, evidence retention and GNU ld relink verification passed; the full CTest step failed. No assertions were weakened or tests quarantined, and no unchanged-main replay is claimed.",
+          "All 157 expected entries matched discovery: 154 passed, one failed and two FFmpeg/ffprobe prerequisite entries returned the approved skip code. Native frameworks additionally recorded 21 optional subcheck skips: one VTube Studio, three torch, fourteen Pillow and three real training/export/evaluation smokes. Public text relay skipped one Windows-only case; the separate Windows operator job passed five cases. Optional skips do not establish those capabilities.",
+          "The sole failure is Revia.CognitionCampaignReceipts: its disposable loopback metadata server did not become ready. It failed before the campaign/runner assertions. The fixture discarded readiness exceptions and did not retain child stdout, stderr or exit state before cleanup, so the evidence cannot distinguish binding failure, child exit or HTTP readiness timeout. The unchanged script passed an earlier run, which does not prove the present cause. No product regression or specific transient cause has been established. The next bounded validation is to retain those diagnostics and run this existing fixture, rather than blindly replay the complete suite or relax its assertion.",
+          "PR 17 changes one test enum line: the generic post-dispatch cancellation case uses an admitted Navigate operation. Its finite worker, response callback, cancelled-after-receipt condition and every uncertainty assertion remain intact. The local RED failure and GREEN result are retained separately; current full CI independently confirms StopCleanup passed. This is fixture maintenance, not another production feature or repair count increment.",
+          "The actual tested identity is commit f0a826a00067618c521e4fe1230fbf6ddcd8bc4a and tree 8f53873aba8f3f214756ae6c8451baaf2cbc083e. Earlier local reconstruction maps retain their own snapshot scope and older documentation bytes. The nine-path delegation candidate is still local and excluded; a useful real-model reviewed report remains unestablished. Operator-started cancellation has only its recorded mechanical scope. Installed-app, normal-runtime, GPU-stop and release qualification remain open."
+        ]
+      },
+      "later_Atlas_docs_only_commit_is_application_CI_head": false
+    },
+    "next": {
+      "sequence": [
+        "Retain metadata-child diagnostics and check the existing CognitionCampaignReceipts fixture; cause unknown, no blind full-suite replay",
+        "Diagnose useful grounded read selection and reviewed-report failure",
+        "Keep operator-started cancellation separate from autonomous model-selected flow",
+        "Verify source/evidence before considering broader workflow expansion"
+      ],
+      "name": "Resolve validation gaps before expanding workflows",
+      "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
+      "detail": "Retain metadata-child stdout, stderr, exit state and readiness exceptions before cleanup, then check only the existing CognitionCampaignReceipts fixture under finite owned temporary state. Its current startup failure has no established cause; do not blindly replay the complete suite or weaken assertions. Useful grounded read selection and verified report acceptance remain open on the separate local model checkpoint. Keep operator-started cancellation distinct from autonomous selection; broader workflow expansion remains deferred."
+    },
+    "next_milestone": {
+      "state": "PARTIAL_VALIDATION",
+      "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
+      "complete_application_CI": {
+        "id": 41458776477,
+        "name": "Build and test",
+        "head_sha": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+        "status": "completed",
+        "conclusion": "failure",
+        "event": "push",
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41458776477"
+      },
+      "finite_real_model_report": "NOT_ESTABLISHED on separate unpublished local checkpoint",
+      "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
+      "Atlas_evidence_source_handoff_verification": "Prepared from retained reviewed receipts; deployed-byte and actual-browser checks follow publication",
+      "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
+      "ready_hierarchy_claim": false,
+      "production_readiness_claim": false,
+      "release_qualified": false,
+      "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
+      "remaining_CI_validation": "CognitionCampaignReceipts disposable metadata readiness failure; exact cause unknown; diagnostic-first existing-fixture check next, not executed by this publication",
+      "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability"
+    }
+  },
+  "cognition_startup_observability": {
+    "review_refs": {
+      "pull_request": 18,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/18",
+      "head": "ed579d94d62aced6bc955ec2699a689bea335591",
+      "merge": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+      "tree": "542651b3037bd9e5f7ae0a81990cb8e24d3b211f",
+      "merged": true
+    },
+    "scope": "The fixture now prints a listener-bound marker and retains owned redirected child output, elapsed time, attempt count, readiness error prefixes, observed exited state and explicit truncation flags. The original 40 attempts, one-second HTTP timeout, 100ms waits, campaign assertions, runner and cleanup remain unchanged. Error and output prefixes are bounded by character/count, not a general byte or log-memory bound.",
+    "retained_local_evidence": "The unchanged full existing fixture passed locally, and the exact final diagnostic fixture also passed. Two new observer failures involving empty-content null handling and active-file sharing were corrected and retained. A task-only injected child throw failed as expected while retaining synthetic stderr and readiness failures. That control did not reproduce the original hosted failure. The initial pre-script authorization-context failure also remains retained; no execution policy or permission was changed.",
+    "limits": "The original hosted metadata startup cause remains unknown. Neither a port race, harmless transient cause nor product regression has been established. In the local negative control, observed exited=true accompanied exitCode=null; actual child exit-code capture was not proven, and the parent fixture exit code must not substitute for it. These are one existing fixture script and separate controlled contexts, not new CTests, a live-model check or a production repair.",
+    "unique_existing_fixture_scripts": 1,
+    "new_CTest_registrations": 0,
+    "production_repairs_added": 0,
+    "production_source_changed": false,
+    "runner_assertions_wait_budget_cleanup_changed": false,
+    "original_hosted_failure_cause_known": false,
+    "local_negative_control": {
+      "expected_failure": true,
+      "original_CI_failure_reproduced": false,
+      "observed_child_exited": true,
+      "child_exit_code_available": false,
+      "exit_code_capture_proven": false
+    },
     "delegation_candidate_published": false
   }
 }
