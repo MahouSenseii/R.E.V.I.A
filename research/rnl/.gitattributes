@@ -12,3 +12,15 @@ test_prefix004.py -text
 prefix004-fixtures.json -text
 PREFIX-004-identity.json -text
 PREFIX-004.md -text
+state006_data.py -text
+state006.py -text
+test_state006.py -text
+state006_setup.py -text
+state006_launch.py -text
+state006_guard.py -text
+test_state006_setup.py -text
+test_state006_launch.py -text
+STATE-006.md -text
+STATE-006-runtime.json -text
+state006-download.lock -text
+state006-offline.lock -text
