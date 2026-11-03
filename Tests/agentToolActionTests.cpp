@@ -93,6 +93,7 @@ void RunAgentToolActionTests()
         const auto listing = receiptFor({{"action", "list_directory"}, {"source", actions::PathToUtf8(location)}});
         Check(listing.at("succeeded") == true && listing.at("output").get<std::string>().find("shared.conf") != std::string::npos,
             "The native listing did not expose the shared leaf name.");
+        Check(listing.at("contentDigest").is_null(), "A native directory listing claimed to digest file contents.");
         Check(listing.contains("source") && listing.at("source").is_string() &&
                   listing.at("source") == actions::PathToUtf8(location) && listing.contains("pathDigests") &&
                   listing.at("pathDigests").at("source") == audit::ContentDigest(actions::PathToUtf8(location)),
@@ -107,6 +108,19 @@ void RunAgentToolActionTests()
         Check(loaded.at("contentDigest") == audit::ContentDigest(fact),
             "Reading the listing-selected file lost its native content digest: " + loaded.dump());
     }
+    const auto emptyDirectory = directory.root / "empty";
+    std::filesystem::create_directories(emptyDirectory);
+    const auto emptyListing = receiptFor({{"action", "list_directory"}, {"source", actions::PathToUtf8(emptyDirectory)}});
+    Check(emptyListing.at("succeeded") == true && emptyListing.at("contentDigest").is_null() && emptyListing.at("output") == "" &&
+              emptyListing.at("source") == actions::PathToUtf8(emptyDirectory),
+        "An empty native directory listing was confused with an empty file read.");
+    const auto emptyFile = emptyDirectory / "empty.conf";
+    std::ofstream(emptyFile) << "";
+    const auto emptyRead = receiptFor({{"action", "read_text_file"}, {"source", actions::PathToUtf8(emptyFile)}});
+    const std::string emptyDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    Check(emptyRead.at("succeeded") == true && emptyRead.at("attempted") == true && emptyRead.at("contentDigest") == emptyDigest &&
+              emptyRead.at("output") == "sha256:" + emptyDigest + "\n" && emptyRead.at("source") == actions::PathToUtf8(emptyFile),
+        "A real empty-file read lost its literal SHA256 or was confused with a directory listing.");
     const auto missing = firstDirectory / "missing.conf";
     const auto missingReceipt = receiptFor({{"action", "read_text_file"}, {"source", actions::PathToUtf8(missing)}});
     Check(missingReceipt.at("succeeded") == false && missingReceipt.at("attempted") == false &&
