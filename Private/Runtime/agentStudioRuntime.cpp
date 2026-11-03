@@ -674,8 +674,9 @@ void ReviaSession::ObserveAgentWorkflow(const agents::WorkflowSnapshot& snapshot
         if (!agentWorkflow.Save(companionPaths.Resolve("RuntimeData/Agents/workflow.json"), error) ||
             !SaveProviderSelection(companionPaths.Resolve("RuntimeData/Agents/provider.json"), snapshot.id, mode))
         {
-            PublishComponent(
-                "Agent Studio", "Persistence unavailable", "Workflow state could not be saved; restart recovery is unavailable.");
+            if (error.empty())
+                error = "The workflow provider selection could not be saved.";
+            PublishComponent("Agent Studio", "Persistence unavailable", error + " Restart recovery is unavailable.");
         }
     }
     RuntimeEvent event{RuntimeEventKind::AgentWorkflow, state.load(), "Agent workflow " + agents::ToString(snapshot.state)};

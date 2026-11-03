@@ -9,6 +9,7 @@
 #include <functional>
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <atomic>
 #include <chrono>
 #include <httplib.h>
@@ -84,6 +85,81 @@ struct ScopedRuntimeSubscription
         events.Unsubscribe(id);
     }
 };
+
+void TestStudioPersistenceWarningsRetainFailureReason()
+{
+    using namespace revia::runtime;
+    for (const bool blockCheckpoint : {true, false})
+    {
+        ScopedTestDirectory temporary;
+        ReviaSession session(CompanionPaths(temporary.root, {"persistence", "Persistence fixture", "assistant", false}));
+        const auto checkpoint = session.Paths().Resolve("RuntimeData/Agents/workflow.json");
+        const auto blocked = blockCheckpoint ? checkpoint : session.Paths().Resolve("RuntimeData/Agents/provider.json");
+        std::filesystem::create_directories(blocked);
+        const auto sentinel = blocked / "sentinel.txt";
+        const std::string privateContent = "PRIVATE_PERSISTENCE_SENTINEL_73AF";
+        const std::string objective = "PRIVATE_PERSISTENCE_OBJECTIVE_73AF";
+        {
+            std::ofstream output(sentinel, std::ios::binary);
+            output << privateContent;
+            Check(output.good(), "The persistence fixture sentinel could not be written.");
+        }
+        std::mutex mutex;
+        std::vector<RuntimeEvent> warnings;
+        ScopedRuntimeSubscription subscription{session.Events(), session.Events().Subscribe(
+            [&](const RuntimeEvent& event)
+            {
+                if (event.kind == RuntimeEventKind::ComponentStatus && event.component == "Agent Studio" &&
+                    event.phase == "Persistence unavailable")
+                {
+                    std::lock_guard lock(mutex);
+                    warnings.push_back(event);
+                }
+            })};
+        ReviaSessionTestAccess::MarkStudioStarted(session, true);
+        std::string error;
+        const bool started = session.StartAgentWorkflow(objective, true, error);
+        ReviaSessionTestAccess::JoinWorkflow(session);
+        ReviaSessionTestAccess::MarkStudioStarted(session, false);
+        Check(started, error);
+        std::ifstream input(sentinel, std::ios::binary);
+        const std::string retained{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        Check(std::filesystem::is_directory(blocked) && retained == privateContent &&
+                  std::distance(std::filesystem::directory_iterator(blocked), std::filesystem::directory_iterator{}) == 1,
+            "A failed persistence write changed the blocked directory or its private sentinel.");
+        Check(blockCheckpoint || std::filesystem::is_regular_file(checkpoint),
+            "The provider-only fixture did not save its workflow checkpoint.");
+        Check(!warnings.empty(), "The blocked persistence destination did not publish the existing Studio warning.");
+        for (const auto& warning : warnings)
+        {
+            const auto& message = warning.message;
+            if (blockCheckpoint)
+            {
+                Check(message.find("workflow checkpoint could not be saved:") != std::string::npos,
+                    "The Studio persistence warning discarded the checkpoint save reason.");
+#ifdef _WIN32
+                Check(message.find("MoveFileExW failed (Win32 error ") != std::string::npos,
+                    "The Studio persistence warning discarded the native checkpoint replacement failure.");
+#else
+                Check(message.find("rename failed (errno ") != std::string::npos,
+                    "The Studio persistence warning discarded the native checkpoint replacement failure.");
+#endif
+            }
+            else
+            {
+                Check(message.find("provider selection could not be saved") != std::string::npos &&
+                          message.find("checkpoint could not be saved") == std::string::npos,
+                    "The Studio persistence warning did not identify the provider-only save failure.");
+            }
+            Check(message.find("Restart recovery is unavailable.") != std::string::npos,
+                "The Studio persistence warning lost the restart recovery limitation.");
+            Check(message.find(temporary.root.filename().string()) == std::string::npos &&
+                      message.find(privateContent) == std::string::npos && message.find(objective) == std::string::npos &&
+                      warning.detail.empty(),
+                "The Studio persistence warning disclosed a private path or fixture content.");
+        }
+    }
+}
 
 void TestNativeActionEventsRetainCapturedAudience()
 {
@@ -740,6 +816,7 @@ void TestStudioDiagnosticRetainsChangedEvidenceRecovery()
 
 void RunStudioRuntimeTests()
 {
+    TestStudioPersistenceWarningsRetainFailureReason();
     TestNativeActionEventsRetainCapturedAudience();
     TestNativeActionStartedSubscriberCannotRecaptureAudience();
     TestNativeActionConfirmationCannotRecaptureAudience(false);
