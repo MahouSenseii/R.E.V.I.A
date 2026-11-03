@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
-  "milestone": "PR27 directory-listing receipt clarification merged; exact main CI passed; real-model report remains unverified",
-  "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+  "milestone": "Non-model report preparation passed; real-model trial pending",
+  "recorded_utc": "2026-11-03T16:37:17.085871+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
@@ -72,7 +72,7 @@
     "not_run_build_blocked": 5,
     "not_selected_safety": 22
   },
-  "interpretation": "The historical 124 controlled results combine contexts and retain their original scope. Fresh PR27 main qualification is recorded separately as six jobs, 155 passed, zero failed and two optional video skips. It does not qualify real-model reports, the installed app or release readiness.",
+  "interpretation": "Existing repair counts and hosted CI retain their dated scope. New local preparation checks passed separately; no new full application CI or known-path real-model trial ran. Model bytes match the project pin, while runtime/workspace readiness and a successful reviewed report remain open. Installed app unchanged.",
   "changes": [
     {
       "id": "MEM-1",
@@ -520,15 +520,16 @@
     }
   ],
   "next": {
+    "name": "Finish the real-model report check",
+    "state": "HELD_PENDING_RUNTIME_AND_WORKSPACE",
     "sequence": [
-      "Keep the real-model reviewed-report milestone open after PR27 source integration",
-      "Define a bounded reviewed model qualification scope before any new real-model execution",
-      "Keep operator-started cancellation distinct from autonomous selection",
-      "Verify source and evidence before considering broader workflow expansion"
+      "Verify the existing complete server/runtime package",
+      "Prepare the proposed separate-drive workspace with scoped authorization",
+      "Check resource and loopback ownership, then review exact live readiness",
+      "Run one known-path report trial with unchanged budgets, permissions and acceptance",
+      "Review factual report quality before considering workflow expansion"
     ],
-    "name": "Resolve validation gaps before expanding workflows",
-    "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
-    "detail": "PR27 receipt clarification is merged and exact-main application CI passed. No new model replay was performed; successful real-model reviewed-report completion remains unverified. Operator-started cancellation and broader workflow readiness retain their existing limits."
+    "detail": "No inference is authorized or performed by this public preparation checkpoint. Original folder discovery and release readiness remain unqualified."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -1459,31 +1460,16 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR27 merged three reviewed paths at d4b2b3e1b0a74feb460320ec3714c70fca7e1566 / tree 03d4288b35594c622ab684b3f82edce386884cef. Exact-main CI 41602272228 passed six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Candidate runs remain separate. Directory listings now omit the misleading file-content digest; actual file reads retain theirs. Permissions, receipt limits and acceptance stay unchanged. The real-model worker-stop cause and reviewed-report success remain unverified; no new model run, installation, release or performance qualification is claimed.",
+  "current_evidence_boundary": "PR27 remains the latest merged receipt clarification; source and documentation-head hosted checks passed in their recorded scopes. New work is private local harness preparation only: focused cached-library build, filesystem/native guards, checkpoint readback and execution/path holds. All supplied model bytes match the project pin. No refreshed real-model report trial, product code change, installation, performance or release qualification is claimed.",
   "next_milestone": {
-    "state": "PARTIAL_VALIDATION",
-    "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
-    "complete_application_CI": {
-      "id": 41602272228,
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
-      "event": "push",
-      "head_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
-      "checkout_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
-      "status": "completed",
-      "conclusion": "success",
-      "tree": "03d4288b35594c622ab684b3f82edce386884cef"
-    },
-    "finite_real_model_report": "NOT_ESTABLISHED; related rpt2 experiment failed, not a run of current paragraph-free source",
-    "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
-    "Atlas_evidence_source_handoff_verification": "Source merge/tree and exact-main CI identities were independently verified. The sanitized Atlas handoff is a separate publication checkpoint; no served-byte qualification is claimed here.",
-    "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
-    "ready_hierarchy_claim": false,
-    "production_readiness_claim": false,
-    "release_qualified": false,
-    "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
-    "remaining_CI_validation": "Exact PR27 main CI passed six fresh jobs, 155 tests, zero failures and two optional video skips. Optional video prerequisites remain unverified. Nested optional/platform subchecks were not recounted; historical counts are not copied as fresh.",
-    "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
-    "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
+    "name": "Accepted and factually correct real-model delegated report",
+    "state": "NOT_RUN_ON_REFRESHED_HARNESS",
+    "prerequisites": [
+      "Verified complete existing runtime package",
+      "Authorized prepared workspace",
+      "Fresh resource checks and reviewed live readiness"
+    ],
+    "scope": "One narrower known-path report trial; no concurrency expansion."
   },
   "historical_integration_before_AudiencePrivacy": {
     "recorded_utc": "2026-11-01T23:55:52+00:00",
@@ -3897,5 +3883,117 @@
         "value": "The historical 124 passing controlled results combine separate contexts. Current catalog discovery, fresh scoped runs and reused results are recorded separately; no clean full-suite or real-model/release qualification is claimed."
       }
     }
+  },
+  "historical_current_fields_before_report_preparation": {
+    "milestone": "PR27 directory-listing receipt clarification merged; exact main CI passed; real-model report remains unverified",
+    "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+    "interpretation": "The historical 124 controlled results combine contexts and retain their original scope. Fresh PR27 main qualification is recorded separately as six jobs, 155 passed, zero failed and two optional video skips. It does not qualify real-model reports, the installed app or release readiness.",
+    "next": {
+      "sequence": [
+        "Keep the real-model reviewed-report milestone open after PR27 source integration",
+        "Define a bounded reviewed model qualification scope before any new real-model execution",
+        "Keep operator-started cancellation distinct from autonomous selection",
+        "Verify source and evidence before considering broader workflow expansion"
+      ],
+      "name": "Resolve validation gaps before expanding workflows",
+      "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
+      "detail": "PR27 receipt clarification is merged and exact-main application CI passed. No new model replay was performed; successful real-model reviewed-report completion remains unverified. Operator-started cancellation and broader workflow readiness retain their existing limits."
+    },
+    "next_milestone": {
+      "state": "PARTIAL_VALIDATION",
+      "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
+      "complete_application_CI": {
+        "id": 41602272228,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
+        "event": "push",
+        "head_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+        "checkout_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+        "status": "completed",
+        "conclusion": "success",
+        "tree": "03d4288b35594c622ab684b3f82edce386884cef"
+      },
+      "finite_real_model_report": "NOT_ESTABLISHED; related rpt2 experiment failed, not a run of current paragraph-free source",
+      "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
+      "Atlas_evidence_source_handoff_verification": "Source merge/tree and exact-main CI identities were independently verified. The sanitized Atlas handoff is a separate publication checkpoint; no served-byte qualification is claimed here.",
+      "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
+      "ready_hierarchy_claim": false,
+      "production_readiness_claim": false,
+      "release_qualified": false,
+      "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
+      "remaining_CI_validation": "Exact PR27 main CI passed six fresh jobs, 155 tests, zero failures and two optional video skips. Optional video prerequisites remain unverified. Nested optional/platform subchecks were not recounted; historical counts are not copied as fresh.",
+      "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
+      "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
+    },
+    "current_evidence_boundary": "PR27 merged three reviewed paths at d4b2b3e1b0a74feb460320ec3714c70fca7e1566 / tree 03d4288b35594c622ab684b3f82edce386884cef. Exact-main CI 41602272228 passed six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Candidate runs remain separate. Directory listings now omit the misleading file-content digest; actual file reads retain theirs. Permissions, receipt limits and acceptance stay unchanged. The real-model worker-stop cause and reviewed-report success remain unverified; no new model run, installation, release or performance qualification is claimed."
+  },
+  "public_overview": {
+    "status": "Non-model setup passed; refreshed real-model report check pending",
+    "improvements": "Memory/identity continuity, privacy/forgetting, responsive controls/cancellation, safer browser/recording/export boundaries, truthful task/save results and reusable checks.",
+    "latest_code_change": "Merged PR27 distinguishes folder listings from file contents.",
+    "latest_work": "Private local harness preparation and local model-file identity verification; no new product capability.",
+    "major_limit": "Earlier worker stopped after a directory listing; cause and accepted real-model report remain unresolved.",
+    "next": "Verify runtime and workspace, then one bounded known-path report check.",
+    "installed_app_updated": false,
+    "RNL_scope": "Separate research page/workstream; unchanged."
+  },
+  "report_preparation": {
+    "id": "QUAL-REPORT-PREP-1",
+    "name": "Check setup before another real-model report",
+    "state": "NON_MODEL_CHECKS_PASSED_LIVE_HELD",
+    "recorded_utc": "2026-11-03T16:37:17.085871+00:00",
+    "source_snapshot": {
+      "commit": "162020558fc14c0e495958a3a08a2fc5ecea162e",
+      "tree": "2a05ac5d3f351d48e8e2bc6212f79cda9fa765d5",
+      "tracked_files": 1410,
+      "source_sha256": "55ba73e5510172c99c78003fe9a38eb49261f5936b713678ef4d48e4dc315678"
+    },
+    "checks": {
+      "filesystem_controls_passed": 8,
+      "native_setup_and_refusal_controls_matched": 4,
+      "current_checkpoint_saved_and_readback_equal": true,
+      "synthetic_checkpoint_bytes": 128,
+      "held_driver_refused_execution": true,
+      "short_path_controls_matched": 2,
+      "owned_cleanup_verified": true,
+      "new_full_application_CI_runs": 0
+    },
+    "build_scope": "Fresh adapter and worker object plus eight proven cached owners; nine explicit production owners and no stale owner members. Not a clean Foundation rebuild.",
+    "model_identity": {
+      "file": "Qwen3.5-4B-Q4_K_M.gguf",
+      "bytes": 2740937888,
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "local_bytes_match_project_pin": true,
+      "independent_upstream_verification": false,
+      "loaded_for_this_check": false
+    },
+    "initial_metadata_probe": "Stopped before data because the file no longer matched its placeholder assumption. Separate guarded local-file hash succeeded; attribute-change cause unestablished.",
+    "runtime_package_verified": false,
+    "proposed_workspace_created": false,
+    "model_execution_held": true,
+    "real_model_attempts_this_harness": 0,
+    "accepted_real_model_report_verified": false,
+    "historical_trial": "Delegation and concurrent chat were observed, then worker stopped after listing files without an accepted report. Cause unestablished.",
+    "task_fit": "Four content reads remained after one listing under a four-call stage limit; this is separate from the premature stop's unknown cause.",
+    "planned_trial": "Four exact file paths, no answers or forced tool calls; unchanged budget, authority and verifier. Does not qualify original folder discovery.",
+    "independent_review": "Two scoped reviews accepted non-model preparation only.",
+    "private_evidence": "Detailed receipts retained privately; only sanitized outcomes and public source/CI references appear here.",
+    "product_source_changed": false,
+    "new_capability_count": 0,
+    "installed_app_updated": false,
+    "release_qualified": false
+  },
+  "latest_documentation_CI": {
+    "run_id": 41649247329,
+    "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41649247329",
+    "tested_commit": "162020558fc14c0e495958a3a08a2fc5ecea162e",
+    "tested_tree": "2a05ac5d3f351d48e8e2bc6212f79cda9fa765d5",
+    "conclusion": "success",
+    "fresh_jobs": 6,
+    "reused_jobs": 0,
+    "registered": 157,
+    "passed": 155,
+    "failed": 0,
+    "optional_video_skips": 2,
+    "scope": "Previously completed documentation-head run, not a new harness CI campaign."
   }
 }
