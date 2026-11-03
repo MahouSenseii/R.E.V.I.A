@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "milestone": "PR25 private worker-stop diagnostics merged; fresh exact-source main CI passed",
-  "recorded_utc": "2026-11-03T04:54:25.573426+00:00",
+  "milestone": "PR27 directory-listing receipt clarification merged; exact main CI passed; real-model report remains unverified",
+  "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
-    "state": "PR25 private worker-stop diagnostics merged; prior functional repair counts retained; installed Revia unchanged",
-    "main_commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-    "main_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+    "state": "PR27 directory-listing receipt clarification merged; earlier counted repairs retained; installed Revia unchanged",
+    "main_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+    "main_tree": "03d4288b35594c622ab684b3f82edce386884cef",
     "source_files": 1410,
     "incremental_changed_paths": [
       67,
@@ -21,22 +21,24 @@
       1,
       9,
       4,
-      2
+      2,
+      3
     ],
     "reliability_repairs": 13,
     "installed_app_updated": false,
     "release_qualified": false,
-    "file_count_scope": "The merged Git tree contains1410 repository blobs. PR25 modifies two existing source/test paths and does not add registrations or capabilities. Candidate and merged trees match; this is not a full hosted checkout byte-provenance claim.",
+    "file_count_scope": "PR27 modifies three existing source/test paths without adding files, registrations or capabilities. Prior repository inventory counts retain their original scope; no fresh semantic audit or full hosted byte-provenance claim.",
     "repository_tree_blobs": 1410,
     "test_catalog_maintenance_pr": 15,
     "production_privacy_changed_by_PR15": false,
     "CI_identity": {
-      "commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-      "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
-      "role": "Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips.",
-      "PR_checkout_commit": "31b27af4f136c2ef5983560a0fcfc7a192ce9e32",
-      "PR_checkout_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
-      "application_source_merge": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+      "commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "role": "Exact PR27 merge/main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips.",
+      "application_source_merge": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "candidate_commit": "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a",
+      "candidate_tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "PR_checkout_commit": "1dab77bfa8a952e6a4469f95bf2d3d485a662194",
       "fresh_merge_main_CI_run_claimed": true,
       "fresh_post_merge_source_successor_main_CI_run_claimed": false,
       "full_hosted_checkout_byte_hash_claimed": false
@@ -49,13 +51,15 @@
     },
     "bounded_delegation_corrections": 3,
     "latest_change_scope": {
-      "source_and_tests": 2,
+      "source_and_tests": 3,
       "Atlas_summaries": 2,
-      "total_reviewed_targets": 4
+      "total_reviewed_targets": 5,
+      "Atlas_publication_separate": true
     },
     "fixture_provenance_scope": "Historical PR18 provenance is retained; PR20 delegation and PR21 checkpoint evidence have separate records.",
     "bounded_checkpoint_failure_corrections": 1,
-    "latest_change_kind": "private_observability_only"
+    "latest_change_kind": "directory_receipt_metadata_clarification",
+    "bounded_receipt_clarifications": 1
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "counts": {
@@ -68,7 +72,7 @@
     "not_run_build_blocked": 5,
     "not_selected_safety": 22
   },
-  "interpretation": "The historical 124 passing controlled results combine separate contexts. Current catalog discovery, fresh scoped runs and reused results are recorded separately; no clean full-suite or real-model/release qualification is claimed.",
+  "interpretation": "The historical 124 controlled results combine contexts and retain their original scope. Fresh PR27 main qualification is recorded separately as six jobs, 155 passed, zero failed and two optional video skips. It does not qualify real-model reports, the installed app or release readiness.",
   "changes": [
     {
       "id": "MEM-1",
@@ -517,14 +521,14 @@
   ],
   "next": {
     "sequence": [
-      "Keep useful reviewed-report milestone open after PR20 source integration",
+      "Keep the real-model reviewed-report milestone open after PR27 source integration",
       "Define a bounded reviewed model qualification scope before any new real-model execution",
       "Keep operator-started cancellation distinct from autonomous selection",
       "Verify source and evidence before considering broader workflow expansion"
     ],
     "name": "Resolve validation gaps before expanding workflows",
     "state": "PARTIAL_VALIDATION; reviewed-report milestone remains unmet",
-    "detail": "PR20 source and candidate application CI are integrated. Useful grounded read selection and strict verified report acceptance remain unmet. The prompt experiment is closed and its failed stopping paragraph excluded; no new model replay was performed. Operator-started cancellation and broader workflow readiness retain their existing limits."
+    "detail": "PR27 receipt clarification is merged and exact-main application CI passed. No new model replay was performed; successful real-model reviewed-report completion remains unverified. Operator-started cancellation and broader workflow readiness retain their existing limits."
   },
   "public_scope": "Sanitized summaries only. Private logs, machine paths, runtime data and archive evidence are excluded.",
   "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified",
@@ -665,8 +669,8 @@
     "branch_commit_skip_ci": false,
     "branch_skip_reason": "No skip directive; both automatic normal push and pull-request application workflows ran.",
     "observed_remote_workflow_runs": 3,
-    "scope": "Current PR25 qualification is recorded in worker_stop_diagnostic: candidate push, PR and exact-source main each ran normally. Earlier PR20/PR21 fields retain their historical scopes.",
-    "qualification": "Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Both candidate runs separately passed the same 155/0/2 scope. The local full StudioRuntime failure remains unresolved; no model-completion or performance improvement is claimed.",
+    "scope": "Current PR27 qualification is in directory_listing_receipt: candidate push, PR synthetic merge and exact-source main each ran normally. Previous PR25 and earlier evidence remain historical records.",
+    "qualification": "Exact PR27 merge/main CI passed six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Both candidate runs separately passed the same scope. No new model run, real-model report success, installed-app update or performance improvement is claimed.",
     "workflow": {
       "observed_utc": "2026-11-02T19:05:07.158Z",
       "run": {
@@ -813,18 +817,18 @@
       "record_scope": "Historical PR20 delegation qualification; not the current PR21 task-save checkpoint."
     },
     "later_Atlas_docs_only_commit_is_application_CI_head": false,
-    "later_main_or_docs_CI": "Exact-source main run41578357109 passed. A later docs-only workflow is a separate run; this snapshot makes no claim about its outcome and is not automatically republished when it finishes.",
+    "later_main_or_docs_CI": "Exact-source main run 41602272228 passed. Any later docs-only workflow is separate and is not automatically republished when it completes.",
     "latest_terminal_main_checkpoint": {
-      "recorded_utc": "2026-11-03T04:54:25.573426+00:00",
-      "run_id": 41578357109,
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41578357109",
+      "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+      "run_id": 41602272228,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
       "event": "push",
       "branch": "main",
       "status": "completed",
       "conclusion": "success",
-      "tested_commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-      "tested_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
-      "parent_source_merge": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+      "tested_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "tested_tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "parent_source_merge": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
       "counts": {
         "jobs_passed": 6,
         "jobs_failed": 0,
@@ -839,45 +843,98 @@
       },
       "focus_results": [
         {
+          "index": 5,
+          "total": 157,
           "id": 5,
           "name": "Revia.AgentWorkflow",
           "status": "Passed",
-          "seconds": 0.29
+          "seconds": 0.24
         },
         {
+          "index": 30,
+          "total": 157,
           "id": 30,
           "name": "ReviaStudioRuntimeTests",
           "status": "Passed",
-          "seconds": 4.8
+          "seconds": 4.99
         },
         {
+          "index": 62,
+          "total": 157,
+          "id": 62,
+          "name": "ReviaAgentToolWorkerTests",
+          "status": "Passed",
+          "seconds": 0.03
+        },
+        {
+          "index": 63,
+          "total": 157,
+          "id": 63,
+          "name": "ReviaAgentToolActionTests",
+          "status": "Passed",
+          "seconds": 6.09
+        },
+        {
+          "index": 65,
+          "total": 157,
+          "id": 65,
+          "name": "ReviaDelegationTests",
+          "status": "Passed",
+          "seconds": 20.51
+        },
+        {
+          "index": 102,
+          "total": 157,
           "id": 102,
           "name": "Revia.InteractiveBrowser",
           "status": "Passed",
-          "seconds": 6.9
+          "seconds": 6.13
         },
         {
+          "index": 103,
+          "total": 157,
+          "id": 103,
+          "name": "Revia.InteractiveBrowserOwner",
+          "status": "Passed",
+          "seconds": 2.4
+        },
+        {
+          "index": 125,
+          "total": 157,
+          "id": 125,
+          "name": "Revia.InteractiveBrowserBudget",
+          "status": "Passed",
+          "seconds": 1.81
+        },
+        {
+          "index": 157,
+          "total": 157,
           "id": 157,
           "name": "Revia.DesktopSmoke",
           "status": "Passed",
-          "seconds": 5.68
+          "seconds": 4.78
         }
       ],
-      "native_log_sha256": "112525c57e2a35275925cdd56bf32baaa9e2305c7fd6dfc3e78a1005454b8b28",
-      "scope": "Fresh exact-source main observation; previous completed main checkpoint retained in worker_stop_diagnostic.preceding_terminal_main_checkpoint."
+      "ctest_seconds": 630.04,
+      "native_log_sha256": "14ff92a7da267d88b553b9f4a12d13f078ab4120513281f43f46a66452b9841a",
+      "scope": "Fresh exact PR27 merge/main observation. Candidate push and PR synthetic-merge runs are separate; prior main evidence is retained."
     },
     "latest_observed_repository_head": {
-      "commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-      "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
-      "parent": "274e3fa038bd9d1d5cb1917233df77cc59643930",
+      "commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "parents": [
+        "930bb33903db5879251a45184d5bc25b8d11b113",
+        "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a"
+      ],
       "changed_paths": [
-        "Private/Runtime/agentStudioRuntime.cpp",
-        "Tests/studioRuntimeTests.cpp"
+        "Private/Agents/agentToolWorker.cpp",
+        "Tests/agentToolWorkerTests.cpp",
+        "Tests/agentToolActionTests.cpp"
       ],
       "fresh_application_CI_for_this_commit_claimed": true,
-      "scope": "Verified PR25 source merge and exact-source main CI. Later Atlas/research heads remain distinct."
+      "scope": "Verified PR27 source merge and exact-main CI; later Atlas publication heads are distinct."
     },
-    "later_Atlas_docs_only_commit_is_application_CI_head_scope": "Current qualification tests application source merge641517c directly. The forthcoming two-file Atlas publication head is distinct.",
+    "later_Atlas_docs_only_commit_is_application_CI_head_scope": "Current qualification tests application source merge d4b2b3e directly. A future two-file Atlas publication head is distinct and is not claimed tested here.",
     "checkpoint_prior_recorded_utc": "2026-11-02T19:13:03+00:00",
     "checkpoint_save_qualification": {
       "record_ref": "checkpoint_failure_handling",
@@ -892,14 +949,14 @@
       ],
       "checkpoint": "PR20 delegation source; preserved original values in historical_integration_before_CheckpointSaveFailureHandling.values.legacy_PR20_CI_fields"
     },
-    "current_checkpoint_ref": "worker_stop_diagnostic",
+    "current_checkpoint_ref": "directory_listing_receipt",
     "worker_stop_qualification": {
       "record_ref": "worker_stop_diagnostic",
-      "scope": "Current private diagnostics, local qualification limits and separate candidate/main CI identities."
+      "scope": "Historical PR25 private diagnostics; retained local limits and separate candidate/main identities. Not the current PR27 checkpoint."
     },
-    "latest_terminal_main_checkpoint_scope": "Current PR25 exact-merge main qualification; preceding PR21 main qualification is retained separately."
+    "latest_terminal_main_checkpoint_scope": "Current PR27 exact-merge main qualification; preceding PR25 qualification remains in worker_stop_diagnostic and the retained previous-current field values."
   },
-  "excluded_later_work": "No RNL change, model replay, completion/acceptance or budget change, scheduler expansion, new capability, installation, runtime/release or GPU/response qualification is included in PR25.",
+  "excluded_later_work": "No RNL change, model replay, prompt/budget/acceptance change, scheduler expansion, new capability, installation, release or GPU/response qualification is included in PR27.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -1035,8 +1092,8 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-    "main_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+    "main_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+    "main_tree": "03d4288b35594c622ab684b3f82edce386884cef",
     "merge_order": [
       10,
       11,
@@ -1049,7 +1106,8 @@
       18,
       20,
       21,
-      25
+      25,
+      27
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
@@ -1063,7 +1121,8 @@
       "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
       "20": "6a9aff7c74888e5c6c109d8931629e017b377fab",
       "21": "34f47e11c661a146a1c857270ffad2061e44dc28",
-      "25": "641517c61c3bed4d051797a2e0ded271edcdf9ed"
+      "25": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+      "27": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": false,
@@ -1072,76 +1131,117 @@
     "runtime_release_qualified": false,
     "merge_order_scope": "Tracked repair/tooling checkpoints; intervening preserved research-only commits are not enumerated.",
     "merge_parents": [
-      "274e3fa038bd9d1d5cb1917233df77cc59643930",
-      "462078786fae88274dcc9b4d469f3d795ca1776f"
+      "930bb33903db5879251a45184d5bc25b8d11b113",
+      "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a"
     ],
-    "merged_at": "2026-11-03T04:28:46Z",
-    "application_ci_head": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-    "application_ci_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+    "merged_at": "2026-11-03T08:18:11Z",
+    "application_ci_head": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+    "application_ci_tree": "03d4288b35594c622ab684b3f82edce386884cef",
     "CI_transfer_by_content_only": false,
     "fresh_merge_main_CI_run_claimed": true,
     "submitted_formal_PR_approval": false,
     "post_merge_application_ci": {
-      "id": 41578357109,
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41578357109",
-      "head": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-      "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+      "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+      "run_id": 41602272228,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
+      "event": "push",
+      "branch": "main",
       "status": "completed",
       "conclusion": "success",
-      "observed_utc": "2026-11-03T04:54:01.604938+00:00",
-      "attempt": 1,
-      "actual_checkout": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
-      "fresh_main_pass_claimed": true,
-      "jobs_fresh": 6,
-      "jobs_reused": 0,
-      "discovered": 157,
-      "passed": 155,
-      "failed": 0,
-      "optional_video_skips": [
-        {
-          "id": 84,
-          "name": "ReviaVideoDecoderTests",
-          "status": "***Skipped",
-          "seconds": 0.01
-        },
-        {
-          "id": 149,
-          "name": "Revia.VideoPreview",
-          "status": "***Skipped",
-          "seconds": 0.53
-        }
-      ],
-      "nested_optional_and_platform_counts": "NOT_RECOUNTED; optional prerequisites remain unverified.",
+      "tested_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "tested_tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "parent_source_merge": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "counts": {
+        "jobs_passed": 6,
+        "jobs_failed": 0,
+        "jobs_skipped": 0,
+        "jobs_fresh": 6,
+        "jobs_reused": 0,
+        "ctest_expected": 157,
+        "ctest_discovered": 157,
+        "ctest_passed": 155,
+        "ctest_failed": 0,
+        "optional_video_skips": 2
+      },
       "focus_results": [
         {
+          "index": 5,
+          "total": 157,
           "id": 5,
           "name": "Revia.AgentWorkflow",
           "status": "Passed",
-          "seconds": 0.29
+          "seconds": 0.24
         },
         {
+          "index": 30,
+          "total": 157,
           "id": 30,
           "name": "ReviaStudioRuntimeTests",
           "status": "Passed",
-          "seconds": 4.8
+          "seconds": 4.99
         },
         {
+          "index": 62,
+          "total": 157,
+          "id": 62,
+          "name": "ReviaAgentToolWorkerTests",
+          "status": "Passed",
+          "seconds": 0.03
+        },
+        {
+          "index": 63,
+          "total": 157,
+          "id": 63,
+          "name": "ReviaAgentToolActionTests",
+          "status": "Passed",
+          "seconds": 6.09
+        },
+        {
+          "index": 65,
+          "total": 157,
+          "id": 65,
+          "name": "ReviaDelegationTests",
+          "status": "Passed",
+          "seconds": 20.51
+        },
+        {
+          "index": 102,
+          "total": 157,
           "id": 102,
           "name": "Revia.InteractiveBrowser",
           "status": "Passed",
-          "seconds": 6.9
+          "seconds": 6.13
         },
         {
+          "index": 103,
+          "total": 157,
+          "id": 103,
+          "name": "Revia.InteractiveBrowserOwner",
+          "status": "Passed",
+          "seconds": 2.4
+        },
+        {
+          "index": 125,
+          "total": 157,
+          "id": 125,
+          "name": "Revia.InteractiveBrowserBudget",
+          "status": "Passed",
+          "seconds": 1.81
+        },
+        {
+          "index": 157,
+          "total": 157,
           "id": 157,
           "name": "Revia.DesktopSmoke",
           "status": "Passed",
-          "seconds": 5.68
+          "seconds": 4.78
         }
       ],
-      "ctest_total_seconds": 697.4,
-      "native_log_sha256": "112525c57e2a35275925cdd56bf32baaa9e2305c7fd6dfc3e78a1005454b8b28"
+      "ctest_seconds": 630.04,
+      "native_log_sha256": "14ff92a7da267d88b553b9f4a12d13f078ab4120513281f43f46a66452b9841a",
+      "scope": "Fresh exact PR27 merge/main observation. Candidate push and PR synthetic-merge runs are separate; prior main evidence is retained."
     },
-    "CI_transfer_scope": "Fresh main run41578357109 tested the exact source-merge commit and tree. The earlier candidate and PR synthetic-merge passes remain separate observations.",
+    "CI_transfer_scope": "Fresh main run 41602272228 tested exact source merge d4b2b3e and tree 03d4288b. Candidate and synthetic-merge checks remain separate observations; no content-only transfer is needed.",
     "fresh_post_merge_source_successor_main_CI_run_claimed": false,
     "cancelled_exact_merge_CI": {
       "id": 41562200640,
@@ -1267,9 +1367,10 @@
     ],
     "capabilities": 20,
     "PR16_scope": "One distinct production browser repair; PNG fixture/test maintenance adds no separate repair or capability",
-    "current_scope": "Functional repair/capability counts are unchanged. PR25 adds private diagnostic observability only; its two changed files and three fixture scenarios are not new functional repairs or capabilities.",
+    "current_scope": "Thirteen earlier counted functional repairs, three delegation corrections and the separately tracked checkpoint correction retain their denominators. PR27 adds one separately tracked receipt clarification and no capability; its three changed files are not three repairs.",
     "bounded_delegation_corrections": 3,
-    "checkpoint_failure_handling_corrections": 1
+    "checkpoint_failure_handling_corrections": 1,
+    "directory_receipt_clarifications": 1
   },
   "historical_integration_before_ACT2": {
     "milestone": "Eleven reliability repairs integrated into GitHub main",
@@ -1358,29 +1459,29 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR25 merged two reviewed paths at 641517c61c3bed4d051797a2e0ded271edcdf9ed / tree cce1480b062325b34c1257ca55567fbfccb06418. Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Candidate push and PR runs separately passed their scopes. Three local scripted cases passed; the full local StudioRuntime module retained its baseline assertion failure, cause unresolved. Diagnostics leave verification, acceptance and budgets unchanged. No model run, model-completion or performance improvement is claimed.",
+  "current_evidence_boundary": "PR27 merged three reviewed paths at d4b2b3e1b0a74feb460320ec3714c70fca7e1566 / tree 03d4288b35594c622ab684b3f82edce386884cef. Exact-main CI 41602272228 passed six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Candidate runs remain separate. Directory listings now omit the misleading file-content digest; actual file reads retain theirs. Permissions, receipt limits and acceptance stay unchanged. The real-model worker-stop cause and reviewed-report success remain unverified; no new model run, installation, release or performance qualification is claimed.",
   "next_milestone": {
     "state": "PARTIAL_VALIDATION",
     "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
     "complete_application_CI": {
-      "id": 41500218515,
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500218515",
+      "id": 41602272228,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
       "event": "push",
-      "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
-      "checkout_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+      "head_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "checkout_sha": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
       "status": "completed",
       "conclusion": "success",
-      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183"
+      "tree": "03d4288b35594c622ab684b3f82edce386884cef"
     },
     "finite_real_model_report": "NOT_ESTABLISHED; related rpt2 experiment failed, not a run of current paragraph-free source",
     "operator_started_cancellation": "Mechanical scope passed separately; not model-selected cancellation or inference-stop qualification",
-    "Atlas_evidence_source_handoff_verification": "PR20 merge and all 1,410 leaf entries verified by integrator; same-two-file post-merge summary prepared locally for publication and deployed-byte checks.",
+    "Atlas_evidence_source_handoff_verification": "Source merge/tree and exact-main CI identities were independently verified. The sanitized Atlas handoff is a separate publication checkpoint; no served-byte qualification is claimed here.",
     "multi_workflow_expansion": "DEFERRED; no hierarchy or general scheduler readiness established",
     "ready_hierarchy_claim": false,
     "production_readiness_claim": false,
     "release_qualified": false,
     "source_recovery": "PR16 merged: one native known-stale preflight guard plus fixture/test maintenance",
-    "remaining_CI_validation": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total. Qualification transfers to the merge by identical application contents; no fresh merge/main CI run claimed.",
+    "remaining_CI_validation": "Exact PR27 main CI passed six fresh jobs, 155 tests, zero failures and two optional video skips. Optional video prerequisites remain unverified. Nested optional/platform subchecks were not recounted; historical counts are not copied as fresh.",
     "StopCleanup_fixture": "MERGED_PR17; one enum line only, no production repair or new capability",
     "metadata_startup_observer": "MERGED_PR18; observability only, original hosted failure cause unknown, local child-exit capture unavailable"
   },
@@ -2216,8 +2317,8 @@
       "formal_PR_approval_submitted": false
     },
     "legacy_record": true,
-    "record_scope": "Historical PR20 delegation candidate/merge, retained for provenance; not the current private worker-stop diagnostic milestone.",
-    "current_record_ref": "worker_stop_diagnostic"
+    "record_scope": "Historical PR20 delegation candidate/merge retained for provenance; current receipt clarification is in directory_listing_receipt.",
+    "current_record_ref": "directory_listing_receipt"
   },
   "historical_integration_before_DelegationGrounding": {
     "superseded_at_utc": "2026-11-02T19:13:03+00:00",
@@ -3317,6 +3418,483 @@
       },
       "excluded_later_work": {
         "value": "No failed stopping clarification, RNL change, model replay, storage relocation, general long-path redesign, installation or release/GPU/response qualification is included in PR21."
+      }
+    }
+  },
+  "directory_listing_receipt": {
+    "id": "DIR-DIGEST-1",
+    "name": "Tell directory listings apart from file contents",
+    "source_state": "merged",
+    "pull_request": 27,
+    "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/27",
+    "source_head": "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a",
+    "source_merge_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+    "source_tree": "03d4288b35594c622ab684b3f82edce386884cef",
+    "merged_at": "2026-11-03T08:18:11Z",
+    "changed_paths": [
+      "Private/Agents/agentToolWorker.cpp",
+      "Tests/agentToolWorkerTests.cpp",
+      "Tests/agentToolActionTests.cpp"
+    ],
+    "behavior": "Directory-listing receipts use contentDigest:null. Actual file reads, including zero-byte files, keep their digests. Path identities, byte limits, permissions and acceptance are unchanged.",
+    "candidate_CI": [
+      {
+        "id": 41594756857,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41594756857",
+        "event": "pull_request",
+        "attempt": 1,
+        "source_head": "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a",
+        "actual_checkout": "1dab77bfa8a952e6a4469f95bf2d3d485a662194",
+        "fresh_jobs": 6,
+        "reused_jobs": 0,
+        "registered": 157,
+        "passed": 155,
+        "failed": 0,
+        "optional_video_skips": [
+          "ReviaVideoDecoderTests",
+          "Revia.VideoPreview"
+        ],
+        "ctest_seconds": 584.91
+      },
+      {
+        "id": 41594717565,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41594717565",
+        "event": "push",
+        "attempt": 1,
+        "source_head": "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a",
+        "actual_checkout": "368dcaad6a0aaa52dd2fe7f2ab8411a5643a6b5a",
+        "fresh_jobs": 6,
+        "reused_jobs": 0,
+        "registered": 157,
+        "passed": 155,
+        "failed": 0,
+        "optional_video_skips": [
+          "ReviaVideoDecoderTests",
+          "Revia.VideoPreview"
+        ],
+        "ctest_seconds": 700.2
+      }
+    ],
+    "post_merge_CI": {
+      "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+      "run_id": 41602272228,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41602272228",
+      "event": "push",
+      "branch": "main",
+      "status": "completed",
+      "conclusion": "success",
+      "tested_commit": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "tested_tree": "03d4288b35594c622ab684b3f82edce386884cef",
+      "parent_source_merge": "d4b2b3e1b0a74feb460320ec3714c70fca7e1566",
+      "counts": {
+        "jobs_passed": 6,
+        "jobs_failed": 0,
+        "jobs_skipped": 0,
+        "jobs_fresh": 6,
+        "jobs_reused": 0,
+        "ctest_expected": 157,
+        "ctest_discovered": 157,
+        "ctest_passed": 155,
+        "ctest_failed": 0,
+        "optional_video_skips": 2
+      },
+      "focus_results": [
+        {
+          "index": 5,
+          "total": 157,
+          "id": 5,
+          "name": "Revia.AgentWorkflow",
+          "status": "Passed",
+          "seconds": 0.24
+        },
+        {
+          "index": 30,
+          "total": 157,
+          "id": 30,
+          "name": "ReviaStudioRuntimeTests",
+          "status": "Passed",
+          "seconds": 4.99
+        },
+        {
+          "index": 62,
+          "total": 157,
+          "id": 62,
+          "name": "ReviaAgentToolWorkerTests",
+          "status": "Passed",
+          "seconds": 0.03
+        },
+        {
+          "index": 63,
+          "total": 157,
+          "id": 63,
+          "name": "ReviaAgentToolActionTests",
+          "status": "Passed",
+          "seconds": 6.09
+        },
+        {
+          "index": 65,
+          "total": 157,
+          "id": 65,
+          "name": "ReviaDelegationTests",
+          "status": "Passed",
+          "seconds": 20.51
+        },
+        {
+          "index": 102,
+          "total": 157,
+          "id": 102,
+          "name": "Revia.InteractiveBrowser",
+          "status": "Passed",
+          "seconds": 6.13
+        },
+        {
+          "index": 103,
+          "total": 157,
+          "id": 103,
+          "name": "Revia.InteractiveBrowserOwner",
+          "status": "Passed",
+          "seconds": 2.4
+        },
+        {
+          "index": 125,
+          "total": 157,
+          "id": 125,
+          "name": "Revia.InteractiveBrowserBudget",
+          "status": "Passed",
+          "seconds": 1.81
+        },
+        {
+          "index": 157,
+          "total": 157,
+          "id": 157,
+          "name": "Revia.DesktopSmoke",
+          "status": "Passed",
+          "seconds": 4.78
+        }
+      ],
+      "ctest_seconds": 630.04,
+      "native_log_sha256": "14ff92a7da267d88b553b9f4a12d13f078ab4120513281f43f46a66452b9841a",
+      "scope": "Fresh exact PR27 merge/main observation. Candidate push and PR synthetic-merge runs are separate; prior main evidence is retained."
+    },
+    "local_evidence": "Both new digest regressions failed before the source correction. Complete Worker checks passed. Original-baseline and candidate Action modules passed after task-only fixture dependency staging; initial DLL/static-link failures remain retained privately. No child PATH, permissions or assertions were changed.",
+    "independent_review": "Exact three-file diff accepted before merge; main checkout, tree and157unique results independently verified.",
+    "real_model_report_verified": false,
+    "new_model_run": false,
+    "cause_of_historical_stop_established": false,
+    "model_completion_improvement_measured": false,
+    "installed_app_updated": false,
+    "release_qualified": false,
+    "new_capability_count": 0,
+    "counting_scope": "One separately tracked receipt clarification; earlier functional repair/capability counts retain their original denominators.",
+    "compatibility": "Listing contentDigest is nullable; unknown external consumers may expect a string.",
+    "recorded_utc": "2026-11-03T08:50:45.231780+00:00"
+  },
+  "historical_current_fields_before_PR27": {
+    "recorded_utc": "2026-11-03T08:50:45.231780+00:00",
+    "scope": "Only replaced current-field values. Existing full checkpoint records and history remain unchanged.",
+    "previous_current_fields": {
+      "milestone": {
+        "value": "PR25 private worker-stop diagnostics merged; fresh exact-source main CI passed"
+      },
+      "recorded_utc": {
+        "value": "2026-11-03T04:54:25.573426+00:00"
+      },
+      "source.state": {
+        "value": "PR25 private worker-stop diagnostics merged; prior functional repair counts retained; installed Revia unchanged"
+      },
+      "source.main_commit": {
+        "value": "641517c61c3bed4d051797a2e0ded271edcdf9ed"
+      },
+      "source.main_tree": {
+        "value": "cce1480b062325b34c1257ca55567fbfccb06418"
+      },
+      "source.incremental_changed_paths": {
+        "value": [
+          67,
+          8,
+          5,
+          4,
+          3,
+          3,
+          3,
+          1,
+          1,
+          9,
+          4,
+          2
+        ]
+      },
+      "source.file_count_scope": {
+        "value": "The merged Git tree contains1410 repository blobs. PR25 modifies two existing source/test paths and does not add registrations or capabilities. Candidate and merged trees match; this is not a full hosted checkout byte-provenance claim."
+      },
+      "source.latest_change_scope": {
+        "value": {
+          "source_and_tests": 2,
+          "Atlas_summaries": 2,
+          "total_reviewed_targets": 4
+        }
+      },
+      "source.latest_change_kind": {
+        "value": "private_observability_only"
+      },
+      "source.bounded_receipt_clarifications": {
+        "absent": true
+      },
+      "source.CI_identity": {
+        "value": {
+          "commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+          "role": "Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips.",
+          "PR_checkout_commit": "31b27af4f136c2ef5983560a0fcfc7a192ce9e32",
+          "PR_checkout_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+          "application_source_merge": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "fresh_merge_main_CI_run_claimed": true,
+          "fresh_post_merge_source_successor_main_CI_run_claimed": false,
+          "full_hosted_checkout_byte_hash_claimed": false
+        }
+      },
+      "integration.main_commit": {
+        "value": "641517c61c3bed4d051797a2e0ded271edcdf9ed"
+      },
+      "integration.main_tree": {
+        "value": "cce1480b062325b34c1257ca55567fbfccb06418"
+      },
+      "integration.merge_order": {
+        "value": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          20,
+          21,
+          25
+        ]
+      },
+      "integration.merge_commits.27": {
+        "absent": true
+      },
+      "integration.merge_parents": {
+        "value": [
+          "274e3fa038bd9d1d5cb1917233df77cc59643930",
+          "462078786fae88274dcc9b4d469f3d795ca1776f"
+        ]
+      },
+      "integration.merged_at": {
+        "value": "2026-11-03T04:28:46Z"
+      },
+      "integration.application_ci_head": {
+        "value": "641517c61c3bed4d051797a2e0ded271edcdf9ed"
+      },
+      "integration.application_ci_tree": {
+        "value": "cce1480b062325b34c1257ca55567fbfccb06418"
+      },
+      "integration.post_merge_application_ci": {
+        "value": {
+          "id": 41578357109,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41578357109",
+          "head": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+          "status": "completed",
+          "conclusion": "success",
+          "observed_utc": "2026-11-03T04:54:01.604938+00:00",
+          "attempt": 1,
+          "actual_checkout": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "fresh_main_pass_claimed": true,
+          "jobs_fresh": 6,
+          "jobs_reused": 0,
+          "discovered": 157,
+          "passed": 155,
+          "failed": 0,
+          "optional_video_skips": [
+            {
+              "id": 84,
+              "name": "ReviaVideoDecoderTests",
+              "status": "***Skipped",
+              "seconds": 0.01
+            },
+            {
+              "id": 149,
+              "name": "Revia.VideoPreview",
+              "status": "***Skipped",
+              "seconds": 0.53
+            }
+          ],
+          "nested_optional_and_platform_counts": "NOT_RECOUNTED; optional prerequisites remain unverified.",
+          "focus_results": [
+            {
+              "id": 5,
+              "name": "Revia.AgentWorkflow",
+              "status": "Passed",
+              "seconds": 0.29
+            },
+            {
+              "id": 30,
+              "name": "ReviaStudioRuntimeTests",
+              "status": "Passed",
+              "seconds": 4.8
+            },
+            {
+              "id": 102,
+              "name": "Revia.InteractiveBrowser",
+              "status": "Passed",
+              "seconds": 6.9
+            },
+            {
+              "id": 157,
+              "name": "Revia.DesktopSmoke",
+              "status": "Passed",
+              "seconds": 5.68
+            }
+          ],
+          "ctest_total_seconds": 697.4,
+          "native_log_sha256": "112525c57e2a35275925cdd56bf32baaa9e2305c7fd6dfc3e78a1005454b8b28"
+        }
+      },
+      "integration.CI_transfer_scope": {
+        "value": "Fresh main run41578357109 tested the exact source-merge commit and tree. The earlier candidate and PR synthetic-merge passes remain separate observations."
+      },
+      "ci.scope": {
+        "value": "Current PR25 qualification is recorded in worker_stop_diagnostic: candidate push, PR and exact-source main each ran normally. Earlier PR20/PR21 fields retain their historical scopes."
+      },
+      "ci.qualification": {
+        "value": "Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Both candidate runs separately passed the same 155/0/2 scope. The local full StudioRuntime failure remains unresolved; no model-completion or performance improvement is claimed."
+      },
+      "ci.latest_terminal_main_checkpoint": {
+        "value": {
+          "recorded_utc": "2026-11-03T04:54:25.573426+00:00",
+          "run_id": 41578357109,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41578357109",
+          "event": "push",
+          "branch": "main",
+          "status": "completed",
+          "conclusion": "success",
+          "tested_commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "tested_tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+          "parent_source_merge": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "counts": {
+            "jobs_passed": 6,
+            "jobs_failed": 0,
+            "jobs_skipped": 0,
+            "jobs_fresh": 6,
+            "jobs_reused": 0,
+            "ctest_expected": 157,
+            "ctest_discovered": 157,
+            "ctest_passed": 155,
+            "ctest_failed": 0,
+            "optional_video_skips": 2
+          },
+          "focus_results": [
+            {
+              "id": 5,
+              "name": "Revia.AgentWorkflow",
+              "status": "Passed",
+              "seconds": 0.29
+            },
+            {
+              "id": 30,
+              "name": "ReviaStudioRuntimeTests",
+              "status": "Passed",
+              "seconds": 4.8
+            },
+            {
+              "id": 102,
+              "name": "Revia.InteractiveBrowser",
+              "status": "Passed",
+              "seconds": 6.9
+            },
+            {
+              "id": 157,
+              "name": "Revia.DesktopSmoke",
+              "status": "Passed",
+              "seconds": 5.68
+            }
+          ],
+          "native_log_sha256": "112525c57e2a35275925cdd56bf32baaa9e2305c7fd6dfc3e78a1005454b8b28",
+          "scope": "Fresh exact-source main observation; previous completed main checkpoint retained in worker_stop_diagnostic.preceding_terminal_main_checkpoint."
+        }
+      },
+      "ci.latest_observed_repository_head": {
+        "value": {
+          "commit": "641517c61c3bed4d051797a2e0ded271edcdf9ed",
+          "tree": "cce1480b062325b34c1257ca55567fbfccb06418",
+          "parent": "274e3fa038bd9d1d5cb1917233df77cc59643930",
+          "changed_paths": [
+            "Private/Runtime/agentStudioRuntime.cpp",
+            "Tests/studioRuntimeTests.cpp"
+          ],
+          "fresh_application_CI_for_this_commit_claimed": true,
+          "scope": "Verified PR25 source merge and exact-source main CI. Later Atlas/research heads remain distinct."
+        }
+      },
+      "ci.current_checkpoint_ref": {
+        "value": "worker_stop_diagnostic"
+      },
+      "ci.worker_stop_qualification.scope": {
+        "value": "Current private diagnostics, local qualification limits and separate candidate/main CI identities."
+      },
+      "ci.latest_terminal_main_checkpoint_scope": {
+        "value": "Current PR25 exact-merge main qualification; preceding PR21 main qualification is retained separately."
+      },
+      "ci.later_main_or_docs_CI": {
+        "value": "Exact-source main run41578357109 passed. A later docs-only workflow is a separate run; this snapshot makes no claim about its outcome and is not automatically republished when it finishes."
+      },
+      "ci.later_Atlas_docs_only_commit_is_application_CI_head_scope": {
+        "value": "Current qualification tests application source merge641517c directly. The forthcoming two-file Atlas publication head is distinct."
+      },
+      "current_local_candidate.current_record_ref": {
+        "value": "worker_stop_diagnostic"
+      },
+      "current_local_candidate.record_scope": {
+        "value": "Historical PR20 delegation candidate/merge, retained for provenance; not the current private worker-stop diagnostic milestone."
+      },
+      "repair_count_scope.current_scope": {
+        "value": "Functional repair/capability counts are unchanged. PR25 adds private diagnostic observability only; its two changed files and three fixture scenarios are not new functional repairs or capabilities."
+      },
+      "repair_count_scope.directory_receipt_clarifications": {
+        "absent": true
+      },
+      "current_evidence_boundary": {
+        "value": "PR25 merged two reviewed paths at 641517c61c3bed4d051797a2e0ded271edcdf9ed / tree cce1480b062325b34c1257ca55567fbfccb06418. Exact merged-source main CI passed all six fresh jobs: 157 discovered, 155 passed, zero failed and two optional video skips. Candidate push and PR runs separately passed their scopes. Three local scripted cases passed; the full local StudioRuntime module retained its baseline assertion failure, cause unresolved. Diagnostics leave verification, acceptance and budgets unchanged. No model run, model-completion or performance improvement is claimed."
+      },
+      "excluded_later_work": {
+        "value": "No RNL change, model replay, completion/acceptance or budget change, scheduler expansion, new capability, installation, runtime/release or GPU/response qualification is included in PR25."
+      },
+      "next_milestone.complete_application_CI": {
+        "value": {
+          "id": 41500218515,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500218515",
+          "event": "push",
+          "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "checkout_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "status": "completed",
+          "conclusion": "success",
+          "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183"
+        }
+      },
+      "next_milestone.remaining_CI_validation": {
+        "value": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total. Qualification transfers to the merge by identical application contents; no fresh merge/main CI run claimed."
+      },
+      "next_milestone.Atlas_evidence_source_handoff_verification": {
+        "value": "PR20 merge and all 1,410 leaf entries verified by integrator; same-two-file post-merge summary prepared locally for publication and deployed-byte checks."
+      },
+      "next.sequence": {
+        "value": [
+          "Keep useful reviewed-report milestone open after PR20 source integration",
+          "Define a bounded reviewed model qualification scope before any new real-model execution",
+          "Keep operator-started cancellation distinct from autonomous selection",
+          "Verify source and evidence before considering broader workflow expansion"
+        ]
+      },
+      "next.detail": {
+        "value": "PR20 source and candidate application CI are integrated. Useful grounded read selection and strict verified report acceptance remain unmet. The prompt experiment is closed and its failed stopping paragraph excluded; no new model replay was performed. Operator-started cancellation and broader workflow readiness retain their existing limits."
+      },
+      "interpretation": {
+        "value": "The historical 124 passing controlled results combine separate contexts. Current catalog discovery, fresh scoped runs and reused results are recorded separately; no clean full-suite or real-model/release qualification is claimed."
       }
     }
   }
