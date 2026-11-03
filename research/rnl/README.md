@@ -1,9 +1,10 @@
 # RNL research sandbox
 
-RNL is a separate, bounded investigation into whether codebook compression or
-expert routing can help Revia. It is not a replacement language model, a training
-system, or a prerequisite for improvements to Revia's memory and corrections.
-Useful results may become small, separately reviewed Revia changes later.
+RNL is a separate, bounded investigation into compression, exact reuse and tiny
+trainable state, with an adaptive/stateful architecture as a broader research
+goal. It does not replace or train Revia's installed language model. Practical
+memory and corrections remain a separate path. Useful results may become small,
+separately reviewed Revia changes later.
 
 ## Scope and isolation
 
@@ -23,8 +24,8 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | STATE-006 trainable-state setup stopped before framework installation; no product candidate |
-| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit and one PREFIX-004 real-model reuse pair |
+| Experimental | Hypothesis, static review or proposed experiment | A-only learning-exposure curve qualification proposed after STATE-006; unimplemented and unrun |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -75,16 +76,32 @@ and left no owned process or credential. See the [report](RESULTS-PREFIX-004.md)
 [status](PREFIX-004-status.json), [three-attempt evidence](results/PREFIX-004/summary.json),
 [original full-study protocol](PREFIX-004.md) and [identity](PREFIX-004-identity.json).
 
-STATE-006 advances the broader trainable adaptive/stateful question with a tiny
-GRU/RNN SET/QUERY task, separate from prefix reuse. Its first approved setup
-downloaded and verified ten CPU wheels and created a venv, then stopped at the
-Windows pip-bootstrap launcher (exit101). No PyTorch install, native probe or
-training cell completed; all learning metrics remain null. One invocation took
-5.511s, cleanup was confirmed and no retry followed. The process-limit explanation
-is strongly supported inference because the exact Windows error was not retained.
-See the [report](RESULTS-STATE-006.md), [status](STATE-006-status.json),
-[evidence](results/STATE-006/summary.json) and [frozen pre-attempt protocol](STATE-006.md).
-Source preparation and44 offline checks are not a trained-model result.
+STATE-006 completed its tiny standard GRU/RNN SET/QUERY comparison: six cells,
+three seeds and1,536 updates in one447.698s operationally successful batch.
+The scientific result is **no-go for this fixed task and budget**. GRU long-delay
+accuracy was12.11%,12.89%,16.21%, versus RNN10.16%,11.91%,14.26%; uniform chance
+and a key-only predictor are12.5%. Gains of0.98-1.95 percentage points missed
+the original90% accuracy/10-point advantage requirements. GRU overwrite-pair
+success was0/128,1/128,3/128; this is a two-answer metric, not per-query accuracy.
+
+No loss curve was retained. The two held-out A checkpoints record above-baseline short-lag
+accuracy and a decline after the longer-lag phase; without initial accuracy,
+training-induced improvement is unmeasured. They cannot establish
+convergence or identify task difficulty, exposure budget, optimization or
+architecture as the cause. State reset every64-event episode means this was
+within-episode memory, not persistence across requests or a custom RNL design.
+The original setup failure and intermediate timing/admission failures remain
+historical evidence; a separately approved single-deadline continuation completed.
+Candidate for Revia and Integrated remain None. No further run follows automatically.
+
+The smallest proposed follow-up keeps the original A task, paired GRU/RNN and
+one seed, records real loss/accuracy curves and extends same-distribution
+training to a fixed1,024 updates. It screens basic learnability; fresh examples
+and update count increase together, so it does not diagnose the original cause.
+It is unimplemented and unrun. See the [reviewed analysis and proposal](RESULTS-STATE-006.md),
+[status](STATE-006-status.json), [sanitized measurements and retained failure](results/STATE-006/summary.json)
+and [historical pre-attempt protocol](STATE-006.md). Earlier positive RNL-003 and
+PREFIX-004 results retain their own scope.
 
 [READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
 permitted-context Python HTTP pass; its0.609s duration is not model latency or
