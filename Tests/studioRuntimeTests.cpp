@@ -12,6 +12,7 @@
 #include <iterator>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <mutex>
@@ -676,6 +677,125 @@ nlohmann::json CompleteStudioDeliverable(const nlohmann::json& wire)
     return payload;
 }
 
+void TestToolStudioStopFailureDiagnostic(const bool insufficientEvidence)
+{
+    using namespace revia::runtime;
+    using namespace revia::agents;
+    using json = nlohmann::json;
+    NativeActionFixture fixture;
+    std::atomic<unsigned> toolProposals{0};
+    HeldMemoryBackend backend({},
+        [&](const json& wire)
+        {
+            const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+            if (properties.contains("tool"))
+            {
+                if (insufficientEvidence && toolProposals.fetch_add(1) == 0)
+                    return json{{"tool", {{"action", "list_directory"}, {"source", revia::actions::PathToUtf8(fixture.approved)}}}}
+                        .dump();
+                return std::string(R"({"tool":null})");
+            }
+            auto payload = CompleteStudioDeliverable(wire);
+            payload["summary"] = "PRIVATE_STOP_RESPONSE_4C19";
+            payload["evidence"] = "PRIVATE_STOP_EVIDENCE_4C19";
+            if (insufficientEvidence)
+                payload["verified"] = false;
+            else
+                payload.erase("steps");
+            return payload.dump();
+        });
+    backend.release.store(true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+    std::string error;
+    Check(fixture.session.StartAgentWorkflow("PRIVATE_STOP_OBJECTIVE_4C19", AgentProviderMode::LocalWithTools, error), error);
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    const auto analysis = std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(), [](const auto& node) { return node.id == "analysis"; });
+    Check(analysis != snapshot.nodes.end() && analysis->state == WorkflowState::Failed && analysis->attempts.size() == 1,
+        "An incomplete tool worker did not remain a single failed attempt.");
+    const auto& attempt = analysis->attempts.back();
+    const unsigned expectedCalls = insufficientEvidence ? 3 : 2;
+    const unsigned expectedTools = insufficientEvidence ? 1 : 0;
+    Check(attempt.executionSucceeded && !attempt.verified && !attempt.artifact && attempt.providerCalls == expectedCalls &&
+              attempt.toolCalls == expectedTools && snapshot.providerCalls == expectedCalls && snapshot.toolCalls == expectedTools &&
+              backend.requests.load() == expectedCalls && fixture.session.AgentWorkflowResult().empty(),
+        "A stopped incomplete worker was retried, accepted, or charged unexpected provider/tool work.");
+    std::string publicText = snapshot.id;
+    for (const auto& node : snapshot.nodes)
+    {
+        if (node.id != "analysis")
+            Check(node.attempts.empty(), "A failed tool worker advanced a downstream node.");
+        publicText += node.id + node.parentId + node.workingOn + node.currentAction + node.waitingFor + node.nextHandoff;
+        for (const auto& publicAttempt : node.attempts)
+            publicText += publicAttempt.id + publicAttempt.diagnostic + publicAttempt.reportedModel.value_or("");
+    }
+    Check(attempt.diagnostic == "Execution completed, but verified evidence was not established." &&
+              publicText.find("PRIVATE_STOP_") == std::string::npos && publicText.find("model ended tool selection") == std::string::npos &&
+              publicText.find("declared insufficient evidence") == std::string::npos &&
+              publicText.find("deliverable contract was invalid") == std::string::npos,
+        "A public workflow snapshot exposed private worker material or its private stop diagnostic.");
+    unsigned succeededListings = 0;
+    unsigned readResults = 0;
+    std::ifstream audit(fixture.temporary.root / "action-audit.jsonl");
+    Check(audit.good() || expectedTools == 0, "The worker stop fixture did not retain its native action audit.");
+    std::string line;
+    while (std::getline(audit, line))
+    {
+        const auto row = json::parse(line);
+        if (row.value("record_type", "") != "result")
+            continue;
+        if (row.value("action", "") == "list_directory" && row.value("attempted", false) && row.value("succeeded", false))
+            ++succeededListings;
+        if (row.value("action", "") == "read_text_file")
+            ++readResults;
+    }
+    Check(succeededListings == expectedTools && readResults == 0, "The worker stop scenario executed unexpected native file work.");
+    std::ifstream checkpoint(fixture.session.Paths().Resolve("RuntimeData/Agents/workflow.json"));
+    Check(checkpoint.good(), "The stopped worker did not retain its private checkpoint.");
+    const auto persisted = json::parse(checkpoint);
+    const auto& rows = persisted.at("nodes");
+    const auto saved = std::find_if(rows.begin(), rows.end(), [](const auto& node) { return node.at("id") == "analysis"; });
+    Check(saved != rows.end() && saved->at("attempts").size() == 1, "The private checkpoint lost the stopped attempt.");
+    std::string diagnostic = saved->at("attempts").back().at("diagnostic").get<std::string>();
+    std::transform(diagnostic.begin(), diagnostic.end(), diagnostic.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (insufficientEvidence)
+        Check(diagnostic.find("model ended tool selection") != std::string::npos,
+            "The private diagnostic lost the model-selected tool stop.");
+    Check(diagnostic.find(insufficientEvidence ? "declared insufficient evidence" : "deliverable contract was invalid") != std::string::npos &&
+              diagnostic.find(insufficientEvidence ? "deliverable contract was invalid" : "declared insufficient evidence") == std::string::npos,
+        "The private diagnostic conflated declared insufficiency with an invalid deliverable contract.");
+}
+
+void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
+{
+    using namespace revia::runtime;
+    using namespace revia::agents;
+    using json = nlohmann::json;
+    NativeActionFixture fixture;
+    HeldMemoryBackend backend({},
+        [](const json& wire)
+        {
+            const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+            return properties.contains("tool") ? std::string(R"({"tool":null})") : CompleteStudioDeliverable(wire).dump();
+        });
+    backend.release.store(true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+    std::string error;
+    Check(fixture.session.StartAgentWorkflow("Assess the supplied evidence without requiring a file read.", AgentProviderMode::LocalWithTools, error),
+        error);
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    Check(snapshot.state == WorkflowState::AwaitingAcceptance && snapshot.parentDecision == ParentDecision::Pending && snapshot.toolCalls == 0 &&
+              fixture.session.AgentWorkflowResult().empty(),
+        "A legitimate no-tool completion was treated as a failure or bypassed separate parent acceptance.");
+    for (const auto& node : snapshot.nodes)
+        if (node.role != WorkflowRole::Parent)
+            Check(node.state == WorkflowState::Succeeded && node.attempts.size() == 1 && node.attempts.back().verified &&
+                      node.attempts.back().toolCalls == 0,
+                "A complete no-tool analytical deliverable did not advance through ordinary verification.");
+}
+
 void TestLocalStudioGrammarPinsNativeEvidence()
 {
     using namespace revia::runtime;
@@ -814,6 +934,13 @@ void TestStudioDiagnosticRetainsChangedEvidenceRecovery()
 }
 }
 
+void RunStudioStopDiagnosticsTests()
+{
+    TestToolStudioStopFailureDiagnostic(true);
+    TestToolStudioStopFailureDiagnostic(false);
+    TestToolStudioNoToolCompletionStillAwaitsAcceptance();
+}
+
 void RunStudioRuntimeTests()
 {
     TestStudioPersistenceWarningsRetainFailureReason();
@@ -827,6 +954,7 @@ void RunStudioRuntimeTests()
     TestReviewedMemoryReceipt();
     TestLocalStudioIncompleteVerificationCannotAdvance();
     TestLocalStudioGrammarPinsNativeEvidence();
+    RunStudioStopDiagnosticsTests();
     TestToolStudioRetainsSupervisedScopeThroughPersistence();
     TestStudioDiagnosticRetainsChangedEvidenceRecovery();
     TestQueuedMemoryRetainsAdmission();

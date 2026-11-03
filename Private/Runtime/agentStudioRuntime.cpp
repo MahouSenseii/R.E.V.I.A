@@ -356,6 +356,7 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             return answered;
         };
         std::string hostEvidence;
+        bool modelEndedToolSelection = false;
         if (mode == AgentProviderMode::LocalWithTools && request.node.role == agents::WorkflowRole::Worker)
         {
             if (!capturedScope || capturedScope->workflowId != request.stamp.taskId || request.node.readOnly)
@@ -422,7 +423,10 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     return result;
                 }
                 if (!action)
+                {
+                    modelEndedToolSelection = true;
                     break;
+                }
                 if (!reserve(agents::WorkflowWorkKind::Tool, agents::WorkerToolOutputReservation))
                     return result;
                 // Registration changes the ledger revision, but cannot change the captured origin or scope.
@@ -506,7 +510,9 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             result.artifact.version = request.attempt;
             result.artifact.hash = agents::AgentWorkflow::ArtifactHash(result.artifact.content);
             result.diagnostic = result.verified ? "Bounded analytical response contract passed."
-                                                : "The provider reported insufficient evidence or exceeded the response contract.";
+                                : claimedVerified ? "The provider deliverable contract was invalid."
+                                : modelEndedToolSelection ? "The model ended tool selection and declared insufficient evidence."
+                                                         : "The provider declared insufficient evidence.";
         }
         catch (...)
         {
