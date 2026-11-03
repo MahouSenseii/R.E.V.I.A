@@ -141,9 +141,11 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
         }
         output += BoundedText(entry, 8192 - output.size()) + "\n";
     }
+    const Json contentDigest =
+        request.type == actions::ActionType::ListDirectory ? Json(nullptr) : Json(audit::ContentDigest(outcome.result.content));
     Json receipt = {{"actionId", BoundedText(request.id, 128)}, {"action", actions::ToString(request.type)},
         {"succeeded", outcome.Succeeded()}, {"attempted", outcome.result.attempted}, {"message", BoundedText(outcome.Message(), 1024)},
-        {"contentDigest", audit::ContentDigest(outcome.result.content)}, {"output", output}, {"truncated", truncated}};
+        {"contentDigest", contentDigest}, {"output", output}, {"truncated", truncated}};
     if (request.type == actions::ActionType::ExecuteProcess)
     {
         AddPathIdentity(receipt, "executable", request.process.executable);

@@ -55,6 +55,22 @@ void RunAgentToolWorkerTests()
         "A runtime reporting failure became verified tool success.");
     outcome.runtimeError.clear();
     outcome.result.content.clear();
+    actions::ActionRequest listing = read;
+    listing.type = actions::ActionType::ListDirectory;
+    listing.source = actions::Utf8ToPath("C:/workspace");
+    actions::ActionOutcome listingOutcome;
+    listingOutcome.result.succeeded = listingOutcome.result.attempted = true;
+    for (const bool hasEntries : {true, false})
+    {
+        listingOutcome.result.entries = hasEntries ? std::vector<std::string>{"[FILE]  example.txt"} : std::vector<std::string>{};
+        const auto encoded = agents::WorkerToolReceipt(listing, listingOutcome);
+        const auto listed = nlohmann::json::parse(encoded);
+        Check(listed.at("contentDigest").is_null() && listed.at("output") == (hasEntries ? "[FILE]  example.txt\n" : "") &&
+                  listed.at("source") == "C:/workspace" && listed.at("pathDigests").at("source") == audit::ContentDigest("C:/workspace") &&
+                  listed.at("succeeded") == true && listed.at("attempted") == true && listed.at("truncated") == false &&
+                  encoded.size() <= agents::WorkerToolOutputReservation,
+            "A directory receipt claimed a file-content digest or lost its listing, identity, outcome or byte bound.");
+    }
     const std::vector<std::string> paths = {"C:/workspace/quote\"and/slash\n.conf",
         "C:/workspace/\xE7\x95\x8C\xF0\x9F\x99\x82.conf", "C:/" + std::string(1500, '\x01')};
     for (const auto& path : paths)
