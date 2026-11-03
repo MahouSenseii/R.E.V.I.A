@@ -715,30 +715,89 @@ def require_counts(result, max_tokens):
     require(not reasons, '; '.join(reasons))
 
 
+def readiness_error(error):
+    """Keep useful codes, never arbitrary messages/bodies/credentials/paths."""
+    result = {'exception_type': type(error).__name__[:64]}
+    for name, attribute in (('errno', 'errno'), ('winerror', 'winerror'), ('http_status', 'status')):
+        value = getattr(error, attribute, None)
+        result[name] = value if type(value) is int else None
+    return result
+
+
+def readiness_event(trace, stage, elapsed, *, response=None, error=None, alias=None):
+    trace['stage'] = stage
+    trace['events_seen'] += 1
+    event = {'ordinal': trace['events_seen'], 'stage': stage, 'elapsed_ms': max(0, elapsed)*1000,
+             'http_status': 200 if error is None else None}
+    if error is not None:
+        event.update(readiness_error(error))
+        if stage == 'wrong_key_probe' and event['http_status'] in (401, 403):
+            trace['wrong_key_rejected'] = True
+        elif isinstance(error, (OSError, http.client.HTTPException, backend.BackendHttpError)):
+            trace['last_transport_error'] = dict(event)
+    elif stage in ('initial_health', 'inner_health'):
+        okay = response.get('status') == 'ok'
+        event['health_ok'] = okay
+        trace['health_ok'] = trace['health_ok'] or okay
+    elif stage == 'authorized_tokenizer':
+        trace['authorized_tokenizer'] = isinstance(response.get('tokens'), list) and bool(response['tokens'])
+    elif stage == 'model_inventory':
+        data = response.get('data')
+        trace['model_alias_verified'] = (isinstance(data, list) and all(isinstance(item, dict) for item in data)
+                                          and [item.get('id') for item in data] == [alias])
+    elif stage == 'properties':
+        settings = response.get('default_generation_settings')
+        trace['context_slots_verified'] = (isinstance(settings, dict) and settings.get('n_ctx') == CONTEXT
+                                           and response.get('total_slots') == 1)
+    trace['events'].append(event)
+    if len(trace['events']) > 32:
+        del trace['events'][16]  # Preserve the first 16 and most recent 16.
+    trace['events_dropped'] = trace['events_seen']-len(trace['events'])
+
+
 def ready(server, port, alias, secret):
+    started = time.monotonic()
+    trace = {'status': 'checking', 'ready': False, 'stage': 'not_started', 'events': [],
+             'events_seen': 0, 'events_dropped': 0, 'last_transport_error': None,
+             'health_ok': False, 'wrong_key_rejected': False, 'authorized_tokenizer': False,
+             'model_alias_verified': False, 'context_slots_verified': False}
+    # The existing finally receipt saves this record even if readiness aborts.
+    server.record['readiness'] = trace
     timer = threading.Timer(min(45, server.deadline-time.monotonic()-2),
                             lambda: server.abort('Startup absolute 45-second deadline exceeded'))
     timer.daemon = True
     timer.start()
     try:
-        return _ready(server, port, alias, secret)
+        properties = _ready(server, port, alias, secret)
+        trace.update(status='ready', ready=True)
+        return properties
+    except BaseException as error:
+        trace.update(status='failed', terminal_error=readiness_error(error))
+        raise
     finally:
+        trace['elapsed_ms'] = max(0, time.monotonic()-started)*1000
         timer.cancel()
         timer.join(.1)
 
 
 def _ready(server, port, alias, secret):
     started = time.monotonic()
+    trace = server.record['readiness']
     while time.monotonic()-started < 45:
         server.ensure()
         try:
-            health = json_request(server, port, secret, '/health')
+            health = bounded_original(server, backend.request_json, port, '/health', None,
+                                      HTTP_SECONDS, secret, trace, 'initial_health', alias)
             if health.get('status') == 'ok':
                 # Reuse the existing exact authenticated inventory checks, but
                 # its request function is bounded by this controller's watchdog.
                 original = backend.request_json
-                backend.request_json = lambda p, path, payload=None, timeout=180, api_key=None: bounded_original(
-                    server, original, p, path, payload, timeout, api_key)
+                def observed(p, path, payload=None, timeout=180, api_key=None):
+                    stage = ('inner_health' if path == '/health' else
+                             ('authorized_tokenizer' if api_key == secret else 'wrong_key_probe') if path == '/tokenize' else
+                             'model_inventory' if path == '/v1/models' else 'properties' if path == '/props' else 'other')
+                    return bounded_original(server, original, p, path, payload, timeout, api_key, trace, stage, alias)
+                backend.request_json = observed
                 try:
                     return backend.wait_ready(ServerPoll(server), port, alias, CONTEXT, api_key=secret)
                 finally:
@@ -752,10 +811,18 @@ def _ready(server, port, alias, secret):
     raise TimeoutError('Owned server startup exceeded 45 seconds')
 
 
-def bounded_original(server, function, port, path, payload, timeout, key):
-    with http_deadline(server) as allowance:
-        value = function(port, path, payload, timeout=min(timeout, allowance), api_key=key)
-    require(len(json.dumps(value, ensure_ascii=False).encode()) <= 65536, 'Readiness metadata exceeds cap')
+def bounded_original(server, function, port, path, payload, timeout, key, trace=None, stage=None, alias=None):
+    started = time.monotonic()
+    try:
+        with http_deadline(server) as allowance:
+            value = function(port, path, payload, timeout=min(timeout, allowance), api_key=key)
+        require(len(json.dumps(value, ensure_ascii=False).encode()) <= 65536, 'Readiness metadata exceeds cap')
+    except BaseException as error:
+        if trace is not None:
+            readiness_event(trace, stage, time.monotonic()-started, error=error)
+        raise
+    if trace is not None:
+        readiness_event(trace, stage, time.monotonic()-started, response=value, alias=alias)
     return value
 
 

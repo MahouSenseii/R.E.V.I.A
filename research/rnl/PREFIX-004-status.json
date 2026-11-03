@@ -1,0 +1,16 @@
+{
+  "experiment": "PREFIX-004",
+  "status": "stopped_at_readiness_no_prefix_comparison",
+  "protocol_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
+  "report": "RESULTS-PREFIX-004.md",
+  "summary": "results/PREFIX-004/summary.json",
+  "owned_launches": 1,
+  "completed_comparison_cells": 0,
+  "readiness_verified": false,
+  "cache_or_latency_result": null,
+  "performance_claim": null,
+  "cleanup_confirmed": true,
+  "training_or_GPU_work": false,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false
+}

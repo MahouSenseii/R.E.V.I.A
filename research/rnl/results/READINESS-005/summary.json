@@ -1,0 +1,500 @@
+{
+  "control": "READINESS-005-owned-HTTP",
+  "model_or_llama_execution": false,
+  "invocation_count": 1,
+  "aggregate_cap_seconds": 15,
+  "HTTP_seconds": 1,
+  "source_sha256": "e8e1ec69699775b3a5b87d10d26e889447e4e6f0fdb529bb3048b1302e42eaeb",
+  "status": "restricted_socket_denial_then_permitted_nonmodel_control_passed",
+  "properties": null,
+  "performance_claim": null,
+  "log_is_not_health_proof": true,
+  "terminal_error": {
+    "exception_type": "RuntimeError",
+    "errno": null,
+    "winerror": null,
+    "http_status": null
+  },
+  "owned_server": {
+    "label": "nonmodel-http",
+    "limits_verified": true,
+    "cleanup_exit_confirmed": true,
+    "memory_cap_bytes": 2147483648,
+    "log_cap_bytes": 65536,
+    "raw_log_bytes": 28,
+    "peak_working_set_bytes": 21966848,
+    "peak_commit_bytes": 12398592,
+    "errors": [],
+    "affinity_mask": 1,
+    "job_limit_flags": 8472,
+    "working_set_max_bytes": 2147483648,
+    "working_set_flags": 6,
+    "readiness": {
+      "status": "failed",
+      "ready": false,
+      "stage": "initial_health",
+      "events": [
+        {
+          "ordinal": 1,
+          "stage": "initial_health",
+          "elapsed_ms": 47.000000000025466,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 2,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 3,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 4,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 5,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 6,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 7,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 8,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 9,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 10,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 11,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 12,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 13,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 14,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 15,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 16,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 102,
+          "stage": "initial_health",
+          "elapsed_ms": 16.000000000076398,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 103,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 104,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 105,
+          "stage": "initial_health",
+          "elapsed_ms": 16.000000000076398,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 106,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 107,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 108,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 109,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 110,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 111,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 112,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 113,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 114,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 115,
+          "stage": "initial_health",
+          "elapsed_ms": 14.99999999987267,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 116,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        },
+        {
+          "ordinal": 117,
+          "stage": "initial_health",
+          "elapsed_ms": 0,
+          "http_status": null,
+          "exception_type": "PermissionError",
+          "errno": 13,
+          "winerror": 10013
+        }
+      ],
+      "events_seen": 117,
+      "events_dropped": 85,
+      "last_transport_error": {
+        "ordinal": 117,
+        "stage": "initial_health",
+        "elapsed_ms": 0,
+        "http_status": null,
+        "exception_type": "PermissionError",
+        "errno": 13,
+        "winerror": 10013
+      },
+      "health_ok": false,
+      "wrong_key_rejected": false,
+      "authorized_tokenizer": false,
+      "model_alias_verified": false,
+      "context_slots_verified": false,
+      "terminal_error": {
+        "exception_type": "RuntimeError",
+        "errno": null,
+        "winerror": null,
+        "http_status": null
+      },
+      "elapsed_ms": 12985.000000000127
+    },
+    "exit_code": 57348,
+    "fault": null
+  },
+  "credentials_empty": true,
+  "elapsed_seconds": 13.0,
+  "experiment": "READINESS-005",
+  "source_base_local_commit": "e9e9d832fa382cf2e7ad96477252d84d3e2e4de8",
+  "source_base_remote_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
+  "fixture_sha256": "d09104cf9cdd51ead800dad5a3d6fd77fe3f6d49d438891f2576acd29f036e2a",
+  "tests_sha256": "5ea80eaad4783ba8c0727e12c790d49bbbd9afcb932baea0434027852640ad54",
+  "test_controls": {
+    "collector_passed": 23,
+    "new_readiness_controls": 8,
+    "existing_mocked_backend_helper_passed": 16,
+    "data_only_tests_use_real_readiness_and_helper": true,
+    "original_red_failures": 10,
+    "malformed_response_red_failures": 5
+  },
+  "raw_wire_summary_sha256": "a885e7b572078ffdcd418dd9d94b7a698272c9e184b7ee1be33ecc1220b97e2e",
+  "raw_wire_summary_bytes": 10020,
+  "log_lines": [
+    "nonmodel-fixture-listening"
+  ],
+  "cleanup_verification": {
+    "own_PID_absent": true,
+    "credential_directory_empty": true,
+    "prior_owned_exit_confirmed": true,
+    "other_process_enumeration_or_change": false
+  },
+  "interpretation": {
+    "current_initial_health_socket_denial_observed": true,
+    "policy_component_identified": false,
+    "historical_PREFIX004_cause_proven": false,
+    "model_cache_quality_or_latency_conclusion": null,
+    "unapproved_retry_performed": false,
+    "approved_permitted_nonmodel_repeat_performed": true,
+    "model_or_llama_retry_performed": false,
+    "permitted_context_synthetic_readiness_passed": true
+  },
+  "error_code_reference": "https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2",
+  "next_step": "No model run is authorized by this result. Any new model readiness-only proposal needs exact reviewed protocol and approval; no automatic replay.",
+  "permitted_context_followup": {
+    "control": "READINESS-005-owned-HTTP",
+    "model_or_llama_execution": false,
+    "invocation_count": 1,
+    "aggregate_cap_seconds": 15,
+    "HTTP_seconds": 1,
+    "source_sha256": "e8e1ec69699775b3a5b87d10d26e889447e4e6f0fdb529bb3048b1302e42eaeb",
+    "status": "passed",
+    "properties": {
+      "default_generation_settings": {
+        "n_ctx": 2048
+      },
+      "total_slots": 1
+    },
+    "performance_claim": null,
+    "log_is_not_health_proof": true,
+    "snapshot": {
+      "working_set_bytes": 22032384,
+      "private_bytes": 12509184,
+      "commit_bytes": 12509184,
+      "peak_working_set_bytes": 22032384,
+      "peak_commit_bytes": 12517376
+    },
+    "owned_server": {
+      "label": "nonmodel-http",
+      "limits_verified": true,
+      "cleanup_exit_confirmed": true,
+      "memory_cap_bytes": 2147483648,
+      "log_cap_bytes": 65536,
+      "raw_log_bytes": 28,
+      "peak_working_set_bytes": 22032384,
+      "peak_commit_bytes": 12517376,
+      "errors": [],
+      "affinity_mask": 1,
+      "job_limit_flags": 8472,
+      "working_set_max_bytes": 2147483648,
+      "working_set_flags": 6,
+      "readiness": {
+        "status": "ready",
+        "ready": true,
+        "stage": "properties",
+        "events": [
+          {
+            "ordinal": 1,
+            "stage": "initial_health",
+            "elapsed_ms": 532.0000000001528,
+            "http_status": 200,
+            "health_ok": true
+          },
+          {
+            "ordinal": 2,
+            "stage": "inner_health",
+            "elapsed_ms": 15.000000000327418,
+            "http_status": 200,
+            "health_ok": true
+          },
+          {
+            "ordinal": 3,
+            "stage": "wrong_key_probe",
+            "elapsed_ms": 15.99999999962165,
+            "http_status": 401,
+            "exception_type": "BackendHttpError",
+            "errno": null,
+            "winerror": null
+          },
+          {
+            "ordinal": 4,
+            "stage": "authorized_tokenizer",
+            "elapsed_ms": 15.000000000327418,
+            "http_status": 200
+          },
+          {
+            "ordinal": 5,
+            "stage": "model_inventory",
+            "elapsed_ms": 0,
+            "http_status": 200
+          },
+          {
+            "ordinal": 6,
+            "stage": "properties",
+            "elapsed_ms": 15.99999999962165,
+            "http_status": 200
+          }
+        ],
+        "events_seen": 6,
+        "events_dropped": 0,
+        "last_transport_error": null,
+        "health_ok": true,
+        "wrong_key_rejected": true,
+        "authorized_tokenizer": true,
+        "model_alias_verified": true,
+        "context_slots_verified": true,
+        "elapsed_ms": 594.0000000000509
+      },
+      "exit_code": 57348,
+      "fault": null
+    },
+    "credentials_empty": true,
+    "elapsed_seconds": 0.6089999999994689,
+    "execution_context": "One-time explicitly permitted exec_command escalation; no persistent approval or system setting change",
+    "fixture_sha256": "ba6136664fc280d6e68a82d2ed82b2adb02c59d074ddbef14fbebf1c9c6b3445",
+    "raw_summary_sha256": "4f3dda9deb67f30f5d542ed1e005919d35e0a2c99b5e9a8ed6dd67469615d6ee",
+    "raw_summary_bytes": 2783,
+    "log_lines": [
+      "nonmodel-fixture-listening"
+    ],
+    "owned_PID_absent_verified": true,
+    "control_duration_is_not_model_latency": true
+  }
+}

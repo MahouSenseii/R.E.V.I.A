@@ -288,5 +288,195 @@ class AssessmentChecks(unittest.TestCase):
         self.assertFalse(shared['pairs'][0]['total_wall_comparable'])
 
 
+class ReadinessDiagnosticsChecks(unittest.TestCase):
+    """Exercise the real nested readiness gate with only IO/time replaced."""
+    secret = 'public-fixture-owned-key'
+    alias = 'public-fixture-model'
+
+    @contextlib.contextmanager
+    def fixture(self, transport):
+        class Clock:
+            value = 0.
+            def now(self): return self.value
+            def sleep(self, seconds): self.value += seconds
+        clock = Clock()
+        class Server:
+            deadline = 47.
+            def __init__(self): self.record = {}; self.fault = None
+            def ensure(self):
+                if self.fault: raise RuntimeError(self.fault)
+                if clock.value >= 45: raise TimeoutError('fixture deadline')
+            def abort(self, reason): self.fault = reason
+        timers = []
+        class Timer:
+            daemon = False
+            def __init__(self, seconds, callback):
+                self.cancelled = False; self.callback = callback; timers.append(self)
+            def start(self): pass
+            def cancel(self): self.cancelled = True
+            def join(self, *_): pass
+        server = Server()
+        server.fire_startup_watchdog = lambda: timers[0].callback()
+        with patch.object(experiment.backend, 'request_json', side_effect=transport), \
+             patch.object(experiment.time, 'monotonic', clock.now), \
+             patch.object(experiment.time, 'sleep', clock.sleep), \
+             patch.object(experiment.threading, 'Timer', Timer), \
+             patch.object(experiment.http.client, 'HTTPConnection', side_effect=AssertionError('No real HTTP')), \
+             patch.object(experiment.guard, '_apis', side_effect=AssertionError('No native APIs')):
+            original = experiment.backend.request_json
+            yield server, clock
+            self.assertIs(experiment.backend.request_json, original)
+            self.assertTrue(all(timer.cancelled for timer in timers))
+
+    def healthy(self, port, path, payload=None, timeout=180, *, api_key=None):
+        if path == '/health': return {'status': 'ok'}
+        if path == '/tokenize':
+            if api_key != self.secret: raise experiment.backend.BackendHttpError(path, 401)
+            return {'tokens': [42]}
+        if path == '/v1/models': return {'data': [{'id': self.alias}]}
+        if path == '/props': return {'default_generation_settings': {'n_ctx': 2048}, 'total_slots': 1}
+        raise AssertionError('Unexpected fixture endpoint')
+
+    def test_permission_failures_survive_deadline_with_codes_and_bounded_trace(self):
+        # Removing transport-error retention must lose the OS cause of the stop.
+        error = PermissionError(13, 'private C:\\private\\file '+self.secret)
+        error.winerror = 10013
+        def denied(*_, **__): raise error
+        with self.fixture(denied) as (server, _):
+            with self.assertRaises((TimeoutError, RuntimeError)):
+                experiment.ready(server, 18080, self.alias, self.secret)
+            trace = server.record.get('readiness', {})
+            self.assertFalse(trace.get('ready', True))
+            self.assertEqual(trace.get('last_transport_error', {}).get('exception_type'), 'PermissionError')
+            self.assertEqual(trace.get('last_transport_error', {}).get('errno'), 13)
+            self.assertEqual(trace.get('last_transport_error', {}).get('winerror'), 10013)
+            self.assertEqual(trace.get('last_transport_error', {}).get('stage'), 'initial_health')
+            self.assertGreater(trace.get('events_seen', 0), len(trace.get('events', [])))
+            self.assertLessEqual(len(trace['events']), 32)
+            self.assertEqual(trace['events_dropped'], trace['events_seen']-len(trace['events']))
+            self.assertNotIn(self.secret, json.dumps(trace))
+            self.assertNotIn('C:\\private', json.dumps(trace))
+            self.assertNotIn('18080', json.dumps(trace))
+
+    def test_nested_authorized_tokenizer_timeout_is_retained_after_health_success(self):
+        # Instrumenting only outer health would miss this inner-helper timeout.
+        def timeout(port, path, payload=None, timeout=180, *, api_key=None):
+            if path == '/tokenize' and api_key == self.secret:
+                raise TimeoutError('body with '+self.secret)
+            return self.healthy(port, path, payload, timeout, api_key=api_key)
+        with self.fixture(timeout) as (server, _):
+            with self.assertRaises((TimeoutError, RuntimeError)):
+                experiment.ready(server, 18080, self.alias, self.secret)
+            trace = server.record.get('readiness', {})
+            self.assertTrue(trace.get('health_ok'))
+            self.assertTrue(trace.get('wrong_key_rejected'))
+            self.assertFalse(trace.get('authorized_tokenizer', True))
+            self.assertEqual(trace.get('last_transport_error', {}).get('stage'), 'authorized_tokenizer')
+            self.assertEqual(trace.get('last_transport_error', {}).get('exception_type'), 'TimeoutError')
+            self.assertFalse(trace.get('ready', True))
+
+    def test_complete_auth_identity_and_capacity_gate_marks_ready(self):
+        # Health alone must never mark full readiness true.
+        with self.fixture(self.healthy) as (server, _):
+            properties = experiment.ready(server, 18080, self.alias, self.secret)
+            self.assertEqual(properties['total_slots'], 1)
+            trace = server.record.get('readiness', {})
+            for gate in ('ready', 'health_ok', 'wrong_key_rejected', 'authorized_tokenizer',
+                         'model_alias_verified', 'context_slots_verified'):
+                self.assertTrue(trace.get(gate), gate)
+            rejection = next(x for x in trace['events'] if x['stage'] == 'wrong_key_probe')
+            self.assertEqual(rejection['http_status'], 401)
+            self.assertNotIn(self.secret, json.dumps(trace))
+
+    def test_semantic_gate_failures_remain_immediate_and_visible(self):
+        # Relaxing a wrong-key, alias or capacity gate must still fail readiness.
+        for failure, wanted in (('wrong-key', 'wrong_key_probe'), ('alias', 'model_inventory'),
+                                ('context', 'properties'), ('slots', 'properties')):
+            def incompatible(port, path, payload=None, timeout=180, *, api_key=None):
+                if failure == 'wrong-key' and path == '/tokenize': return {'tokens': [42]}
+                if failure == 'alias' and path == '/v1/models': return {'data': [{'id': 'different-model'}]}
+                if path == '/props' and failure in ('context', 'slots'):
+                    return {'default_generation_settings': {'n_ctx': 4096 if failure == 'context' else 2048},
+                            'total_slots': 2 if failure == 'slots' else 1}
+                return self.healthy(port, path, payload, timeout, api_key=api_key)
+            with self.subTest(failure=failure), self.fixture(incompatible) as (server, clock):
+                with self.assertRaises(RuntimeError):
+                    experiment.ready(server, 18080, self.alias, self.secret)
+                trace = server.record.get('readiness', {})
+                self.assertFalse(trace.get('ready', True))
+                self.assertEqual(trace.get('stage'), wanted)
+                self.assertLess(clock.value, 1)
+                self.assertEqual(trace.get('terminal_error', {}).get('exception_type'), 'RuntimeError')
+
+    def test_loading_and_503_are_distinguished_from_validated_health(self):
+        # A repeated non-ok health result is neither a socket failure nor ready.
+        for response in ('loading', '503'):
+            def loading(port, path, *_, **__):
+                if response == '503': raise experiment.backend.BackendHttpError(path, 503)
+                return {'status': self.secret, 'body': 'private C:\\private\\file'}
+            with self.subTest(response=response), self.fixture(loading) as (server, _):
+                with self.assertRaises((TimeoutError, RuntimeError)):
+                    experiment.ready(server, 18080, self.alias, self.secret)
+                trace = server.record.get('readiness', {})
+                self.assertFalse(trace.get('health_ok', True))
+                self.assertFalse(trace.get('ready', True))
+                self.assertEqual(trace.get('events', [{}])[0].get('http_status'), 503 if response == '503' else 200)
+                self.assertNotIn(self.secret, json.dumps(trace))
+                self.assertNotIn('C:\\private', json.dumps(trace))
+
+    def test_connection_refusal_then_recovery_preserves_the_initial_error(self):
+        # Recovery must not erase evidence of the refused connection.
+        refused = [False]
+        def transport(port, path, payload=None, timeout=180, *, api_key=None):
+            if not refused[0]:
+                refused[0] = True
+                raise ConnectionRefusedError(10061, 'fixture refused')
+            return self.healthy(port, path, payload, timeout, api_key=api_key)
+        with self.fixture(transport) as (server, _):
+            experiment.ready(server, 18080, self.alias, self.secret)
+            trace = server.record.get('readiness', {})
+            self.assertTrue(trace.get('ready'))
+            self.assertEqual(trace.get('events', [{}])[0].get('exception_type'), 'ConnectionRefusedError')
+
+    def test_watchdog_during_nested_request_preserves_os_cause_and_restores_helper(self):
+        # A terminal watchdog must not replace the earlier actionable OS code.
+        refused = [False]
+        def transport(port, path, payload=None, timeout=180, *, api_key=None):
+            if not refused[0]:
+                refused[0] = True
+                raise ConnectionRefusedError(10061, 'fixture refused')
+            if path == '/tokenize' and api_key == self.secret:
+                server.fire_startup_watchdog()
+            return self.healthy(port, path, payload, timeout, api_key=api_key)
+        with self.fixture(transport) as (server, _):
+            with self.assertRaises(RuntimeError):
+                experiment.ready(server, 18080, self.alias, self.secret)
+            trace = server.record['readiness']
+            self.assertFalse(trace['ready'])
+            self.assertEqual(trace['last_transport_error']['exception_type'], 'ConnectionRefusedError')
+            self.assertEqual(trace['last_transport_error']['errno'], 10061)
+            self.assertEqual(trace['terminal_error']['exception_type'], 'RuntimeError')
+            self.assertEqual(trace['stage'], 'authorized_tokenizer')
+
+    def test_malformed_nested_metadata_is_recorded_before_original_gate_rejects_it(self):
+        # The observer must not throw before preserving a malformed response's stage.
+        cases = [('/v1/models', {'data': None}, 'model_inventory'),
+                 ('/v1/models', {'data': [None]}, 'model_inventory'),
+                 ('/v1/models', {'data': 'malformed'}, 'model_inventory'),
+                 ('/props', {'default_generation_settings': None, 'total_slots': 1}, 'properties'),
+                 ('/props', {'default_generation_settings': [], 'total_slots': 1}, 'properties')]
+        for route, body, stage in cases:
+            def transport(port, path, payload=None, timeout=180, *, api_key=None):
+                return body if path == route else self.healthy(port, path, payload, timeout, api_key=api_key)
+            with self.subTest(body=body), self.fixture(transport) as (server, _):
+                with self.assertRaises((TypeError, AttributeError, RuntimeError)):
+                    experiment.ready(server, 18080, self.alias, self.secret)
+                trace = server.record['readiness']
+                self.assertFalse(trace['ready'])
+                self.assertEqual(trace['events'][-1]['stage'], stage)
+                self.assertEqual(trace['events'][-1]['http_status'], 200)
+                self.assertFalse(trace['model_alias_verified'] if stage == 'model_inventory' else trace['context_slots_verified'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

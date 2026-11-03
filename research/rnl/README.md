@@ -23,7 +23,7 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation and PREFIX-004 preparation; no language-model quality claim |
+| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation; PREFIX-004 stopped at readiness with no cache comparison |
 | Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract and RNL-003 conditional synthetic CPU benefit |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
@@ -58,13 +58,24 @@ discriminators and unknown installed-runtime identity are recorded separately.
 No model experiment ran during that audit. The subsequent read-only embedding
 lifecycle check did not establish a supported changed-weight cache bug.
 
-PREFIX-004 is now being prepared locally to qualify existing prefix reuse with
-the verified Qwen3.5-0.8B artifact and fixed public conversations. Its
-[concrete protocol](PREFIX-004.md) and [read-only identities](PREFIX-004-identity.json)
-are proposals awaiting parent review before any model/server execution. The
-installed CUDA runtime must first be isolated into a reviewed CPU-only staging
-directory. No real-model performance result, product change or publication is
-claimed by this preparation.
+PREFIX-004 made one approved CPU-only attempt with the verified Qwen3.5-0.8B
+artifact and fixed public conversations. It stopped at the 45-second readiness
+gate, with owned cleanup confirmed. The log reports model loaded and listening
+at about 1.14 seconds; the failed readiness cause remains unresolved. No prefix
+comparison, TTFT, prefill or quality result was measured, and no retry followed.
+See the [result and limits](RESULTS-PREFIX-004.md), [status](PREFIX-004-status.json),
+[evidence](results/PREFIX-004/summary.json), [frozen protocol](PREFIX-004.md) and
+[identity snapshot](PREFIX-004-identity.json). The positive RNL-003 result stands;
+Candidate for Revia and Integrated remain None. A model-free diagnostic follow-up now
+records a current /health socket-permission denial (WinError 10013). It repaired
+lost evidence and passed 23 collector plus 16 mocked helper controls; it did not
+retry the model or prove the historical timeout's cause. See [READINESS-005](READINESS-005.md)
+and its [sanitized evidence](results/READINESS-005/summary.json). RNL's broader
+trainable adaptive/stateful architecture remains the goal; cache tests qualify
+one ingredient. A separately approved repeat outside the restricted execution
+context passed all fake-server readiness gates in 0.609 seconds, with cleanup
+confirmed. That is diagnostic-control duration, not model latency; no model
+rerun, cache gain or historical-cause proof is established.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored

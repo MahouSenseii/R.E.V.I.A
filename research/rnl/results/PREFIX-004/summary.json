@@ -1,0 +1,190 @@
+{
+  "experiment": "PREFIX-004",
+  "status": "stopped_at_readiness_no_prefix_comparison",
+  "protocol_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
+  "equivalent_local_source_commit": "e9e9d832fa382cf2e7ad96477252d84d3e2e4de8",
+  "source_tree": "555d132076931977a981015e3b67cac85fba7e91",
+  "source_hashes": {
+    "protocol": "f48198f834292201ebacb231745d30cb68cef0413e53d7384d19b5d1c9af95c6",
+    "driver": "29511daf30e85ecf633f6ed47cb83f5473305ef2d70f0dead314464726003fbb",
+    "fixtures": "f262e45aa6286e4fa07cf9a03c16b0b15739be3808a748b9c7c6796663806701",
+    "backend_helper": "914b87e3fbb2e9fdaec751d7ebbb996b6903bf1db35861c9b11fc4aa655bb52c",
+    "resource_helper": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
+    "identity_manifest": "552df3cc6a9614f10a1c55f58e72abb66034cb36aa6a54781d933f63d55e0685"
+  },
+  "started_utc": "2026-11-02T21:54:21.983979+00:00",
+  "finished_utc": "2026-11-02T21:55:09.262348+00:00",
+  "attempt_elapsed_seconds": 47.29700000002049,
+  "attempt_time_is_not_load_time_or_TTFT": true,
+  "terminal_reason": "RuntimeError: Startup absolute 45-second deadline exceeded",
+  "command_tool_exit_code": 1,
+  "model": {
+    "name": "Qwen3.5-0.8B-Q4_K_M.gguf",
+    "bytes": 532517120,
+    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+  },
+  "runtime_identity_reference": "../../PREFIX-004-identity.json",
+  "audited_source_commit": "3cb7ffb1a1f612d5e4a46244ae5a3c77ad934a70",
+  "runtime_files": [
+    {
+      "name": "llama-server.exe",
+      "bytes": 9216,
+      "sha256": "c932a2ac50dbdc5768399723e2e6e6295f7abcdf5243220729022c38ae2c415a"
+    },
+    {
+      "name": "llama-server-impl.dll",
+      "bytes": 9996288,
+      "sha256": "167a1a8890390fb47b5056123879c0c1116c39e62a92398c77dbaeb1d3bf806d"
+    },
+    {
+      "name": "llama-common.dll",
+      "bytes": 8077312,
+      "sha256": "e616788eafbfad9c15a8c3adfab8107f232457ef0b5c70f963ee827dfaca2aee"
+    },
+    {
+      "name": "llama.dll",
+      "bytes": 2921472,
+      "sha256": "a96f1296b0def822306ca80e8d1ee71bf450d609d2b5fde2733a7d8ab5549cab"
+    },
+    {
+      "name": "ggml.dll",
+      "bytes": 86016,
+      "sha256": "1defc07c048a19d5edc8243f79eb120b1864dd6ae4cd816577dee2e47db1aca5"
+    },
+    {
+      "name": "ggml-base.dll",
+      "bytes": 773632,
+      "sha256": "842c3084ed1817c3a0bbc0da396c0b46e18d0b3f2a87171104a6c12029524988"
+    },
+    {
+      "name": "ggml-cpu-x64.dll",
+      "bytes": 870400,
+      "sha256": "1c923a0d3b6a85b075583442c027871c8e739f910f088bff4b41ac0c01136165"
+    },
+    {
+      "name": "mtmd.dll",
+      "bytes": 1606656,
+      "sha256": "958c1df28e095d837231afd0c53644761accea484011e66db0b60c780f95b0b6"
+    },
+    {
+      "name": "libomp140.x86_64.dll",
+      "bytes": 661856,
+      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+    }
+  ],
+  "staging": {
+    "file_count": 10,
+    "total_bytes": 557519968,
+    "exact_allowlist_and_SHA256_verified_before_and_after": true,
+    "GPU_RPC_other_CPU_plugins_staged": false,
+    "retained_for_review": true
+  },
+  "execution": {
+    "planned_owned_launches": 21,
+    "actual_owned_launches": 1,
+    "completed_measurement_cells": 0,
+    "primer_records": 0,
+    "target_records": 0,
+    "fixture_tokenization_completed": false,
+    "authenticated_readiness_verified": false,
+    "HTTP_readiness_attempt_count": null,
+    "HTTP_error_detail": null,
+    "retry_or_limit_expansion": false
+  },
+  "limits": {
+    "attempt_seconds": 1200,
+    "server_memory_bytes": 2147483648,
+    "artifacts_bytes_exclusive": 10485760,
+    "staging_bytes_exclusive": 681574400,
+    "logical_CPU_affinity_mask": 1,
+    "hard_working_set_bytes": 2147483648,
+    "startup_seconds": 45,
+    "HTTP_operation_seconds": 30
+  },
+  "startup_readiness_process_memory": {
+    "peak_working_set_bytes": 677187584,
+    "peak_commit_bytes": 376504320,
+    "active_inference_memory": false,
+    "controller_memory_measured": false
+  },
+  "cleanup": {
+    "owned_exit_confirmed": true,
+    "owned_termination_code": 57348,
+    "errors": [],
+    "owned_credential_directory_empty": true,
+    "other_process_or_port_inspection_performed": false
+  },
+  "client_timer": {
+    "name": "perf_counter",
+    "resolution_seconds": 1e-07,
+    "empirical_min_positive_gap_seconds": 1.9994331523776054e-07,
+    "sample_reads": 2000,
+    "monotonic": true,
+    "timer_is_not_CPU_frequency": true
+  },
+  "measurements": {
+    "tokenization_choice": null,
+    "fixture_prompt_token_counts": null,
+    "cache_n": null,
+    "prompt_n": null,
+    "predicted_n": null,
+    "TTFT_ms": null,
+    "prefill_ms": null,
+    "target_wall_ms": null,
+    "quality_grade": null,
+    "cache_enabled_disabled_ratio": null,
+    "performance_claim": null
+  },
+  "unknown_reason": "Readiness did not complete before its watchdog; fixture tokenization, primers and targets were not reached. The helper catches connection/OS/HTTP exceptions without retaining their details.",
+  "observed_log_not_load_benchmark": {
+    "model_loaded_and_listening_reported_at_approximately_seconds": 1.14,
+    "threadpool_threads": 1,
+    "slots": 1,
+    "context": 2048,
+    "authenticated_properties_verified": false,
+    "dynamic_module_inventory_verified": false
+  },
+  "sanitized_server_log": [
+    "warning: no usable GPU found, --gpu-layers option will be ignored",
+    "warning: one possible reason is that llama.cpp was compiled without GPU support",
+    "warning: consult docs/build.md for compilation instructions",
+    "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.",
+    "0.00.029.155 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+    "0.00.044.732 I srv    load_model: loading model '<owned-stage>\\model\\Qwen3.5-0.8B-Q4_K_M.gguf'",
+    "0.00.681.106 I cmn          init: llama threadpool init, n_threads = 1",
+    "0.01.134.175 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'",
+    "0.01.134.329 W srv          init: --cache-idle-slots requires --cache-ram, disabling",
+    "0.01.141.616 I srv  llama_server: model loaded",
+    "0.01.141.640 I srv  llama_server: listening on http://127.0.0.1:<ephemeral-port>"
+  ],
+  "raw_evidence_retained_privately": [
+    {
+      "name": "attempt.json",
+      "bytes": 2569,
+      "sha256": "4275acffbf5e62efba39d164d84d214507fb2c900821606b5cdbecfbb1794b3e"
+    },
+    {
+      "name": "preflight.json",
+      "bytes": 665,
+      "sha256": "ccbe5a88fac02dd34f7eaef73d58408484d1bfbb4a97737f33f3ad3bcc0eadfe"
+    },
+    {
+      "name": "preflight.server.log",
+      "bytes": 963,
+      "sha256": "0144c1b13ccb60632ade8cbd3bb83098c47c7a1633ad2adb870a3ad3da18974a"
+    }
+  ],
+  "raw_evidence_bytes": 4197,
+  "interpretation": {
+    "cache_hypothesis_qualified": false,
+    "cache_hypothesis_rejected": false,
+    "slow_model_loading_established": false,
+    "GPU_or_memory_fault_established": false,
+    "latency_or_memory_improvement_established": false,
+    "RNL_003_positive_result_changed": false,
+    "candidate_for_revia": false,
+    "integrated_into_revia": false
+  },
+  "no_training_GPU_download_install_or_application_change": true,
+  "next_decision": "Review a small nonmodel readiness-error fixture and bounded diagnostic capture before requesting any separately reviewed live attempt. No automatic retry."
+}
