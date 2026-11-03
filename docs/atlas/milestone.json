@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
-  "milestone": "PR20 delegation grounding merged with exact-candidate application CI",
-  "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
+  "milestone": "PR21 task-save failure handling merged; fresh source-successor main CI passed",
+  "recorded_utc": "2026-11-03T02:30:41.437465+00:00",
   "refresh_mode": "Manual milestone snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "source": {
-    "state": "PR20 merged; thirteen earlier counted repairs plus three bounded delegation corrections; installed Revia unchanged",
-    "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
-    "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+    "state": "PR21 merged; earlier thirteen counted repairs and three delegation corrections retained; installed Revia unchanged",
+    "main_commit": "34f47e11c661a146a1c857270ffad2061e44dc28",
+    "main_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
     "source_files": 1410,
     "incremental_changed_paths": [
       67,
@@ -19,23 +19,28 @@
       3,
       1,
       1,
-      9
+      9,
+      4
     ],
     "reliability_repairs": 13,
     "installed_app_updated": false,
     "release_qualified": false,
-    "file_count_scope": "Merged Git tree contains 1,410 blobs across code, tests, configuration, docs and assets. Git commit/tree identity is distinct from full hosted checkout byte provenance. Candidate CI and merge differ only in preserved newer research.html.",
+    "file_count_scope": "The merged tree contains1410 repository blobs. Four reviewed source/test paths changed; candidate and merge trees match. This is not a full hosted byte-provenance claim.",
     "repository_tree_blobs": 1410,
     "test_catalog_maintenance_pr": 15,
     "production_privacy_changed_by_PR15": false,
     "CI_identity": {
-      "commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
-      "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
-      "role": "Primary normal push application CI; PR checkout recorded separately",
-      "PR_checkout_commit": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
-      "PR_checkout_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
-      "content_transfer_to_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "commit": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+      "tree": "3be0737f45f6e33e66c245f745245326de484401",
+      "role": "Fresh main source-successor application CI; only research.html differs from source merge34.",
+      "application_source_merge": "34f47e11c661a146a1c857270ffad2061e44dc28",
+      "candidate_commit": "8b4ef999b0f288de57930d85666d1245c6e3e3fd",
+      "candidate_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
+      "PR_checkout_commit": "d3d0b785d946d6b3a03429e8c2d01e3743a1e181",
+      "PR_checkout_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
       "fresh_merge_main_CI_run_claimed": false,
+      "fresh_merge_main_CI_run_claimed_scope": "Exact merge34 run was canceled.",
+      "fresh_post_merge_source_successor_main_CI_run_claimed": true,
       "full_hosted_checkout_byte_hash_claimed": false
     },
     "fixture_provenance": {
@@ -46,11 +51,12 @@
     },
     "bounded_delegation_corrections": 3,
     "latest_change_scope": {
-      "source_and_tests": 9,
+      "source_and_tests": 4,
       "Atlas_summaries": 2,
-      "total_reviewed_targets": 11
+      "total_reviewed_targets": 6
     },
-    "fixture_provenance_scope": "Historical PR18 fixture provenance retained unchanged; current nine-file delegation provenance is tracked by PR20 and candidate CI identities."
+    "fixture_provenance_scope": "Historical PR18 provenance is retained; PR20 delegation and PR21 checkpoint evidence have separate records.",
+    "bounded_checkpoint_failure_corrections": 1
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "counts": {
@@ -151,6 +157,14 @@
       "checks": "Reused: the preceding direct recorder suite completed 15 functions (13 original, 2 new) after a meaningful RED failure. Not a registered CTest/catalog pass; Foundation stayed held.",
       "next_step": "Keep supported application-only consent; qualify recorder behavior in separately authorized live use.",
       "implementation": "Merged through PR 14; installed app unchanged"
+    },
+    {
+      "id": "CHECKPOINT-SAVE-FAILURES",
+      "name": "Report task-save errors accurately and protect existing saves",
+      "summary": "Report why task progress could not be saved and warn when the latest progress may not recover after restart.",
+      "implementation": "Merged through PR21; installed app unchanged",
+      "checks": "Fresh source-successor main CI passed155/0/2 across six fresh jobs. Retained Windows focused evidence covers17 workflow functions,10 native probes and2 warning cases; changed POSIX code was not executed.",
+      "next_step": "Keep general long-path support and the original hosted timeout cause open."
     }
   ],
   "capabilities": [
@@ -480,6 +494,16 @@
       "name": "Real use and release",
       "state": "Open",
       "detail": "Actual-model recall, physical desktop, real voice/media/GPU, integration, release and deployment remain unqualified. No performance improvement is claimed."
+    },
+    {
+      "name": "General long-path task saves",
+      "state": "Failure handling improved; support remains open",
+      "detail": "PR21 improves error reporting and protects existing saved task state, but deep roots may still refuse saves; latest progress is not guaranteed to recover."
+    },
+    {
+      "name": "Original hosted timing failures",
+      "state": "Retained; cause unresolved",
+      "detail": "InteractiveBrowser and DesktopSmoke timed out in the first PR21 push. Both passed in PR CI, the one unchanged-source Windows rerun and fresh source-successor main CI. Original cause remains unknown."
     }
   ],
   "next": {
@@ -632,8 +656,8 @@
     "branch_commit_skip_ci": false,
     "branch_skip_reason": "No skip directive; both automatic normal push and pull-request application workflows ran.",
     "observed_remote_workflow_runs": 2,
-    "scope": "Exact paragraph-free nine-file candidate application CI; feature push and provisional PR checkout are distinct from final merge identity.",
-    "qualification": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
+    "scope": "Current PR21 task-save checkpoint and verified post-merge source-successor main CI are in checkpoint_failure_handling and latest_terminal_main_checkpoint. workflow, additional_PR_workflow, audit and content_transfer_to_merge remain explicitly historical PR20 records.",
+    "qualification": "Fresh post-merge source-successor main CI on c96137f8 passed all six fresh jobs:157 discovered,155 passed, zero failed and two optional video prerequisite skips. Only research.html differs from application merge34f47e11. The exact-merge34 run was canceled; candidate PR/single-Windows results and original two timeouts remain separate. New nested optional/platform counts were not recounted.",
     "workflow": {
       "observed_utc": "2026-11-02T19:05:07.158Z",
       "run": {
@@ -693,7 +717,9 @@
           "status": "completed",
           "conclusion": "success"
         }
-      ]
+      ],
+      "historical_record": true,
+      "record_scope": "Historical PR20 delegation qualification; not the current PR21 task-save checkpoint."
     },
     "additional_PR_workflow": {
       "id": 41500237179,
@@ -751,7 +777,9 @@
           "status": "completed",
           "conclusion": "success"
         }
-      ]
+      ],
+      "historical_record": true,
+      "record_scope": "Historical PR20 delegation qualification; not the current PR21 task-save checkpoint."
     },
     "audit": {
       "summary": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
@@ -761,7 +789,9 @@
         "Two FFmpeg-dependent entries and 21 nested optional VTube Studio, torch, Pillow or real training/export/evaluation subchecks remain skipped; skips are not passes.",
         "Prior metadata-startup and diagnostic-observer failures remain historical; their cause and local child exit-code capture remain unproven.",
         "Hosted CI does not remeasure local catalog availability, prove the failed reviewed real-model report, install Revia or qualify physical/runtime/release use."
-      ]
+      ],
+      "historical_record": true,
+      "record_scope": "Historical PR20 delegation qualification; not the current PR21 task-save checkpoint."
     },
     "content_transfer_to_merge": {
       "merge_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
@@ -769,70 +799,92 @@
       "application_build_test_dependency_workflow_identical": true,
       "only_complete_tree_difference": "docs/atlas/research.html",
       "research_blob": "7af5b10d0dfbf8c1955a6489978b934fb0f6a2f7",
-      "fresh_merge_main_run_claimed": false
+      "fresh_merge_main_run_claimed": false,
+      "historical_record": true,
+      "record_scope": "Historical PR20 delegation qualification; not the current PR21 task-save checkpoint."
     },
     "later_Atlas_docs_only_commit_is_application_CI_head": true,
-    "later_main_or_docs_CI": "Fresh normal main workflow41509042838 completed successfully at exacta8dc; later research-onlyb2d is not claimed freshly tested. See latest_terminal_main_checkpoint.",
+    "later_main_or_docs_CI": "Source-successor main run41563503496 passed on c96137f8; exact-merge34 run41562200640 was canceled. A later Atlas-only publication may trigger CI, which will be followed read-only without another snapshot/publication loop.",
     "latest_terminal_main_checkpoint": {
-      "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
-      "run_id": 41509042838,
-      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41509042838",
+      "recorded_utc": "2026-11-03T02:30:41.437465+00:00",
+      "run_id": 41563503496,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41563503496",
       "event": "push",
       "branch": "main",
       "status": "completed",
       "conclusion": "success",
-      "tested_commit": "a8dc66e356e5d228c027f2122d4279257fefc229",
-      "tested_tree": "1aeb563eb61bbdf3490f790bb7627765658d4c39",
-      "parent_source_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "tested_commit": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+      "tested_tree": "3be0737f45f6e33e66c245f745245326de484401",
+      "parent_source_merge": "34f47e11c661a146a1c857270ffad2061e44dc28",
       "counts": {
         "jobs_passed": 6,
         "jobs_failed": 0,
         "jobs_skipped": 0,
+        "jobs_fresh": 6,
+        "jobs_reused": 0,
         "ctest_expected": 157,
         "ctest_discovered": 157,
         "ctest_passed": 155,
         "ctest_failed": 0,
         "FFmpeg_prerequisite_skips": 2,
-        "nested_optional_skips": 21,
-        "public_text_platform_case_skips": 1
+        "nested_optional_skips": null,
+        "public_text_platform_case_skips": null
       },
       "native_evidence": {
-        "artifact_id": 13172909780,
-        "official_zip_sha256": "c023a2341af33a48023622c7ee6a7fa0ff56b9688aa69d99306b70a4864ee639",
-        "identityTrusted": true,
-        "ctest_seconds": 655.222,
-        "checkout_build_test_HEAD_matches": true,
-        "tracked_source_diff_count": 0,
-        "all_nine_reviewed_source_hashes_match_candidate_CI": true,
-        "failed_stopping_paragraph_included": false
+        "job_id": 125679492829,
+        "native_log_sha256": "ed5621c873c4d852f2511172822e95c05eaafe4ae5dfe114897fbe9d9ec30c6d",
+        "retained_terminal_evidence_sha256": "f07dc253cea764ff5de5dabdd7d35fb85a543da6070ed17c86465a4774528582",
+        "ctest_seconds": 657.69,
+        "focus_case_seconds": {
+          "InteractiveBrowser": 7.39,
+          "DesktopSmoke": 6.09,
+          "AgentWorkflow": 0.25,
+          "StudioRuntime": 3.33
+        }
       },
-      "qualified_scope": "Fresh complete normal application workflow on the exact merged-source docs head a8dc; includes GNU ld relink, evidence upload and cleanup. No skip directive on this tested commit. Optional/prerequisite skips are not passes.",
-      "limits": "Does not establish real-model reviewed-report success, live cancellation, installed-app changes, performance improvements or runtime/release qualification. Later documentation/research commits retain distinct identities.",
+      "qualified_scope": "Fresh complete application workflow on the actual main source-successor. Six jobs were freshly executed. Application/build/test/dependency/workflow content matches the reviewed merge; newer research.html is retained. This is not a fresh pass on exact34.",
+      "limits": "Optional video prerequisites remain unverified. Nested optional/platform subcheck counts were not recounted; historical21/1 values remain only in historical records. Changed POSIX save code was not executed. No installed-app, real-model, release or performance qualification.",
       "preceding_source_merge_run": {
-        "id": 41506809034,
-        "head": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+        "id": 41562200640,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41562200640",
+        "head": "34f47e11c661a146a1c857270ffad2061e44dc28",
         "status": "completed",
         "conclusion": "cancelled",
-        "counted_as_pass": false
+        "qualified_as_full_pass": false,
+        "partial_visible_test_results": 110,
+        "scope": "Incomplete console results, not a complete157-test pass. Preserved separately from the successful source-successor run."
       },
-      "candidate_records": "ci.workflow and ci.additional_PR_workflow remain the original exact candidate evidence.",
-      "platform_scope": "One Windows-only case skipped in the public-text Linux job; dedicated Windows operator job passed. Platform skip is separate from CTest registrations and native nested optional cases."
+      "historical_candidate_records": "PR21 candidate PR and single Windows rerun stay under checkpoint_failure_handling; legacy ci.workflow fields are PR20 only."
     },
     "latest_observed_repository_head": {
-      "commit": "b2d8abc00aa63871e5836fe961f5ecd2d1853533",
-      "tree": "a058f8e12cf58ed227610ec0f09d19d532c2d776",
-      "parent": "a8dc66e356e5d228c027f2122d4279257fefc229",
+      "commit": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+      "tree": "3be0737f45f6e33e66c245f745245326de484401",
+      "parent": "34f47e11c661a146a1c857270ffad2061e44dc28",
       "changed_paths": [
         "docs/atlas/research.html"
       ],
-      "research_blob": "f6df8e1e75eb3742c966f1145091d7643d846d4f",
-      "fresh_application_CI_for_this_commit_claimed": false,
-      "scope": "Separate RNL research update; all application files and the two Revia progression summaries were unchanged."
+      "research_blob": "8ff470e7193008bad592da78abb895047892f3aa",
+      "fresh_application_CI_for_this_commit_claimed": true,
+      "scope": "Verified main head before the forthcoming two-file Atlas publication. Newer research is preserved; it is not part of the task-save source change."
     },
-    "later_Atlas_docs_only_commit_is_application_CI_head_scope": "The tested later docs head is exacta8dc. Publishing this new checkpoint does not claim a fresh run on its subsequently assigned commit.",
-    "checkpoint_prior_recorded_utc": "2026-11-02T19:13:03+00:00"
+    "later_Atlas_docs_only_commit_is_application_CI_head_scope": "The latest qualified main head is c96137f8 (research-only successor to source34). The forthcoming Atlas-only publication head is distinct and is not yet claimed tested.",
+    "checkpoint_prior_recorded_utc": "2026-11-02T19:13:03+00:00",
+    "checkpoint_save_qualification": {
+      "record_ref": "checkpoint_failure_handling",
+      "scope": "Current PR21 candidate, retained first push failure, one Windows rerun and fresh source-successor main CI; historical PR20 workflow fields are labeled separately."
+    },
+    "legacy_field_scope": {
+      "fields": [
+        "workflow",
+        "additional_PR_workflow",
+        "audit",
+        "content_transfer_to_merge"
+      ],
+      "checkpoint": "PR20 delegation source; preserved original values in historical_integration_before_CheckpointSaveFailureHandling.values.legacy_PR20_CI_fields"
+    },
+    "current_checkpoint_ref": "checkpoint_failure_handling"
   },
-  "excluded_later_work": "Failed new stopping paragraph excluded; earlier reviewed discovery-grounding text retained. PR20 contains nine source/test files and two Atlas summaries. Newer RNL research HTML preserved separately; no RNL code or workflow change in this post-merge two-file refresh. No new model execution or installed-app update.",
+  "excluded_later_work": "No failed stopping clarification, RNL change, model replay, storage relocation, general long-path redesign, installation or release/GPU/response qualification is included in PR21.",
   "local_follow_on": {
     "id": "UI-4",
     "name": "Keep Stop responsive while browser cleanup waits",
@@ -968,8 +1020,8 @@
     "published_source_sha256": "35d309731307fbfd8f9384587bded6a93a56301d37d99fc4552b22b33667e89c"
   },
   "integration": {
-    "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
-    "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+    "main_commit": "34f47e11c661a146a1c857270ffad2061e44dc28",
+    "main_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
     "merge_order": [
       10,
       11,
@@ -980,7 +1032,8 @@
       16,
       17,
       18,
-      20
+      20,
+      21
     ],
     "merge_commits": {
       "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
@@ -992,7 +1045,8 @@
       "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
       "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
       "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
-      "20": "6a9aff7c74888e5c6c109d8931629e017b377fab"
+      "20": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+      "21": "34f47e11c661a146a1c857270ffad2061e44dc28"
     },
     "method": "normal merge commits; reviewed source heads preserved",
     "merge_commit_skip_ci": false,
@@ -1001,15 +1055,69 @@
     "runtime_release_qualified": false,
     "merge_order_scope": "Tracked repair/tooling checkpoints; intervening preserved research-only commits are not enumerated.",
     "merge_parents": [
-      "3fa78bd42bbbe52581c01942d48353fc3154a24b",
-      "8994579ed362744b297bbca28bb5dd017bf0b6e1"
+      "a743d15c2d095b0e7689ea4b7e690db5bb516d26",
+      "8b4ef999b0f288de57930d85666d1245c6e3e3fd"
     ],
-    "merged_at": "2026-11-02T19:06:17Z",
-    "application_ci_head": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
-    "application_ci_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+    "merged_at": "2026-11-03T01:49:11Z",
+    "application_ci_head": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+    "application_ci_tree": "3be0737f45f6e33e66c245f745245326de484401",
     "CI_transfer_by_content_only": true,
     "fresh_merge_main_CI_run_claimed": false,
-    "submitted_formal_PR_approval": false
+    "submitted_formal_PR_approval": false,
+    "post_merge_application_ci": {
+      "id": 41563503496,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41563503496",
+      "head": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+      "tree": "3be0737f45f6e33e66c245f745245326de484401",
+      "application_source_merge": "34f47e11c661a146a1c857270ffad2061e44dc28",
+      "source_merge_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
+      "difference_from_source_merge": [
+        "docs/atlas/research.html"
+      ],
+      "status": "completed",
+      "conclusion": "success",
+      "observed_utc": "2026-11-03T02:25:59.204364+00:00",
+      "fresh_main_pass_claimed": true,
+      "fresh_exact_merge_34_pass_claimed": false,
+      "jobs_fresh": 6,
+      "jobs_reused": 0,
+      "discovered": 157,
+      "passed": 155,
+      "failed": 0,
+      "optional_video_skips": 2,
+      "optional_video_scope": "Prerequisite skips remain unverified.",
+      "nested_optional_and_platform_counts": "NOT_RECOUNTED_FROM_NEW_ARTIFACT; no fresh21/1 totals claimed.",
+      "focus_case_seconds": {
+        "InteractiveBrowser": 7.39,
+        "DesktopSmoke": 6.09,
+        "AgentWorkflow": 0.25,
+        "StudioRuntime": 3.33
+      },
+      "ctest_total_seconds": 657.69,
+      "native_log_sha256": "ed5621c873c4d852f2511172822e95c05eaafe4ae5dfe114897fbe9d9ec30c6d",
+      "preceding_canceled_exact_merge_run": {
+        "id": 41562200640,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41562200640",
+        "head": "34f47e11c661a146a1c857270ffad2061e44dc28",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "qualified_as_full_pass": false,
+        "partial_visible_test_results": 110,
+        "scope": "Incomplete console results, not a complete157-test pass. Preserved separately from the successful source-successor run."
+      }
+    },
+    "CI_transfer_scope": "Fresh main CI is on c961 successor; only research.html differs from application source merge34.",
+    "fresh_post_merge_source_successor_main_CI_run_claimed": true,
+    "cancelled_exact_merge_CI": {
+      "id": 41562200640,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41562200640",
+      "head": "34f47e11c661a146a1c857270ffad2061e44dc28",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "qualified_as_full_pass": false,
+      "partial_visible_test_results": 110,
+      "scope": "Incomplete console results, not a complete157-test pass. Preserved separately from the successful source-successor run."
+    }
   },
   "historical_integration_before_MEM3_MED6": {
     "milestone": "Nine reliability repairs integrated into GitHub main",
@@ -1123,8 +1231,9 @@
     ],
     "capabilities": 20,
     "PR16_scope": "One distinct production browser repair; PNG fixture/test maintenance adds no separate repair or capability",
-    "current_scope": "Thirteen earlier counted production repairs remain unchanged; three bounded delegation corrections are tracked separately, not nine new repairs.",
-    "bounded_delegation_corrections": 3
+    "current_scope": "Thirteen earlier counted repairs and three delegation corrections remain. PR21 adds one separately tracked checkpoint failure-handling correction; four changed files are not four repairs.",
+    "bounded_delegation_corrections": 3,
+    "checkpoint_failure_handling_corrections": 1
   },
   "historical_integration_before_ACT2": {
     "milestone": "Eleven reliability repairs integrated into GitHub main",
@@ -1213,7 +1322,7 @@
     "installed_app_updated": false,
     "application_deployed": false
   },
-  "current_evidence_boundary": "PR20 merged three bounded delegation corrections across nine source/test files plus two Atlas summaries. Thirteen earlier counted repairs and 20 capabilities remain; nine files are not nine new repairs. Source is merge 6a9aff7c74888e5c6c109d8931629e017b377fab / tree 88c6bc751714481f1742a1c347d8b8b70168e3d7. Push CI tested feature commit 8994579ed362744b297bbca28bb5dd017bf0b6e1; PR CI checked out 98b1a97482dafaa8af03eb6a666f4dd91bef6296. Both used tree 39091a99ac54b12a964fa639ddbf5c5ee0597183. Merged application/build/test/dependency/workflow contents match exactly; the complete merged tree differs only in newer research.html. This is qualification transferred by content, not a fresh merge/main CI run. Earlier failures, rpt2 reviewed-report failure and mechanical operator-cancel limits remain; installed app and runtime/release status unchanged.",
+  "current_evidence_boundary": "PR21 application source merged at 34f47e11c661a146a1c857270ffad2061e44dc28 / tree 8488cd08df15d755de5575dc7c51105a32c9bdfb. Fresh main source-successor c96137f8f3711e58b7caec94998bad7bc9fb4a09 / tree 3be0737f45f6e33e66c245f745245326de484401 passed all six jobs with157 discovered,155 passes, zero failures and two unverified optional video skips. Only newer research.html differs. Exact-merge34 CI was canceled, not passed. Candidate PR, single Windows rerun with five reused auxiliary jobs and original push timeouts retain separate identities. New nested optional/platform counts were not recounted; changed POSIX save code, installed-app, real-model and release status remain unqualified.",
   "next_milestone": {
     "state": "PARTIAL_VALIDATION",
     "privacy_fixture_repair": "TEST_ONLY_MERGED_PR15; production privacy behavior unchanged",
@@ -2069,7 +2178,10 @@
       "merge_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
       "merged_at": "2026-11-02T19:06:17Z",
       "formal_PR_approval_submitted": false
-    }
+    },
+    "legacy_record": true,
+    "record_scope": "Historical PR20 delegation candidate/merge; retained for provenance, not the current task-save milestone.",
+    "current_record_ref": "checkpoint_failure_handling"
   },
   "historical_integration_before_DelegationGrounding": {
     "superseded_at_utc": "2026-11-02T19:13:03+00:00",
@@ -2327,5 +2439,526 @@
       "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
       "finalization_state": "source_merged_installed_app_unchanged_runtime_release_unqualified"
     }
+  },
+  "historical_integration_before_CheckpointSaveFailureHandling": {
+    "superseded_at_utc": "2026-11-03T02:30:41.437465+00:00",
+    "scope": "Previous current fields retained; all older records and CI remain intact.",
+    "values": {
+      "milestone": "PR20 delegation grounding merged with exact-candidate application CI",
+      "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
+      "source": {
+        "state": "PR20 merged; thirteen earlier counted repairs plus three bounded delegation corrections; installed Revia unchanged",
+        "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+        "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+        "source_files": 1410,
+        "incremental_changed_paths": [
+          67,
+          8,
+          5,
+          4,
+          3,
+          3,
+          3,
+          1,
+          1,
+          9
+        ],
+        "reliability_repairs": 13,
+        "installed_app_updated": false,
+        "release_qualified": false,
+        "file_count_scope": "Merged Git tree contains 1,410 blobs across code, tests, configuration, docs and assets. Git commit/tree identity is distinct from full hosted checkout byte provenance. Candidate CI and merge differ only in preserved newer research.html.",
+        "repository_tree_blobs": 1410,
+        "test_catalog_maintenance_pr": 15,
+        "production_privacy_changed_by_PR15": false,
+        "CI_identity": {
+          "commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+          "role": "Primary normal push application CI; PR checkout recorded separately",
+          "PR_checkout_commit": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+          "PR_checkout_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+          "content_transfer_to_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+          "fresh_merge_main_CI_run_claimed": false,
+          "full_hosted_checkout_byte_hash_claimed": false
+        },
+        "fixture_provenance": {
+          "path": "Tests/cognitionLiveCampaign.test.ps1",
+          "reviewed_raw_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+          "published_LF_sha256": "5ba1d7e16efd562453e8e300466a0beb6ac88ddce5d868cfc89c3391f7ec7fd0",
+          "published_git_blob": "a8e1b15b3b04b29cfd74618be08992649ba072e0"
+        },
+        "bounded_delegation_corrections": 3,
+        "latest_change_scope": {
+          "source_and_tests": 9,
+          "Atlas_summaries": 2,
+          "total_reviewed_targets": 11
+        },
+        "fixture_provenance_scope": "Historical PR18 fixture provenance retained unchanged; current nine-file delegation provenance is tracked by PR20 and candidate CI identities."
+      },
+      "integration": {
+        "main_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+        "main_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+        "merge_order": [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          20
+        ],
+        "merge_commits": {
+          "10": "c1f2b55fa4728ed8e4c8a4431ae4e4a2c3c6954b",
+          "11": "7ffa2324a296b6a24235ea9a5d27589925fe244b",
+          "12": "0b908ef779ea10564d7746834065adcf02abb07c",
+          "13": "23f20c91c81c6f0002335daa0c77360decc32240",
+          "14": "66b3ab6b11398a26edec3a48c8d4ec48915ea8f3",
+          "15": "29df918f62c2dbc2eece734122bb583b934512d8",
+          "16": "477861d4f3c5f5e350a60581ed24caff32bf6e60",
+          "17": "f0a826a00067618c521e4fe1230fbf6ddcd8bc4a",
+          "18": "c5c515068c94dcdb706e5d6b97e1718197ed8e10",
+          "20": "6a9aff7c74888e5c6c109d8931629e017b377fab"
+        },
+        "method": "normal merge commits; reviewed source heads preserved",
+        "merge_commit_skip_ci": false,
+        "application_ci_run": true,
+        "installed_app_updated": false,
+        "runtime_release_qualified": false,
+        "merge_order_scope": "Tracked repair/tooling checkpoints; intervening preserved research-only commits are not enumerated.",
+        "merge_parents": [
+          "3fa78bd42bbbe52581c01942d48353fc3154a24b",
+          "8994579ed362744b297bbca28bb5dd017bf0b6e1"
+        ],
+        "merged_at": "2026-11-02T19:06:17Z",
+        "application_ci_head": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+        "application_ci_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+        "CI_transfer_by_content_only": true,
+        "fresh_merge_main_CI_run_claimed": false,
+        "submitted_formal_PR_approval": false
+      },
+      "current_evidence_boundary": "PR20 merged three bounded delegation corrections across nine source/test files plus two Atlas summaries. Thirteen earlier counted repairs and 20 capabilities remain; nine files are not nine new repairs. Source is merge 6a9aff7c74888e5c6c109d8931629e017b377fab / tree 88c6bc751714481f1742a1c347d8b8b70168e3d7. Push CI tested feature commit 8994579ed362744b297bbca28bb5dd017bf0b6e1; PR CI checked out 98b1a97482dafaa8af03eb6a666f4dd91bef6296. Both used tree 39091a99ac54b12a964fa639ddbf5c5ee0597183. Merged application/build/test/dependency/workflow contents match exactly; the complete merged tree differs only in newer research.html. This is qualification transferred by content, not a fresh merge/main CI run. Earlier failures, rpt2 reviewed-report failure and mechanical operator-cancel limits remain; installed app and runtime/release status unchanged.",
+      "excluded_later_work": "Failed new stopping paragraph excluded; earlier reviewed discovery-grounding text retained. PR20 contains nine source/test files and two Atlas summaries. Newer RNL research HTML preserved separately; no RNL code or workflow change in this post-merge two-file refresh. No new model execution or installed-app update.",
+      "ci_qualification": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
+      "repair_count_scope_current_scope": "Thirteen earlier counted production repairs remain unchanged; three bounded delegation corrections are tracked separately, not nine new repairs.",
+      "legacy_PR20_CI_fields": {
+        "scope": "Exact paragraph-free nine-file candidate application CI; feature push and provisional PR checkout are distinct from final merge identity.",
+        "workflow": {
+          "observed_utc": "2026-11-02T19:05:07.158Z",
+          "run": {
+            "id": 41500218515,
+            "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500218515",
+            "event": "push",
+            "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+            "checkout_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+            "status": "completed",
+            "conclusion": "success",
+            "counts": {
+              "jobs_pass": 6,
+              "jobs_fail": 0,
+              "ctest_expected": 157,
+              "ctest_discovered": 157,
+              "ctest_pass": 155,
+              "ctest_fail": 0,
+              "prerequisite_skip": 2,
+              "nested_native_optional_skips": 21
+            },
+            "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183"
+          },
+          "jobs": [
+            {
+              "id": 125465472303,
+              "name": "Discord voice / offline transport",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465472467,
+              "name": "Windows / WebDemo operator paths",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465472530,
+              "name": "Public text relay and connector",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465472546,
+              "name": "Windows / MinGW",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465472582,
+              "name": "Linux / isolated journal persistence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465472684,
+              "name": "Setup scripts / PowerShell 5.1",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        "additional_PR_workflow": {
+          "id": 41500237179,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41500237179",
+          "event": "pull_request",
+          "head_sha": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "checkout_sha": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+          "status": "completed",
+          "conclusion": "success",
+          "counts": {
+            "jobs_pass": 6,
+            "jobs_fail": 0,
+            "ctest_expected": 157,
+            "ctest_discovered": 157,
+            "ctest_pass": 155,
+            "ctest_fail": 0,
+            "prerequisite_skip": 2,
+            "nested_native_optional_skips": 21
+          },
+          "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+          "jobs": [
+            {
+              "id": 125465536856,
+              "name": "Linux / isolated journal persistence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465537137,
+              "name": "Setup scripts / PowerShell 5.1",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465537185,
+              "name": "Windows / MinGW",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465537271,
+              "name": "Windows / WebDemo operator paths",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465537281,
+              "name": "Public text relay and connector",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "id": 125465537619,
+              "name": "Discord voice / offline transport",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        "audit": {
+          "summary": "Both normal candidate application CI runs passed all six jobs. Each discovered 157 registrations: 155 passed, none failed and two optional FFmpeg entries skipped; 21 nested optional subchecks also skipped. Counts describe each run, not a combined coverage total.",
+          "details": [
+            "Push CI tested feature commit 8994579ed362744b297bbca28bb5dd017bf0b6e1; PR CI checked out 98b1a97482dafaa8af03eb6a666f4dd91bef6296. Both used tree 39091a99ac54b12a964fa639ddbf5c5ee0597183. Merged application/build/test/dependency/workflow contents match exactly; the complete merged tree differs only in newer research.html. This is qualification transferred by content, not a fresh merge/main CI run.",
+            "Both runs tested the paragraph-free candidate and the nine reviewed source/test changes. Earlier three-module local passes remain historical reused evidence.",
+            "Two FFmpeg-dependent entries and 21 nested optional VTube Studio, torch, Pillow or real training/export/evaluation subchecks remain skipped; skips are not passes.",
+            "Prior metadata-startup and diagnostic-observer failures remain historical; their cause and local child exit-code capture remain unproven.",
+            "Hosted CI does not remeasure local catalog availability, prove the failed reviewed real-model report, install Revia or qualify physical/runtime/release use."
+          ]
+        },
+        "content_transfer_to_merge": {
+          "merge_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+          "merge_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+          "application_build_test_dependency_workflow_identical": true,
+          "only_complete_tree_difference": "docs/atlas/research.html",
+          "research_blob": "7af5b10d0dfbf8c1955a6489978b934fb0f6a2f7",
+          "fresh_merge_main_run_claimed": false
+        },
+        "later_main_or_docs_CI": "Fresh normal main workflow41509042838 completed successfully at exacta8dc; later research-onlyb2d is not claimed freshly tested. See latest_terminal_main_checkpoint.",
+        "latest_terminal_main_checkpoint": {
+          "recorded_utc": "2026-11-02T19:48:31.012020+00:00",
+          "run_id": 41509042838,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41509042838",
+          "event": "push",
+          "branch": "main",
+          "status": "completed",
+          "conclusion": "success",
+          "tested_commit": "a8dc66e356e5d228c027f2122d4279257fefc229",
+          "tested_tree": "1aeb563eb61bbdf3490f790bb7627765658d4c39",
+          "parent_source_merge": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+          "counts": {
+            "jobs_passed": 6,
+            "jobs_failed": 0,
+            "jobs_skipped": 0,
+            "ctest_expected": 157,
+            "ctest_discovered": 157,
+            "ctest_passed": 155,
+            "ctest_failed": 0,
+            "FFmpeg_prerequisite_skips": 2,
+            "nested_optional_skips": 21,
+            "public_text_platform_case_skips": 1
+          },
+          "native_evidence": {
+            "artifact_id": 13172909780,
+            "official_zip_sha256": "c023a2341af33a48023622c7ee6a7fa0ff56b9688aa69d99306b70a4864ee639",
+            "identityTrusted": true,
+            "ctest_seconds": 655.222,
+            "checkout_build_test_HEAD_matches": true,
+            "tracked_source_diff_count": 0,
+            "all_nine_reviewed_source_hashes_match_candidate_CI": true,
+            "failed_stopping_paragraph_included": false
+          },
+          "qualified_scope": "Fresh complete normal application workflow on the exact merged-source docs head a8dc; includes GNU ld relink, evidence upload and cleanup. No skip directive on this tested commit. Optional/prerequisite skips are not passes.",
+          "limits": "Does not establish real-model reviewed-report success, live cancellation, installed-app changes, performance improvements or runtime/release qualification. Later documentation/research commits retain distinct identities.",
+          "preceding_source_merge_run": {
+            "id": 41506809034,
+            "head": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+            "status": "completed",
+            "conclusion": "cancelled",
+            "counted_as_pass": false
+          },
+          "candidate_records": "ci.workflow and ci.additional_PR_workflow remain the original exact candidate evidence.",
+          "platform_scope": "One Windows-only case skipped in the public-text Linux job; dedicated Windows operator job passed. Platform skip is separate from CTest registrations and native nested optional cases."
+        },
+        "latest_observed_repository_head": {
+          "commit": "b2d8abc00aa63871e5836fe961f5ecd2d1853533",
+          "tree": "a058f8e12cf58ed227610ec0f09d19d532c2d776",
+          "parent": "a8dc66e356e5d228c027f2122d4279257fefc229",
+          "changed_paths": [
+            "docs/atlas/research.html"
+          ],
+          "research_blob": "f6df8e1e75eb3742c966f1145091d7643d846d4f",
+          "fresh_application_CI_for_this_commit_claimed": false,
+          "scope": "Separate RNL research update; all application files and the two Revia progression summaries were unchanged."
+        },
+        "later_Atlas_docs_only_commit_is_application_CI_head_scope": "The tested later docs head is exacta8dc. Publishing this new checkpoint does not claim a fresh run on its subsequently assigned commit."
+      },
+      "current_local_candidate": {
+        "recorded_utc": "2026-11-02T19:13:03+00:00",
+        "summary": "PR20 merged three bounded delegation corrections across nine files; installed Revia is unchanged and reviewed-report success remains unmet.",
+        "state": "MERGED_SOURCE_NOT_INSTALLED",
+        "changed_paths": 9,
+        "merged_production_repair_count_changed": false,
+        "useful_behaviors": [
+          "Preserve bounded receipt path identities within 16 KiB.",
+          "Separate native same-turn handoff status from model prose.",
+          "Retain the primary original request alongside the subordinate model summary without widening native authority."
+        ],
+        "prompt_experiment": {
+          "state": "CLOSED",
+          "failed_stopping_paragraph_included": false,
+          "earlier_reviewed_discovery_grounding_text_retained": true
+        },
+        "latest_related_actual_case": {
+          "label": "rpt2",
+          "relationship": "Related experimental candidate, not an exact run of the nine-file candidate with the failed paragraph removed.",
+          "native_delegation": "PASS",
+          "chat_while_task_active": "PASS; overlap reply was useful",
+          "successful_native_directory_listings": 1,
+          "native_file_reads": 0,
+          "reviewed_accepted_report": "FAIL; not established",
+          "host_acceptance": "Strict verification withheld acceptance; no fabricated or unverified report was accepted.",
+          "owned_processes_after_cleanup": 0,
+          "initial_ordinary_definition_answer": "Delivered, but weak/evasive; separate from the useful overlap reply."
+        },
+        "related_module_evidence": {
+          "passed_modules": 3,
+          "reused_modules": 3,
+          "fresh_exact_candidate_module_runs": 0,
+          "qualification": "Reused related-candidate evidence only; not fresh exact-nine-without-paragraph results.",
+          "historical_snapshot": true,
+          "recorded_before_current_CI": true,
+          "scope": "Three related local module passes reused before new full candidate CI; fresh_exact_candidate_module_runs=0 describes that historical local phase only."
+        },
+        "main_ci_boundary": {
+          "commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+          "push_run": 41500218515,
+          "PR_run": 41500237179,
+          "PR_checkout_commit": "98b1a97482dafaa8af03eb6a666f4dd91bef6296",
+          "passed_per_run": 155,
+          "failed_per_run": 0,
+          "skipped_per_run": 2,
+          "nested_optional_skips_per_run": 21,
+          "qualifies_paragraph_free_candidate": true,
+          "transfer_to_merge_by_identical_application_content": true,
+          "fresh_merge_main_run_claimed": false,
+          "real_model_reviewed_report_qualified": false
+        },
+        "separate_open_issue": {
+          "name": "Deep-root checkpoint exposure",
+          "state": "OPEN",
+          "exposure": "Accepted deep application runtime roots can exceed the checkpoint temporary-path budget; shared AtomicSave exposure remains.",
+          "harness_recovery": "Short-path harness recovery cleared the experiment blocker; it is not a product persistence fix or general long-path qualification."
+        },
+        "limits": [
+          "Source merged through PR20; merging does not install the app or qualify real-model reports, runtime or release.",
+          "Useful reviewed-report success and broader runtime/release qualification remain open.",
+          "No production-readiness, overall-percentage or comparative performance claim."
+        ],
+        "base_main": "097937b8cde958c7deff9ade84e85f27327fe266",
+        "patch_sha256": "4684bdba9286921ac112d625249bbffa8f120693b3a75eb8c2c9842353ebb70b",
+        "bounded_delegation_corrections": 3,
+        "review_refs": {
+          "branch": "codex/delegation-grounding-20261102",
+          "pull_request": 20,
+          "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/20",
+          "candidate_commit": "8994579ed362744b297bbca28bb5dd017bf0b6e1",
+          "candidate_tree": "39091a99ac54b12a964fa639ddbf5c5ee0597183",
+          "merge_commit": "6a9aff7c74888e5c6c109d8931629e017b377fab",
+          "merge_tree": "88c6bc751714481f1742a1c347d8b8b70168e3d7",
+          "merged_at": "2026-11-02T19:06:17Z",
+          "formal_PR_approval_submitted": false
+        }
+      }
+    }
+  },
+  "checkpoint_failure_handling": {
+    "id": "CHECKPOINT-SAVE-FAILURES",
+    "name": "Report task-save errors accurately and protect existing saves",
+    "state": "merged",
+    "pull_request": 21,
+    "url": "https://github.com/MahouSenseii/R.E.V.I.A/pull/21",
+    "head": "8b4ef999b0f288de57930d85666d1245c6e3e3fd",
+    "merge_commit": "34f47e11c661a146a1c857270ffad2061e44dc28",
+    "tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
+    "changed_paths": [
+      "Private/Agents/agentWorkflow.cpp",
+      "Private/Runtime/agentStudioRuntime.cpp",
+      "Tests/agentWorkflowTests.cpp",
+      "Tests/studioRuntimeTests.cpp"
+    ],
+    "behavior": [
+      "Retain the first native error when saved task progress (a checkpoint) cannot be written.",
+      "Remove only a pending file created by this save; protect another save's pending file and existing valid saved task state.",
+      "Warn when the latest task progress may not recover after restart."
+    ],
+    "focused_evidence": {
+      "workflow_fixture_functions": 17,
+      "native_probe_cases": 10,
+      "Studio_warning_fixture_cases": 2,
+      "freshness": "Retained reviewed same-candidate evidence; no new component execution during Atlas preparation.",
+      "scope": "Actual path/readback cases, injected I/O faults and controlled warning cases have separate scopes.",
+      "platform_scope": "Windows execution only; changed POSIX save branch is static-review-only."
+    },
+    "PR_CI": {
+      "id": 41531438800,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41531438800",
+      "checkout": "d3d0b785d946d6b3a03429e8c2d01e3743a1e181",
+      "tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
+      "conclusion": "success",
+      "jobs_passed": 6,
+      "discovered": 157,
+      "passed": 155,
+      "failed": 0,
+      "optional_video_skips": 2
+    },
+    "push_attempt_1": {
+      "id": 41531394147,
+      "attempt": 1,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41531394147/attempts/1",
+      "checkout": "8b4ef999b0f288de57930d85666d1245c6e3e3fd",
+      "conclusion": "failure",
+      "discovered": 157,
+      "passed": 153,
+      "failed_including_timeout": 2,
+      "optional_video_skips": 2,
+      "failures": [
+        {
+          "name": "Revia.InteractiveBrowser",
+          "seconds": 15.44,
+          "detail": "Native response deadline."
+        },
+        {
+          "name": "Revia.DesktopSmoke",
+          "seconds": 15.05,
+          "detail": "CTest timeout."
+        }
+      ],
+      "root_cause": "Unresolved; original failure retained."
+    },
+    "single_Windows_rerun": {
+      "id": 41531394147,
+      "attempt": 2,
+      "job_id": 125653133985,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41531394147/attempts/2",
+      "checkout": "8b4ef999b0f288de57930d85666d1245c6e3e3fd",
+      "conclusion": "success",
+      "fresh_jobs": [
+        "Windows / MinGW"
+      ],
+      "reused_auxiliary_jobs": 5,
+      "discovered": 157,
+      "passed": 155,
+      "failed": 0,
+      "optional_video_skips": 2,
+      "seconds": {
+        "InteractiveBrowser": 5.42,
+        "DesktopSmoke": 4.69,
+        "AgentWorkflow": 0.26,
+        "StudioRuntime": 2.98
+      },
+      "scope": "One supported Windows-job rerun on unchanged source; no deadlines or assertions changed. Auxiliary timestamps remain from attempt1."
+    },
+    "post_merge_CI": {
+      "id": 41563503496,
+      "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41563503496",
+      "head": "c96137f8f3711e58b7caec94998bad7bc9fb4a09",
+      "tree": "3be0737f45f6e33e66c245f745245326de484401",
+      "application_source_merge": "34f47e11c661a146a1c857270ffad2061e44dc28",
+      "source_merge_tree": "8488cd08df15d755de5575dc7c51105a32c9bdfb",
+      "difference_from_source_merge": [
+        "docs/atlas/research.html"
+      ],
+      "status": "completed",
+      "conclusion": "success",
+      "observed_utc": "2026-11-03T02:25:59.204364+00:00",
+      "fresh_main_pass_claimed": true,
+      "fresh_exact_merge_34_pass_claimed": false,
+      "jobs_fresh": 6,
+      "jobs_reused": 0,
+      "discovered": 157,
+      "passed": 155,
+      "failed": 0,
+      "optional_video_skips": 2,
+      "optional_video_scope": "Prerequisite skips remain unverified.",
+      "nested_optional_and_platform_counts": "NOT_RECOUNTED_FROM_NEW_ARTIFACT; no fresh21/1 totals claimed.",
+      "focus_case_seconds": {
+        "InteractiveBrowser": 7.39,
+        "DesktopSmoke": 6.09,
+        "AgentWorkflow": 0.25,
+        "StudioRuntime": 3.33
+      },
+      "ctest_total_seconds": 657.69,
+      "native_log_sha256": "ed5621c873c4d852f2511172822e95c05eaafe4ae5dfe114897fbe9d9ec30c6d",
+      "preceding_canceled_exact_merge_run": {
+        "id": 41562200640,
+        "url": "https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41562200640",
+        "head": "34f47e11c661a146a1c857270ffad2061e44dc28",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "qualified_as_full_pass": false,
+        "partial_visible_test_results": 110,
+        "scope": "Incomplete console results, not a complete157-test pass. Preserved separately from the successful source-successor run."
+      }
+    },
+    "limits": [
+      "General long-path support remains unimplemented; deep roots may still refuse saves.",
+      "Original local missing-DLL and failed static-link setup evidence remains failed; hosted qualification is separate.",
+      "The first push had two hosted timeouts. Both tests passed in PR CI, the single Windows rerun and fresh source-successor main CI; the original cause remains unproven.",
+      "No real-model trial, installation, release qualification or GPU/response improvement is claimed.",
+      "The changed AtomicSave POSIX branch was reviewed statically but not executed. The Linux CI job tests a different journal owner and does not qualify this branch."
+    ],
+    "installed_app_updated": false,
+    "release_qualified": false,
+    "performance_improvement_claim": false,
+    "recorded_utc": "2026-11-03T02:30:41.437465+00:00"
   }
 }
