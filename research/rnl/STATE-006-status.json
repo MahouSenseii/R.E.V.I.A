@@ -1,0 +1,19 @@
+{
+  "experiment": "STATE-006",
+  "attempt": "01",
+  "status": "stopped_at_pip_bootstrap_before_framework_install",
+  "frozen_preparation_commit": "de3dbdb50fb0993889e12bc581aa8fdbc732123c",
+  "controller_exit_code": 1,
+  "controller_wall_seconds": 5.5109772,
+  "native_probes_run": 0,
+  "training_cells_run": 0,
+  "optimizer_updates": 0,
+  "hypothesis_result": "unmeasured",
+  "performance_claim": null,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "report": "RESULTS-STATE-006.md",
+  "summary": "results/STATE-006/summary.json",
+  "cleanup_confirmed": true,
+  "retries": 0
+}

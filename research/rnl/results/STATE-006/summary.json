@@ -1,0 +1,324 @@
+{
+  "experiment": "STATE-006",
+  "schema_version": 1,
+  "attempt": "01",
+  "status": "stopped_at_pip_bootstrap_before_framework_install",
+  "frozen_preparation_commit": "de3dbdb50fb0993889e12bc581aa8fdbc732123c",
+  "equivalent_local_preparation_commit": "d15aedd6ecb51cb22abacba59ff798a391916c27",
+  "preparation_tree": "fbc034c36e42a0da7aecb2af6c553db5d8d9e40a",
+  "source_sha256": {
+    "research/rnl/.gitattributes": "ce6714983480c59f11f1d3bcf7ba557bc71946bc0c80eda8cb28fcdf6f74a93c",
+    "research/rnl/state006_guard.py": "3545119ab31d7dadedd2c93134824329948b76ae22e3952c8def3ce2e9cf6edc",
+    "research/rnl/STATE-006.md": "f9f019c92cd4214fe7c7f23cd3d46e10eb5dcea3b48b610b5de469ae4a39ae1d",
+    "research/rnl/STATE-006-runtime.json": "cdca1020d332c21a555dba7e20c57376fede39131a3cb974d2758a48dee13168",
+    "research/rnl/state006-download.lock": "032fe5a0dbc018ed56952dffdf9dd2565c4b1894171ea1c51ea7413697845c9b",
+    "research/rnl/state006-offline.lock": "1d63c2cbdf95b3261d15ba7ab38e9e557571d2b4d68d766456d454b7a23accaa",
+    "research/rnl/state006_data.py": "39595a540af3bf03f0ec79fc613caccbcc262b4cacf70e84da4ea77fd38fac32",
+    "research/rnl/state006.py": "4ee97f055305eabf0a94b15c216e86deb7d94d349c45722f870195aa6196cb3d",
+    "research/rnl/test_state006.py": "8cfe7567a26fa33604a94a130112fbaa149f0e39a0ea445fa2bb1aead19077b0",
+    "research/rnl/state006_setup.py": "c2626460830337487a8d721c390ad848ca8b95966a452750bc1c4f3836a847cd",
+    "research/rnl/state006_launch.py": "274904763d2e309b97fdbb803ecf7fdd244f1cf659e89d2027c29d76d4b1763f",
+    "research/rnl/test_state006_setup.py": "629d7c75f99cdaf6a07cd27046172756eb911c6a4a9039c1f0dd695b07febc8a",
+    "research/rnl/test_state006_launch.py": "f9dd390013718888709fcb8fc67a8f6071a0c01264e05b213725cebef24cdaa2"
+  },
+  "legacy_dependency_sha256": {
+    "research/rnl/run_bounded.py": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7"
+  },
+  "dataset_manifest_sha256": "6327eb3ba013b47374f9f48ffb70d5fe2f4ec4710fd5adf9d30eb56c5668c581",
+  "runtime_metadata_sha256": "cdca1020d332c21a555dba7e20c57376fede39131a3cb974d2758a48dee13168",
+  "setup_config_sha256": "67d1f72272c8241b9ecf6669043cd1432b408a661c100097da4d67d26be2fd00",
+  "invocations": 1,
+  "extra_invocations_or_retries": 0,
+  "controller_exit_code": 1,
+  "controller_wall_seconds": 5.5109772,
+  "completed_steps": [
+    "Ten pinned wheels downloaded with exact length and SHA256 checks",
+    "ZIP central-directory path/type/expanded-size safety checks passed",
+    "Fresh isolated venv creation without pip exited0"
+  ],
+  "failed_step": {
+    "stage": "pip bootstrap",
+    "exit_code": 101,
+    "observed_diagnostic": "Windows venv launcher reported unable to create its delegated base-interpreter process",
+    "exact_Win32_error": null,
+    "likely_cause": "Venv redirector child-process creation conflicts with active-process limit1",
+    "cause_certainty": "Strongly supported inference; exact Windows error was not retained",
+    "supporting_sources": [
+      "https://raw.githubusercontent.com/python/cpython/v3.12.10/PC/launcher.c",
+      "https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information"
+    ]
+  },
+  "unrun_steps": [
+    "CPU package installation",
+    "pip dependency check",
+    "complete environment census",
+    "Both no-update native probes",
+    "All six neural training cells"
+  ],
+  "native_torch_imports": 0,
+  "native_probes_run": 0,
+  "training_cells_run": 0,
+  "optimizer_updates": 0,
+  "installed_environment_packages": {},
+  "complete_environment_census": false,
+  "download": {
+    "wheel_count": 10,
+    "payload_bytes": 136954361,
+    "all_actual_lengths_and_hashes_match_pins": true,
+    "wheels": [
+      {
+        "package": "torch",
+        "version": "2.15.0+cpu",
+        "filename": "torch-2.15.0+cpu-cp312-cp312-win_amd64.whl",
+        "bytes": 126627285,
+        "sha256": "5af9fb357790db09e62484b12032304f046c22c4b1895ca88c4cf5987ea369ca",
+        "zip_expanded_payload_bytes": 484090334
+      },
+      {
+        "package": "filelock",
+        "version": "4.2.7",
+        "filename": "filelock-4.2.7-py3-none-any.whl",
+        "bytes": 164345,
+        "sha256": "d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e",
+        "zip_expanded_payload_bytes": 585569
+      },
+      {
+        "package": "typing-extensions",
+        "version": "4.16.0",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "bytes": 45571,
+        "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+        "zip_expanded_payload_bytes": 182767
+      },
+      {
+        "package": "sympy",
+        "version": "1.14.0",
+        "filename": "sympy-1.14.0-py3-none-any.whl",
+        "bytes": 6299353,
+        "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+        "zip_expanded_payload_bytes": 26841861
+      },
+      {
+        "package": "mpmath",
+        "version": "1.3.0",
+        "filename": "mpmath-1.3.0-py3-none-any.whl",
+        "bytes": 536198,
+        "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+        "zip_expanded_payload_bytes": 1950197
+      },
+      {
+        "package": "Jinja2",
+        "version": "3.1.6",
+        "filename": "jinja2-3.1.6-py3-none-any.whl",
+        "bytes": 134899,
+        "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+        "zip_expanded_payload_bytes": 496892
+      },
+      {
+        "package": "networkx",
+        "version": "3.5",
+        "filename": "networkx-3.5-py3-none-any.whl",
+        "bytes": 2034406,
+        "sha256": "0030d386a9a06dee3565298b4a734b68589749a544acbb6c412dc9e2489ec6ec",
+        "zip_expanded_payload_bytes": 6897626
+      },
+      {
+        "package": "fsspec",
+        "version": "2026.9.0",
+        "filename": "fsspec-2026.9.0-py3-none-any.whl",
+        "bytes": 221738,
+        "sha256": "8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f",
+        "zip_expanded_payload_bytes": 810582
+      },
+      {
+        "package": "setuptools",
+        "version": "84.2.1",
+        "filename": "setuptools-84.2.1-py3-none-any.whl",
+        "bytes": 876263,
+        "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
+        "zip_expanded_payload_bytes": 3002768
+      },
+      {
+        "package": "MarkupSafe",
+        "version": "3.0.4",
+        "filename": "markupsafe-3.0.4-cp312-cp312-win_amd64.whl",
+        "bytes": 14303,
+        "sha256": "11935df9bf455ed0c04eb87bcd720f02b1fe5e02128a9430f23aed6f93336fc7",
+        "zip_expanded_payload_bytes": 35603
+      }
+    ],
+    "archive_expanded_payload_bytes": 524894199,
+    "archive_size_is_not_installed_footprint_or_RAM": true
+  },
+  "bounds": {
+    "setup_seconds": 600,
+    "socket_read_timeout_max_seconds": 30,
+    "logical_CPUs_per_owned_process": 1,
+    "worker_memory_bytes": 2147483648,
+    "active_process_limit": 1,
+    "owned_disk_ceiling_bytes": 2147483648,
+    "disk_monitor_is_not_OS_quota": true,
+    "probe_seconds_planned_not_executed": 75,
+    "study_seconds_planned_not_executed": 1200
+  },
+  "owned_jobs": [
+    {
+      "status": "completed",
+      "started_utc": "2026-11-03T05:02:17.131784+00:00",
+      "exit_code": 0,
+      "limits_verified": true,
+      "wall_limit_seconds": 590,
+      "memory_cap_bytes": 2147483648,
+      "total_output_limit_bytes_exclusive": 1048576,
+      "metadata_reserve_bytes": 16384,
+      "captured_output_bytes": 0,
+      "output_truncated": false,
+      "terminated_owned_job": false,
+      "cleanup_exit_confirmed": true,
+      "direct_file_writes_capped": false,
+      "peak_working_set_bytes": 14512128,
+      "peak_committed_bytes": 9629696,
+      "affinity_mask": 1,
+      "errors": [],
+      "limitations": [
+        "Resource supervisor, not network/filesystem/GPU security sandbox",
+        "Output cap covers captured stream plus this result only; reviewed direct writes need separate preflight/aggregate accounting",
+        "Single logical CPU affinity does not prove a single OS thread",
+        "Hard working-set limits may affect timing",
+        "OS scheduling may delay termination; overruns are incomplete"
+      ],
+      "supervisor_sha256": "3545119ab31d7dadedd2c93134824329948b76ae22e3952c8def3ce2e9cf6edc",
+      "python_version": "3.12.10",
+      "owned_disk_limit_bytes": 2136997888,
+      "owned_disk_peak_bytes": 137505375,
+      "owned_disk_monitor": "Polling observation; not a filesystem quota",
+      "supervisor_peak_working_set_bytes": 38707200,
+      "job_limit_flags": 8472,
+      "job_process_memory_limit_bytes": 2147483648,
+      "working_set_max_bytes": 2147483648,
+      "working_set_flags": 6,
+      "last_working_set_bytes": 32768,
+      "termination_margin_seconds": 2.0,
+      "resumed_utc": "2026-11-03T05:02:17.147790+00:00",
+      "elapsed_seconds": 0.28100000000267755,
+      "wall_budget_compliant": true,
+      "finished_utc": "2026-11-03T05:02:17.412769+00:00",
+      "stage": "venv creation"
+    },
+    {
+      "status": "worker_failed",
+      "started_utc": "2026-11-03T05:02:17.517289+00:00",
+      "exit_code": 101,
+      "limits_verified": true,
+      "wall_limit_seconds": 590,
+      "memory_cap_bytes": 2147483648,
+      "total_output_limit_bytes_exclusive": 1048576,
+      "metadata_reserve_bytes": 16384,
+      "captured_output_bytes": 517,
+      "output_truncated": false,
+      "terminated_owned_job": false,
+      "cleanup_exit_confirmed": true,
+      "direct_file_writes_capped": false,
+      "peak_working_set_bytes": 4505600,
+      "peak_committed_bytes": 811008,
+      "affinity_mask": 1,
+      "errors": [],
+      "limitations": [
+        "Resource supervisor, not network/filesystem/GPU security sandbox",
+        "Output cap covers captured stream plus this result only; reviewed direct writes need separate preflight/aggregate accounting",
+        "Single logical CPU affinity does not prove a single OS thread",
+        "Hard working-set limits may affect timing",
+        "OS scheduling may delay termination; overruns are incomplete"
+      ],
+      "supervisor_sha256": "3545119ab31d7dadedd2c93134824329948b76ae22e3952c8def3ce2e9cf6edc",
+      "python_version": "3.12.10",
+      "owned_disk_limit_bytes": 2136997888,
+      "owned_disk_peak_bytes": 137507871,
+      "owned_disk_monitor": "Polling observation; not a filesystem quota",
+      "supervisor_peak_working_set_bytes": 38707200,
+      "job_limit_flags": 8472,
+      "job_process_memory_limit_bytes": 2147483648,
+      "working_set_max_bytes": 2147483648,
+      "working_set_flags": 6,
+      "last_working_set_bytes": 32768,
+      "termination_margin_seconds": 2.0,
+      "resumed_utc": "2026-11-03T05:02:17.576291+00:00",
+      "elapsed_seconds": 0.10900000000037835,
+      "wall_budget_compliant": true,
+      "finished_utc": "2026-11-03T05:02:17.621967+00:00",
+      "stage": "pip bootstrap"
+    }
+  ],
+  "observed_partial_setup_cost": {
+    "owned_disk_final_bytes": 137510224,
+    "max_owned_job_disk_peak_bytes": 137507871,
+    "max_worker_working_set_bytes": 14512128,
+    "max_worker_commit_bytes": 9629696,
+    "full_framework_memory_and_installed_footprint": null,
+    "controller_memory_outside_worker_caps": true
+  },
+  "cleanup": {
+    "all_owned_exits_confirmed": true,
+    "exact_owned_PIDs_absent": true,
+    "errors": [],
+    "partial_owned_environment_and_wheels_retained": true,
+    "ephemeral_API_credentials_used": false
+  },
+  "raw_evidence_retained_privately": [
+    {
+      "name": "pip-bootstrap\\combined-output.bin",
+      "bytes": 517,
+      "sha256": "29a68d2bd2c5291448b5b16163e1a7f2c077c01dfe27a73744f8813e900e8c16"
+    },
+    {
+      "name": "pip-bootstrap\\owned-pid.json",
+      "bytes": 37,
+      "sha256": "d3f9f9ab2e43719c2fd2efd579704c9f50e20f9fd5ecc87647265069e946f663"
+    },
+    {
+      "name": "pip-bootstrap\\result.json",
+      "bytes": 2353,
+      "sha256": "8e37d6f657d6000b9e2abbda6297ac0ece07f82d672066aa30aa1566b2dd8676"
+    },
+    {
+      "name": "venv\\combined-output.bin",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "venv\\owned-pid.json",
+      "bytes": 37,
+      "sha256": "f0dd366c50411f2560efd7bc6f5c8bca80c3a188718403b490be8ac6103c4f7c"
+    },
+    {
+      "name": "venv\\result.json",
+      "bytes": 1942,
+      "sha256": "cb99019ac6244ea59ac16beadaa73bfaae85a6b224de1936b383061f00ad9b00"
+    }
+  ],
+  "raw_evidence_bytes": 4886,
+  "preparation_checks": {
+    "offline_checks_passed": 44,
+    "state006_checks": 21,
+    "legacy_PREFIX_checks": 23,
+    "independent_source_and_final_reviews": "passed",
+    "these_are_not_native_training_or_compatibility_results": true
+  },
+  "learning_metrics": {
+    "GRU_accuracy": null,
+    "RNN_accuracy": null,
+    "OOD_accuracy": null,
+    "state_retention": null,
+    "weight_forgetting": null,
+    "gating_advantage": null,
+    "training_throughput": null,
+    "runtime_memory": null
+  },
+  "interpretation": "Setup compatibility failure before testing the neural hypothesis; learning question remains unmeasured",
+  "hypothesis_result": "unmeasured",
+  "performance_claim": null,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "GPU_private_conversations_security_settings_or_application_changes": false,
+  "next_decision": "Review a Windows interpreter entry point that preserves active-process=1 before seeking approval for another attempt; no repair or retry included"
+}

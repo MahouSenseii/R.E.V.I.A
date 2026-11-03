@@ -23,7 +23,7 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation and broader adaptive/stateful design; no product candidate |
+| Experimental | Hypothesis, static review or proposed experiment | STATE-006 trainable-state setup stopped before framework installation; no product candidate |
 | Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit and one PREFIX-004 real-model reuse pair |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
@@ -74,6 +74,17 @@ inputs stayed pinned. It took172.890s including staging/cleanup, used no GPU,
 and left no owned process or credential. See the [report](RESULTS-PREFIX-004.md),
 [status](PREFIX-004-status.json), [three-attempt evidence](results/PREFIX-004/summary.json),
 [original full-study protocol](PREFIX-004.md) and [identity](PREFIX-004-identity.json).
+
+STATE-006 advances the broader trainable adaptive/stateful question with a tiny
+GRU/RNN SET/QUERY task, separate from prefix reuse. Its first approved setup
+downloaded and verified ten CPU wheels and created a venv, then stopped at the
+Windows pip-bootstrap launcher (exit101). No PyTorch install, native probe or
+training cell completed; all learning metrics remain null. One invocation took
+5.511s, cleanup was confirmed and no retry followed. The process-limit explanation
+is strongly supported inference because the exact Windows error was not retained.
+See the [report](RESULTS-STATE-006.md), [status](STATE-006-status.json),
+[evidence](results/STATE-006/summary.json) and [frozen pre-attempt protocol](STATE-006.md).
+Source preparation and44 offline checks are not a trained-model result.
 
 [READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
 permitted-context Python HTTP pass; its0.609s duration is not model latency or
