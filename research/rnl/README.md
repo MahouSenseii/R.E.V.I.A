@@ -23,7 +23,7 @@ Useful results may become small, separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation; PREFIX-004 stopped at readiness with no cache comparison |
+| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation; PREFIX-004 attempt02 passed readiness then stopped at the primer; no cache comparison |
 | Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract and RNL-003 conditional synthetic CPU benefit |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
@@ -58,24 +58,26 @@ discriminators and unknown installed-runtime identity are recorded separately.
 No model experiment ran during that audit. The subsequent read-only embedding
 lifecycle check did not establish a supported changed-weight cache bug.
 
-PREFIX-004 made one approved CPU-only attempt with the verified Qwen3.5-0.8B
-artifact and fixed public conversations. It stopped at the 45-second readiness
-gate, with owned cleanup confirmed. The log reports model loaded and listening
-at about 1.14 seconds; the failed readiness cause remains unresolved. No prefix
-comparison, TTFT, prefill or quality result was measured, and no retry followed.
-See the [result and limits](RESULTS-PREFIX-004.md), [status](PREFIX-004-status.json),
-[evidence](results/PREFIX-004/summary.json), [frozen protocol](PREFIX-004.md) and
-[identity snapshot](PREFIX-004-identity.json). The positive RNL-003 result stands;
-Candidate for Revia and Integrated remain None. A model-free diagnostic follow-up now
-records a current /health socket-permission denial (WinError 10013). It repaired
-lost evidence and passed 23 collector plus 16 mocked helper controls; it did not
-retry the model or prove the historical timeout's cause. See [READINESS-005](READINESS-005.md)
-and its [sanitized evidence](results/READINESS-005/summary.json). RNL's broader
-trainable adaptive/stateful architecture remains the goal; cache tests qualify
-one ingredient. A separately approved repeat outside the restricted execution
-context passed all fake-server readiness gates in 0.609 seconds, with cleanup
-confirmed. That is diagnostic-control duration, not model latency; no model
-rerun, cache gain or historical-cause proof is established.
+PREFIX-004 now preserves two separately approved CPU-only attempts with the
+same Qwen3.5-0.8B artifact and fixed public fixtures. Attempt01 stopped at readiness.
+Attempt02 passed authenticated readiness and structural token checks (438 tokens;
+shared LCP404, changed LCP4), then reached the30-second HTTP limit during the
+common cache-enabled one-token seed primer before any target. It completed zero
+cache-comparison cells. Usage reconciliation, TTFT, quality and cache gains remain
+unknown; cleanup was confirmed and no new invocation followed. See the
+[result and limits](RESULTS-PREFIX-004.md), [status](PREFIX-004-status.json),
+[both-attempt evidence](results/PREFIX-004/summary.json), [protocol](PREFIX-004.md)
+and [identity snapshot](PREFIX-004-identity.json). RNL-003's positive result stands;
+Candidate for Revia and Integrated remain None.
+
+[READINESS-005](READINESS-005.md) separately records the diagnostic repair,23
+collector plus16 mocked helper controls, socket denial and permitted-context
+Python HTTP pass. Its0.609s control duration is not model latency and did not
+itself prove the historical cause. Attempt02 now qualifies the real-model
+readiness path, while its primer deadline leaves the cache question open.
+RNL's broader trainable adaptive/stateful architecture remains the goal; these
+cache/readiness tests qualify one ingredient. No training or integration starts
+automatically, and no deadline/fixture adjustment or further run is included.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored

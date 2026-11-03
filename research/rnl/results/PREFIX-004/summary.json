@@ -1,190 +1,828 @@
 {
   "experiment": "PREFIX-004",
-  "status": "stopped_at_readiness_no_prefix_comparison",
-  "protocol_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
-  "equivalent_local_source_commit": "e9e9d832fa382cf2e7ad96477252d84d3e2e4de8",
-  "source_tree": "555d132076931977a981015e3b67cac85fba7e91",
-  "source_hashes": {
-    "protocol": "f48198f834292201ebacb231745d30cb68cef0413e53d7384d19b5d1c9af95c6",
-    "driver": "29511daf30e85ecf633f6ed47cb83f5473305ef2d70f0dead314464726003fbb",
-    "fixtures": "f262e45aa6286e4fa07cf9a03c16b0b15739be3808a748b9c7c6796663806701",
-    "backend_helper": "914b87e3fbb2e9fdaec751d7ebbb996b6903bf1db35861c9b11fc4aa655bb52c",
-    "resource_helper": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
-    "identity_manifest": "552df3cc6a9614f10a1c55f58e72abb66034cb36aa6a54781d933f63d55e0685"
+  "schema_version": 2,
+  "current_attempt": "02",
+  "status": "stopped_at_common_seed_primer_HTTP_deadline",
+  "attempt01_preservation": {
+    "source_commit": "8a50e7b29800e1a64cc7f478c12e8455eb8b558a",
+    "original_public_summary_sha256": "7a0b154c88e250bb3491c7133fff578c80063c98e8f8618d7ebef6b96d68f81c",
+    "original_raw_evidence_unchanged": true
   },
-  "started_utc": "2026-11-02T21:54:21.983979+00:00",
-  "finished_utc": "2026-11-02T21:55:09.262348+00:00",
-  "attempt_elapsed_seconds": 47.29700000002049,
-  "attempt_time_is_not_load_time_or_TTFT": true,
-  "terminal_reason": "RuntimeError: Startup absolute 45-second deadline exceeded",
-  "command_tool_exit_code": 1,
-  "model": {
-    "name": "Qwen3.5-0.8B-Q4_K_M.gguf",
-    "bytes": 532517120,
-    "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
-  },
-  "runtime_identity_reference": "../../PREFIX-004-identity.json",
-  "audited_source_commit": "3cb7ffb1a1f612d5e4a46244ae5a3c77ad934a70",
-  "runtime_files": [
-    {
-      "name": "llama-server.exe",
-      "bytes": 9216,
-      "sha256": "c932a2ac50dbdc5768399723e2e6e6295f7abcdf5243220729022c38ae2c415a"
+  "attempts": {
+    "01": {
+      "experiment": "PREFIX-004",
+      "status": "stopped_at_readiness_no_prefix_comparison",
+      "protocol_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
+      "equivalent_local_source_commit": "e9e9d832fa382cf2e7ad96477252d84d3e2e4de8",
+      "source_tree": "555d132076931977a981015e3b67cac85fba7e91",
+      "source_hashes": {
+        "protocol": "f48198f834292201ebacb231745d30cb68cef0413e53d7384d19b5d1c9af95c6",
+        "driver": "29511daf30e85ecf633f6ed47cb83f5473305ef2d70f0dead314464726003fbb",
+        "fixtures": "f262e45aa6286e4fa07cf9a03c16b0b15739be3808a748b9c7c6796663806701",
+        "backend_helper": "914b87e3fbb2e9fdaec751d7ebbb996b6903bf1db35861c9b11fc4aa655bb52c",
+        "resource_helper": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
+        "identity_manifest": "552df3cc6a9614f10a1c55f58e72abb66034cb36aa6a54781d933f63d55e0685"
+      },
+      "started_utc": "2026-11-02T21:54:21.983979+00:00",
+      "finished_utc": "2026-11-02T21:55:09.262348+00:00",
+      "attempt_elapsed_seconds": 47.29700000002049,
+      "attempt_time_is_not_load_time_or_TTFT": true,
+      "terminal_reason": "RuntimeError: Startup absolute 45-second deadline exceeded",
+      "command_tool_exit_code": 1,
+      "model": {
+        "name": "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "bytes": 532517120,
+        "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+      },
+      "runtime_identity_reference": "../../PREFIX-004-identity.json",
+      "audited_source_commit": "3cb7ffb1a1f612d5e4a46244ae5a3c77ad934a70",
+      "runtime_files": [
+        {
+          "name": "llama-server.exe",
+          "bytes": 9216,
+          "sha256": "c932a2ac50dbdc5768399723e2e6e6295f7abcdf5243220729022c38ae2c415a"
+        },
+        {
+          "name": "llama-server-impl.dll",
+          "bytes": 9996288,
+          "sha256": "167a1a8890390fb47b5056123879c0c1116c39e62a92398c77dbaeb1d3bf806d"
+        },
+        {
+          "name": "llama-common.dll",
+          "bytes": 8077312,
+          "sha256": "e616788eafbfad9c15a8c3adfab8107f232457ef0b5c70f963ee827dfaca2aee"
+        },
+        {
+          "name": "llama.dll",
+          "bytes": 2921472,
+          "sha256": "a96f1296b0def822306ca80e8d1ee71bf450d609d2b5fde2733a7d8ab5549cab"
+        },
+        {
+          "name": "ggml.dll",
+          "bytes": 86016,
+          "sha256": "1defc07c048a19d5edc8243f79eb120b1864dd6ae4cd816577dee2e47db1aca5"
+        },
+        {
+          "name": "ggml-base.dll",
+          "bytes": 773632,
+          "sha256": "842c3084ed1817c3a0bbc0da396c0b46e18d0b3f2a87171104a6c12029524988"
+        },
+        {
+          "name": "ggml-cpu-x64.dll",
+          "bytes": 870400,
+          "sha256": "1c923a0d3b6a85b075583442c027871c8e739f910f088bff4b41ac0c01136165"
+        },
+        {
+          "name": "mtmd.dll",
+          "bytes": 1606656,
+          "sha256": "958c1df28e095d837231afd0c53644761accea484011e66db0b60c780f95b0b6"
+        },
+        {
+          "name": "libomp140.x86_64.dll",
+          "bytes": 661856,
+          "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+        }
+      ],
+      "staging": {
+        "file_count": 10,
+        "total_bytes": 557519968,
+        "exact_allowlist_and_SHA256_verified_before_and_after": true,
+        "GPU_RPC_other_CPU_plugins_staged": false,
+        "retained_for_review": true
+      },
+      "execution": {
+        "planned_owned_launches": 21,
+        "actual_owned_launches": 1,
+        "completed_measurement_cells": 0,
+        "primer_records": 0,
+        "target_records": 0,
+        "fixture_tokenization_completed": false,
+        "authenticated_readiness_verified": false,
+        "HTTP_readiness_attempt_count": null,
+        "HTTP_error_detail": null,
+        "retry_or_limit_expansion": false
+      },
+      "limits": {
+        "attempt_seconds": 1200,
+        "server_memory_bytes": 2147483648,
+        "artifacts_bytes_exclusive": 10485760,
+        "staging_bytes_exclusive": 681574400,
+        "logical_CPU_affinity_mask": 1,
+        "hard_working_set_bytes": 2147483648,
+        "startup_seconds": 45,
+        "HTTP_operation_seconds": 30
+      },
+      "startup_readiness_process_memory": {
+        "peak_working_set_bytes": 677187584,
+        "peak_commit_bytes": 376504320,
+        "active_inference_memory": false,
+        "controller_memory_measured": false
+      },
+      "cleanup": {
+        "owned_exit_confirmed": true,
+        "owned_termination_code": 57348,
+        "errors": [],
+        "owned_credential_directory_empty": true,
+        "other_process_or_port_inspection_performed": false
+      },
+      "client_timer": {
+        "name": "perf_counter",
+        "resolution_seconds": 1e-07,
+        "empirical_min_positive_gap_seconds": 1.9994331523776054e-07,
+        "sample_reads": 2000,
+        "monotonic": true,
+        "timer_is_not_CPU_frequency": true
+      },
+      "measurements": {
+        "tokenization_choice": null,
+        "fixture_prompt_token_counts": null,
+        "cache_n": null,
+        "prompt_n": null,
+        "predicted_n": null,
+        "TTFT_ms": null,
+        "prefill_ms": null,
+        "target_wall_ms": null,
+        "quality_grade": null,
+        "cache_enabled_disabled_ratio": null,
+        "performance_claim": null
+      },
+      "unknown_reason": "Readiness did not complete before its watchdog; fixture tokenization, primers and targets were not reached. The helper catches connection/OS/HTTP exceptions without retaining their details.",
+      "observed_log_not_load_benchmark": {
+        "model_loaded_and_listening_reported_at_approximately_seconds": 1.14,
+        "threadpool_threads": 1,
+        "slots": 1,
+        "context": 2048,
+        "authenticated_properties_verified": false,
+        "dynamic_module_inventory_verified": false
+      },
+      "sanitized_server_log": [
+        "warning: no usable GPU found, --gpu-layers option will be ignored",
+        "warning: one possible reason is that llama.cpp was compiled without GPU support",
+        "warning: consult docs/build.md for compilation instructions",
+        "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.",
+        "0.00.029.155 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+        "0.00.044.732 I srv    load_model: loading model '<owned-stage>\\model\\Qwen3.5-0.8B-Q4_K_M.gguf'",
+        "0.00.681.106 I cmn          init: llama threadpool init, n_threads = 1",
+        "0.01.134.175 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'",
+        "0.01.134.329 W srv          init: --cache-idle-slots requires --cache-ram, disabling",
+        "0.01.141.616 I srv  llama_server: model loaded",
+        "0.01.141.640 I srv  llama_server: listening on http://127.0.0.1:<ephemeral-port>"
+      ],
+      "raw_evidence_retained_privately": [
+        {
+          "name": "attempt.json",
+          "bytes": 2569,
+          "sha256": "4275acffbf5e62efba39d164d84d214507fb2c900821606b5cdbecfbb1794b3e"
+        },
+        {
+          "name": "preflight.json",
+          "bytes": 665,
+          "sha256": "ccbe5a88fac02dd34f7eaef73d58408484d1bfbb4a97737f33f3ad3bcc0eadfe"
+        },
+        {
+          "name": "preflight.server.log",
+          "bytes": 963,
+          "sha256": "0144c1b13ccb60632ade8cbd3bb83098c47c7a1633ad2adb870a3ad3da18974a"
+        }
+      ],
+      "raw_evidence_bytes": 4197,
+      "interpretation": {
+        "cache_hypothesis_qualified": false,
+        "cache_hypothesis_rejected": false,
+        "slow_model_loading_established": false,
+        "GPU_or_memory_fault_established": false,
+        "latency_or_memory_improvement_established": false,
+        "RNL_003_positive_result_changed": false,
+        "candidate_for_revia": false,
+        "integrated_into_revia": false
+      },
+      "no_training_GPU_download_install_or_application_change": true,
+      "next_decision": "Review a small nonmodel readiness-error fixture and bounded diagnostic capture before requesting any separately reviewed live attempt. No automatic retry."
     },
-    {
-      "name": "llama-server-impl.dll",
-      "bytes": 9996288,
-      "sha256": "167a1a8890390fb47b5056123879c0c1116c39e62a92398c77dbaeb1d3bf806d"
-    },
-    {
-      "name": "llama-common.dll",
-      "bytes": 8077312,
-      "sha256": "e616788eafbfad9c15a8c3adfab8107f232457ef0b5c70f963ee827dfaca2aee"
-    },
-    {
-      "name": "llama.dll",
-      "bytes": 2921472,
-      "sha256": "a96f1296b0def822306ca80e8d1ee71bf450d609d2b5fde2733a7d8ab5549cab"
-    },
-    {
-      "name": "ggml.dll",
-      "bytes": 86016,
-      "sha256": "1defc07c048a19d5edc8243f79eb120b1864dd6ae4cd816577dee2e47db1aca5"
-    },
-    {
-      "name": "ggml-base.dll",
-      "bytes": 773632,
-      "sha256": "842c3084ed1817c3a0bbc0da396c0b46e18d0b3f2a87171104a6c12029524988"
-    },
-    {
-      "name": "ggml-cpu-x64.dll",
-      "bytes": 870400,
-      "sha256": "1c923a0d3b6a85b075583442c027871c8e739f910f088bff4b41ac0c01136165"
-    },
-    {
-      "name": "mtmd.dll",
-      "bytes": 1606656,
-      "sha256": "958c1df28e095d837231afd0c53644761accea484011e66db0b60c780f95b0b6"
-    },
-    {
-      "name": "libomp140.x86_64.dll",
-      "bytes": 661856,
-      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+    "02": {
+      "attempt": "02",
+      "status": "stopped_at_common_seed_primer_HTTP_deadline",
+      "started_utc": "2026-11-03T02:22:39.111204+00:00",
+      "finished_utc": "2026-11-03T02:23:14.906298+00:00",
+      "elapsed_seconds": 35.8119999999999,
+      "terminal_reason": "RuntimeError: HTTP absolute deadline exceeded",
+      "source_hashes": {
+        "protocol": "f48198f834292201ebacb231745d30cb68cef0413e53d7384d19b5d1c9af95c6",
+        "driver": "e8e1ec69699775b3a5b87d10d26e889447e4e6f0fdb529bb3048b1302e42eaeb",
+        "fixtures": "f262e45aa6286e4fa07cf9a03c16b0b15739be3808a748b9c7c6796663806701",
+        "backend_helper": "914b87e3fbb2e9fdaec751d7ebbb996b6903bf1db35861c9b11fc4aa655bb52c",
+        "resource_helper": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
+        "identity_manifest": "552df3cc6a9614f10a1c55f58e72abb66034cb36aa6a54781d933f63d55e0685"
+      },
+      "frozen_source_commit": "8a50e7b29800e1a64cc7f478c12e8455eb8b558a",
+      "new_reviewed_input_manifest_sha256": "561f380e453cfa240fd38f477d1fee36adabbe3f6ea7b74042061f569c413b79",
+      "execution_context": "one explicitly approved require_escalated invocation; no persistent prefix or system-setting change",
+      "only_changes_from_attempt01": [
+        "bounded readiness diagnostics",
+        "permitted execution context"
+      ],
+      "model": {
+        "name": "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "bytes": 532517120,
+        "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+      },
+      "planned_max_owned_launches": 21,
+      "actual_owned_launches": 2,
+      "preflight_completed": true,
+      "measurement_servers_started": 1,
+      "completed_comparison_cells": 0,
+      "target_requests_issued": 0,
+      "generation_requests_issued": 1,
+      "actual_failed_request": {
+        "role": "common seed primer",
+        "cache_prompt": true,
+        "max_tokens": 1,
+        "is_cache_disabled_target": false
+      },
+      "runs": [
+        {
+          "label": "preflight",
+          "started_utc": "2026-11-03T02:22:41.233844+00:00",
+          "startup_ms": 1370.3387999994447,
+          "after_ready": {
+            "working_set_bytes": 678785024,
+            "private_bytes": 377163776,
+            "commit_bytes": 377163776,
+            "peak_working_set_bytes": 678785024,
+            "peak_commit_bytes": 377171968
+          },
+          "owned_server": {
+            "label": "preflight",
+            "limits_verified": true,
+            "cleanup_exit_confirmed": true,
+            "memory_cap_bytes": 2147483648,
+            "log_cap_bytes": 65536,
+            "raw_log_bytes": 1028,
+            "peak_working_set_bytes": 679305216,
+            "peak_commit_bytes": 377368576,
+            "errors": [],
+            "affinity_mask": 1,
+            "job_limit_flags": 8472,
+            "working_set_max_bytes": 2147483648,
+            "working_set_flags": 6,
+            "readiness": {
+              "status": "ready",
+              "ready": true,
+              "stage": "properties",
+              "events": [
+                {
+                  "ordinal": 1,
+                  "stage": "initial_health",
+                  "elapsed_ms": 514.9999999994179,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 2,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 3,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 4,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 5,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 6,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 7,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 8,
+                  "stage": "initial_health",
+                  "elapsed_ms": 31.000000000858563,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 9,
+                  "stage": "inner_health",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 10,
+                  "stage": "wrong_key_probe",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 401,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 11,
+                  "stage": "authorized_tokenizer",
+                  "elapsed_ms": 15.000000001236913,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 12,
+                  "stage": "model_inventory",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 13,
+                  "stage": "properties",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                }
+              ],
+              "events_seen": 13,
+              "events_dropped": 0,
+              "last_transport_error": {
+                "ordinal": 7,
+                "stage": "initial_health",
+                "elapsed_ms": 0,
+                "http_status": 503,
+                "exception_type": "BackendHttpError",
+                "errno": null,
+                "winerror": null
+              },
+              "health_ok": true,
+              "wrong_key_rejected": true,
+              "authorized_tokenizer": true,
+              "model_alias_verified": true,
+              "context_slots_verified": true,
+              "elapsed_ms": 1343.9999999991414
+            },
+            "exit_code": 57348,
+            "fault": null
+          },
+          "finished_utc": "2026-11-03T02:22:42.844783+00:00",
+          "target_request_executed": false,
+          "completed_comparison_cell": false,
+          "actual_request_role": "preflight_only"
+        },
+        {
+          "repeat": 1,
+          "variant": "shared",
+          "label": "r1-shared-U",
+          "started_utc": "2026-11-03T02:22:43.389785+00:00",
+          "startup_ms": 1273.8742000001366,
+          "after_ready": {
+            "working_set_bytes": 677031936,
+            "private_bytes": 376377344,
+            "commit_bytes": 376377344,
+            "peak_working_set_bytes": 677031936,
+            "peak_commit_bytes": 376385536
+          },
+          "primer": {
+            "content": "",
+            "content_withheld": false,
+            "response_content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "response_checksum_scope": "collected-content-prefix",
+            "finish_reason": null,
+            "usage": {},
+            "reported_timings": {},
+            "metrics": {
+              "cache_n": null,
+              "prompt_n": null,
+              "predicted_n": null,
+              "prompt_ms": null,
+              "predicted_ms": null
+            },
+            "ttft_ms": null,
+            "request_ms": 30009.882300000754,
+            "unknown_reasons": {
+              "cache_n": "Missing or invalid backend cache_n",
+              "prompt_n": "Missing or invalid backend prompt_n",
+              "predicted_n": "Missing or invalid backend predicted_n",
+              "prompt_ms": "Missing or invalid backend prompt_ms",
+              "predicted_ms": "Missing or invalid backend predicted_ms",
+              "usage.prompt_tokens": "Missing or invalid reported token usage",
+              "usage.completion_tokens": "Missing or invalid reported token usage",
+              "ttft_ms": "No nonempty content delta observed"
+            },
+            "sse_bytes": 0,
+            "done": false,
+            "complete": false,
+            "response_status": "incomplete",
+            "http_status": 200,
+            "failure_reason": "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+            "required_metrics_supported": false
+          },
+          "failed_phase": "primer",
+          "owned_server": {
+            "label": "r1-shared-U",
+            "limits_verified": true,
+            "cleanup_exit_confirmed": true,
+            "memory_cap_bytes": 2147483648,
+            "log_cap_bytes": 65536,
+            "raw_log_bytes": 1487,
+            "peak_working_set_bytes": 708362240,
+            "peak_commit_bytes": 398336000,
+            "errors": [],
+            "affinity_mask": 1,
+            "job_limit_flags": 8472,
+            "working_set_max_bytes": 2147483648,
+            "working_set_flags": 6,
+            "readiness": {
+              "status": "ready",
+              "ready": true,
+              "stage": "properties",
+              "events": [
+                {
+                  "ordinal": 1,
+                  "stage": "initial_health",
+                  "elapsed_ms": 515.9999999996217,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 2,
+                  "stage": "initial_health",
+                  "elapsed_ms": 30.999999999039574,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 3,
+                  "stage": "initial_health",
+                  "elapsed_ms": 30.999999999039574,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 4,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 5,
+                  "stage": "initial_health",
+                  "elapsed_ms": 16.00000000144064,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 6,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 7,
+                  "stage": "initial_health",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 8,
+                  "stage": "inner_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 9,
+                  "stage": "wrong_key_probe",
+                  "elapsed_ms": 0,
+                  "http_status": 401,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 10,
+                  "stage": "authorized_tokenizer",
+                  "elapsed_ms": 16.00000000144064,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 11,
+                  "stage": "model_inventory",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 12,
+                  "stage": "properties",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                }
+              ],
+              "events_seen": 12,
+              "events_dropped": 0,
+              "last_transport_error": {
+                "ordinal": 6,
+                "stage": "initial_health",
+                "elapsed_ms": 0,
+                "http_status": 503,
+                "exception_type": "BackendHttpError",
+                "errno": null,
+                "winerror": null
+              },
+              "health_ok": true,
+              "wrong_key_rejected": true,
+              "authorized_tokenizer": true,
+              "model_alias_verified": true,
+              "context_slots_verified": true,
+              "elapsed_ms": 1265.9999999996217
+            },
+            "exit_code": 57348,
+            "fault": "HTTP absolute deadline exceeded"
+          },
+          "finished_utc": "2026-11-03T02:23:14.904297+00:00",
+          "planned_target_cache_prompt": false,
+          "target_request_executed": false,
+          "completed_comparison_cell": false,
+          "actual_request_role": "common_seed_primer"
+        }
+      ],
+      "client_timer": {
+        "name": "perf_counter",
+        "resolution_seconds": 1e-07,
+        "empirical_min_positive_gap_seconds": 1.9999970390927047e-07,
+        "sample_reads": 2000,
+        "monotonic": true,
+        "timer_is_not_CPU_frequency": true
+      },
+      "limits": {
+        "attempt_seconds": 1200,
+        "server_memory_bytes": 2147483648,
+        "artifacts_bytes_exclusive": 10485760,
+        "staging_bytes_exclusive": 681574400
+      },
+      "additional_caps": {
+        "logical_CPU_affinity_count": 1,
+        "startup_seconds": 45,
+        "HTTP_seconds": 30,
+        "stage_bytes": 557519968,
+        "log_bytes_per_server": 65536,
+        "generation_SSE_bytes": 65536
+      },
+      "authenticated_backend_properties": {
+        "model_alias": "rnl-prefix004-0.8b",
+        "model_ftype": "Q4_K - Medium",
+        "total_slots": 1,
+        "modalities": {
+          "vision": false,
+          "video": false,
+          "audio": false
+        }
+      },
+      "authenticated_backend_context": 2048,
+      "token_render_preflight": {
+        "structural_checks_passed": true,
+        "add_special_options": {
+          "false": {
+            "seed_count": 438,
+            "shared_count": 438,
+            "changed_count": 438,
+            "shared_LCP": 404,
+            "changed_LCP": 4,
+            "shared_LCP_fraction": 0.9223744292237442,
+            "changed_LCP_fraction": 0.0091324200913242
+          },
+          "true": {
+            "seed_count": 438,
+            "shared_count": 438,
+            "changed_count": 438,
+            "shared_LCP": 404,
+            "changed_LCP": 4,
+            "shared_LCP_fraction": 0.9223744292237442,
+            "changed_LCP_fraction": 0.0091324200913242
+          }
+        },
+        "fingerprints": {
+          "seed": {
+            "rendered_utf8_sha256": "b4896838bce3a0152b33de29c9967fd6c885865febce0c1186220f2f6123164b",
+            "options": {
+              "false": {
+                "count": 438,
+                "tokens_json_sha256": "db9751695631733bedb44de28b4b13d8fe8f3aa7ea0de12311036c16249f3f1e"
+              },
+              "true": {
+                "count": 438,
+                "tokens_json_sha256": "db9751695631733bedb44de28b4b13d8fe8f3aa7ea0de12311036c16249f3f1e"
+              }
+            }
+          },
+          "shared": {
+            "rendered_utf8_sha256": "f01f1dc8ca0243650dccd30f60c5ad7d25a1804b46e8d0f2af35ae2d093baee7",
+            "options": {
+              "false": {
+                "count": 438,
+                "tokens_json_sha256": "6ae62c292f0d0894ac106ae8583cc274829465b4781badf3fa3dbd21ac20b551"
+              },
+              "true": {
+                "count": 438,
+                "tokens_json_sha256": "6ae62c292f0d0894ac106ae8583cc274829465b4781badf3fa3dbd21ac20b551"
+              }
+            }
+          },
+          "changed": {
+            "rendered_utf8_sha256": "cbb5ea6aba5acc5875503c8e1dde48ce3d620a1159831e6e5dcbeab8cb33823b",
+            "options": {
+              "false": {
+                "count": 438,
+                "tokens_json_sha256": "6d1d4a522b2dee86c5ebbf7088f47be82f5d57b2ccd652fc133fee65a468d9ae"
+              },
+              "true": {
+                "count": 438,
+                "tokens_json_sha256": "6d1d4a522b2dee86c5ebbf7088f47be82f5d57b2ccd652fc133fee65a468d9ae"
+              }
+            }
+          }
+        },
+        "rendered_tokens_equal_across_both_servers": true,
+        "backend_usage_reconciliation_completed": false,
+        "tokenization_choice": null
+      },
+      "measurements": {
+        "cache_n": null,
+        "prompt_n": null,
+        "predicted_n": null,
+        "TTFT_ms": null,
+        "prefill_ms": null,
+        "target_wall_ms": null,
+        "quality_grade": null,
+        "paired_cache_ratio": null,
+        "assessment": null,
+        "performance_claim": null
+      },
+      "partial_processing_observation": {
+        "primer_HTTP_status": 200,
+        "collected_SSE_bytes": 0,
+        "visible_content_observed": false,
+        "request_ms": 30009.882300000754,
+        "reported_usage": {},
+        "reported_timings": {},
+        "server_log_prompt_progress": [
+          {
+            "tokens": 85,
+            "reported_seconds": 9.57
+          },
+          {
+            "tokens": 138,
+            "reported_seconds": 15.53
+          }
+        ],
+        "progress_samples_are_not_completed_prefill_or_decode_throughput": true,
+        "connection_reset_is_not_independent_crash_proof": true
+      },
+      "peak_partial_processing_memory": {
+        "working_set_bytes": 708362240,
+        "commit_bytes": 398336000,
+        "controller_memory_measured": false,
+        "memory_saving_established": false
+      },
+      "cleanup": {
+        "both_owned_exits_confirmed": true,
+        "errors": [],
+        "exact_owned_PIDs_absent_verified": true,
+        "credential_directory_empty": true,
+        "other_process_enumeration_or_change": false
+      },
+      "staging": {
+        "exact_10_file_allowlist_and_hashes_verified_before_and_after": true,
+        "bytes": 557519968,
+        "retained_privately": true
+      },
+      "raw_evidence_retained_privately": [
+        {
+          "name": "attempt.json",
+          "bytes": 12998,
+          "sha256": "2cc6b37042191c88249bb92bc0f2acdd8356cce79bb4964dd5b66c7c0d333f20"
+        },
+        {
+          "name": "preflight.json",
+          "bytes": 4288,
+          "sha256": "8b0bc7ce28a8d40eeabc48e864d7ca67f964d47cbb8d85922cd7d0b5ac92263d"
+        },
+        {
+          "name": "preflight.server.log",
+          "bytes": 1028,
+          "sha256": "fb18c23ef2d689f7f33b5a4c70c0da77d1335d981719001dd4f2f54fa14140bb"
+        },
+        {
+          "name": "properties.json",
+          "bytes": 10578,
+          "sha256": "803579f16fc2d3afd3210999348d207de7a71d6ec1b062d3a42706a5027791f8"
+        },
+        {
+          "name": "r1-shared-U.json",
+          "bytes": 5519,
+          "sha256": "7ea6e69ba56a9dcb04f61000780ebb388cd80446bd95b0d822b03ffae8796558"
+        },
+        {
+          "name": "r1-shared-U.server.log",
+          "bytes": 1487,
+          "sha256": "51d37b7fb99c8f3c770d7e1a18633454f162b241f254fc2adf27f7524b66fd8c"
+        },
+        {
+          "name": "token-preflight.json",
+          "bytes": 42392,
+          "sha256": "9d659f191bc21427ed07fb7ba88fe0a8bfcffa46336ee8ea11b60b878586a6d4"
+        }
+      ],
+      "raw_evidence_bytes": 78290,
+      "server_logs": {
+        "preflight.server.log": [
+          "warning: no usable GPU found, --gpu-layers option will be ignored",
+          "warning: one possible reason is that llama.cpp was compiled without GPU support",
+          "warning: consult docs/build.md for compilation instructions",
+          "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.",
+          "0.00.021.758 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+          "0.00.026.234 I srv    load_model: loading model '[owned-stage]\\model\\Qwen3.5-0.8B-Q4_K_M.gguf'",
+          "0.00.656.535 I cmn          init: llama threadpool init, n_threads = 1",
+          "0.01.094.282 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'",
+          "0.01.094.437 W srv          init: --cache-idle-slots requires --cache-ram, disabling",
+          "0.01.101.496 I srv  llama_server: model loaded",
+          "0.01.101.521 I srv  llama_server: listening on [owned-loopback-endpoint]",
+          "0.01.200.522 W srv    operator(): unauthorized: Invalid API Key"
+        ],
+        "r1-shared-U.server.log": [
+          "warning: no usable GPU found, --gpu-layers option will be ignored",
+          "warning: one possible reason is that llama.cpp was compiled without GPU support",
+          "warning: consult docs/build.md for compilation instructions",
+          "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.",
+          "0.00.021.264 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+          "0.00.024.821 I srv    load_model: loading model '[owned-stage]\\model\\Qwen3.5-0.8B-Q4_K_M.gguf'",
+          "0.00.639.427 I cmn          init: llama threadpool init, n_threads = 1",
+          "0.01.079.149 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'",
+          "0.01.079.287 W srv          init: --cache-idle-slots requires --cache-ram, disabling",
+          "0.01.086.426 I srv  llama_server: model loaded",
+          "0.01.086.447 I srv  llama_server: listening on [owned-loopback-endpoint]",
+          "0.01.195.683 W srv    operator(): unauthorized: Invalid API Key",
+          "0.01.391.591 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+          "0.01.391.839 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0",
+          "0.10.958.477 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =     85, progress = 0.19, t =   9.57 s / 8.89 tokens per second",
+          "0.16.919.163 I slot print_timing: id  0 | task 0 | prompt processing, n_tokens =    138, progress = 0.32, t =  15.53 s / 8.89 tokens per second"
+        ]
+      },
+      "limits_or_parameters_changed": false,
+      "training_GPU_install_security_setting_or_application_change": false,
+      "interpretation": "Real-model authenticated readiness and structural token layout passed; common primer stopped at the unchanged HTTP deadline. Usage reconciliation, output quality and cache comparison are unmeasured. No general CPU-speed cause or historical attempt01 cause is established.",
+      "extra_invocations_or_failed_cell_relaunches": 0,
+      "approved_invocations": 1
     }
-  ],
-  "staging": {
-    "file_count": 10,
-    "total_bytes": 557519968,
-    "exact_allowlist_and_SHA256_verified_before_and_after": true,
-    "GPU_RPC_other_CPU_plugins_staged": false,
-    "retained_for_review": true
   },
-  "execution": {
-    "planned_owned_launches": 21,
-    "actual_owned_launches": 1,
-    "completed_measurement_cells": 0,
-    "primer_records": 0,
-    "target_records": 0,
-    "fixture_tokenization_completed": false,
-    "authenticated_readiness_verified": false,
-    "HTTP_readiness_attempt_count": null,
-    "HTTP_error_detail": null,
-    "retry_or_limit_expansion": false
-  },
-  "limits": {
-    "attempt_seconds": 1200,
-    "server_memory_bytes": 2147483648,
-    "artifacts_bytes_exclusive": 10485760,
-    "staging_bytes_exclusive": 681574400,
-    "logical_CPU_affinity_mask": 1,
-    "hard_working_set_bytes": 2147483648,
-    "startup_seconds": 45,
-    "HTTP_operation_seconds": 30
-  },
-  "startup_readiness_process_memory": {
-    "peak_working_set_bytes": 677187584,
-    "peak_commit_bytes": 376504320,
-    "active_inference_memory": false,
-    "controller_memory_measured": false
-  },
-  "cleanup": {
-    "owned_exit_confirmed": true,
-    "owned_termination_code": 57348,
-    "errors": [],
-    "owned_credential_directory_empty": true,
-    "other_process_or_port_inspection_performed": false
-  },
-  "client_timer": {
-    "name": "perf_counter",
-    "resolution_seconds": 1e-07,
-    "empirical_min_positive_gap_seconds": 1.9994331523776054e-07,
-    "sample_reads": 2000,
-    "monotonic": true,
-    "timer_is_not_CPU_frequency": true
-  },
-  "measurements": {
-    "tokenization_choice": null,
-    "fixture_prompt_token_counts": null,
-    "cache_n": null,
-    "prompt_n": null,
-    "predicted_n": null,
-    "TTFT_ms": null,
-    "prefill_ms": null,
-    "target_wall_ms": null,
-    "quality_grade": null,
-    "cache_enabled_disabled_ratio": null,
-    "performance_claim": null
-  },
-  "unknown_reason": "Readiness did not complete before its watchdog; fixture tokenization, primers and targets were not reached. The helper catches connection/OS/HTTP exceptions without retaining their details.",
-  "observed_log_not_load_benchmark": {
-    "model_loaded_and_listening_reported_at_approximately_seconds": 1.14,
-    "threadpool_threads": 1,
-    "slots": 1,
-    "context": 2048,
-    "authenticated_properties_verified": false,
-    "dynamic_module_inventory_verified": false
-  },
-  "sanitized_server_log": [
-    "warning: no usable GPU found, --gpu-layers option will be ignored",
-    "warning: one possible reason is that llama.cpp was compiled without GPU support",
-    "warning: consult docs/build.md for compilation instructions",
-    "warning: llama.cpp was compiled without support for GPU offload. Setting the split mode has no effect.",
-    "0.00.029.155 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
-    "0.00.044.732 I srv    load_model: loading model '<owned-stage>\\model\\Qwen3.5-0.8B-Q4_K_M.gguf'",
-    "0.00.681.106 I cmn          init: llama threadpool init, n_threads = 1",
-    "0.01.134.175 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 2048, kv_unified = 'false'",
-    "0.01.134.329 W srv          init: --cache-idle-slots requires --cache-ram, disabling",
-    "0.01.141.616 I srv  llama_server: model loaded",
-    "0.01.141.640 I srv  llama_server: listening on http://127.0.0.1:<ephemeral-port>"
-  ],
-  "raw_evidence_retained_privately": [
-    {
-      "name": "attempt.json",
-      "bytes": 2569,
-      "sha256": "4275acffbf5e62efba39d164d84d214507fb2c900821606b5cdbecfbb1794b3e"
-    },
-    {
-      "name": "preflight.json",
-      "bytes": 665,
-      "sha256": "ccbe5a88fac02dd34f7eaef73d58408484d1bfbb4a97737f33f3ad3bcc0eadfe"
-    },
-    {
-      "name": "preflight.server.log",
-      "bytes": 963,
-      "sha256": "0144c1b13ccb60632ade8cbd3bb83098c47c7a1633ad2adb870a3ad3da18974a"
-    }
-  ],
-  "raw_evidence_bytes": 4197,
-  "interpretation": {
-    "cache_hypothesis_qualified": false,
-    "cache_hypothesis_rejected": false,
-    "slow_model_loading_established": false,
-    "GPU_or_memory_fault_established": false,
-    "latency_or_memory_improvement_established": false,
-    "RNL_003_positive_result_changed": false,
-    "candidate_for_revia": false,
-    "integrated_into_revia": false
-  },
-  "no_training_GPU_download_install_or_application_change": true,
-  "next_decision": "Review a small nonmodel readiness-error fixture and bounded diagnostic capture before requesting any separately reviewed live attempt. No automatic retry."
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "performance_claim": null
 }
