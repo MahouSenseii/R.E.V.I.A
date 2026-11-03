@@ -19,12 +19,12 @@ Useful results may become small, separately reviewed Revia changes later.
 - FIRST-001 ran reviewed CPU toy code in owned workers. No dependencies, GPU,
   training, model download, or other running workload was used.
 
-## Status ledger - 2026-11-02
+## Status ledger - 2026-11-03
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation; PREFIX-004 attempt02 passed readiness then stopped at the primer; no cache comparison |
-| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract and RNL-003 conditional synthetic CPU benefit |
+| Experimental | Hypothesis, static review or proposed experiment | Packed-runtime/cache instrumentation and broader adaptive/stateful design; no product candidate |
+| Measured | Reproducible result with pinned inputs, method and limits | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit and one PREFIX-004 real-model reuse pair |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -58,26 +58,29 @@ discriminators and unknown installed-runtime identity are recorded separately.
 No model experiment ran during that audit. The subsequent read-only embedding
 lifecycle check did not establish a supported changed-weight cache bug.
 
-PREFIX-004 now preserves two separately approved CPU-only attempts with the
-same Qwen3.5-0.8B artifact and fixed public fixtures. Attempt01 stopped at readiness.
-Attempt02 passed authenticated readiness and structural token checks (438 tokens;
-shared LCP404, changed LCP4), then reached the30-second HTTP limit during the
-common cache-enabled one-token seed primer before any target. It completed zero
-cache-comparison cells. Usage reconciliation, TTFT, quality and cache gains remain
-unknown; cleanup was confirmed and no new invocation followed. See the
-[result and limits](RESULTS-PREFIX-004.md), [status](PREFIX-004-status.json),
-[both-attempt evidence](results/PREFIX-004/summary.json), [protocol](PREFIX-004.md)
-and [identity snapshot](PREFIX-004-identity.json). RNL-003's positive result stands;
-Candidate for Revia and Integrated remain None.
+PREFIX-004 now preserves three separately approved CPU-only attempts on the
+same Qwen3.5-0.8B artifact and public fixtures. Pair03 completed one shared-prefix
+cache-off/cache-on pair:438 prompt tokens each,0/438 reused/evaluated with cache
+off and399/39 with cache on. Both26-token answers matched the expected7200/D2 JSON.
+This qualifies existing backend reuse on the fixture. It is one fixed-order pair,
+not a reliable speedup, language-quality or usual4B-model result. Each fresh
+primer cost about50.5s; target first-content times were51.408s/4.666s and complete
+request times56.006s/9.211s. No RAM saving or new RNL architecture is established.
 
-[READINESS-005](READINESS-005.md) separately records the diagnostic repair,23
-collector plus16 mocked helper controls, socket denial and permitted-context
-Python HTTP pass. Its0.609s control duration is not model latency and did not
-itself prove the historical cause. Attempt02 now qualifies the real-model
-readiness path, while its primer deadline leaves the cache question open.
-RNL's broader trainable adaptive/stateful architecture remains the goal; these
-cache/readiness tests qualify one ingredient. No training or integration starts
-automatically, and no deadline/fixture adjustment or further run is included.
+Attempt01's readiness stop and attempt02's30-second primer deadline remain
+separately labeled, with unchanged raw hashes and public JSON objects. Pair03
+changed HTTP to75s and reduced sampling to two fresh servers; all other caps and
+inputs stayed pinned. It took172.890s including staging/cleanup, used no GPU,
+and left no owned process or credential. See the [report](RESULTS-PREFIX-004.md),
+[status](PREFIX-004-status.json), [three-attempt evidence](results/PREFIX-004/summary.json),
+[original full-study protocol](PREFIX-004.md) and [identity](PREFIX-004-identity.json).
+
+[READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
+permitted-context Python HTTP pass; its0.609s duration is not model latency or
+proof of attempt01's historical cause. Positive RNL-003 evidence remains intact.
+Candidate for Revia and Integrated remain None. RNL's broader trainable
+adaptive/stateful goal remains; these checks qualify one ingredient. No further
+run, training or integration starts automatically.
 
 The owner supplied the original local ZIP. After safe extraction, source review
 and bounded execution, F/U/P matched bit-for-bit over 236 steps each. The authored

@@ -1,8 +1,8 @@
 {
   "experiment": "PREFIX-004",
-  "schema_version": 2,
-  "current_attempt": "02",
-  "status": "stopped_at_common_seed_primer_HTTP_deadline",
+  "schema_version": 3,
+  "current_attempt": "03",
+  "status": "completed_single_shared_prefix_pair",
   "attempt01_preservation": {
     "source_commit": "8a50e7b29800e1a64cc7f478c12e8455eb8b558a",
     "original_public_summary_sha256": "7a0b154c88e250bb3491c7133fff578c80063c98e8f8618d7ebef6b96d68f81c",
@@ -820,6 +820,903 @@
       "interpretation": "Real-model authenticated readiness and structural token layout passed; common primer stopped at the unchanged HTTP deadline. Usage reconciliation, output quality and cache comparison are unmeasured. No general CPU-speed cause or historical attempt01 cause is established.",
       "extra_invocations_or_failed_cell_relaunches": 0,
       "approved_invocations": 1
+    },
+    "03": {
+      "attempt": "03",
+      "status": "completed_single_shared_prefix_pair",
+      "started_utc": "2026-11-03T03:12:14.890718+00:00",
+      "finished_utc": "2026-11-03T03:15:07.783125+00:00",
+      "elapsed_seconds": 172.88999999999942,
+      "controller_exit_code": 0,
+      "frozen_harness_commit": "8a50e7b29800e1a64cc7f478c12e8455eb8b558a",
+      "original_protocol_commit": "9bafd01090767f3d9ad38dd1b16925619b9ab725",
+      "source_hashes": {
+        "config": "f7e0859465a53b60a7fc3253c581fe698311794ffec60b8f8ced78197d1eaeb6",
+        "protocol": "a10a4c7a51ed20926305ae70e3d99611fb0f245b2f63190fc8082cea9d720bc6",
+        "harness": "e8e1ec69699775b3a5b87d10d26e889447e4e6f0fdb529bb3048b1302e42eaeb",
+        "wrapper": "ed25cfe2dfe20ea70ac8ac1311982d26b7d4813a6ba9c76dcc75ae3e0933b4d9",
+        "fixtures": "f262e45aa6286e4fa07cf9a03c16b0b15739be3808a748b9c7c6796663806701",
+        "backend_helper": "914b87e3fbb2e9fdaec751d7ebbb996b6903bf1db35861c9b11fc4aa655bb52c",
+        "resource_helper": "31edb4ff8a997363d07ea8823a2efb7bdde5ed2566872a9e6adbda20b5b62bb7",
+        "identity_manifest": "552df3cc6a9614f10a1c55f58e72abb66034cb36aa6a54781d933f63d55e0685"
+      },
+      "private_wrapper_tests_sha256": "10d108d5ccc01a41f59abc4f47517063f8ffe836b6c50b25e70d4c58bf7daf0f",
+      "reviewed_input_manifest_sha256": "41cd02486a0fd4b16ff24f480511042aac84f1948c8db59f617f133c78a7572d",
+      "private_protocol_and_wrapper_not_uploaded": true,
+      "method": [
+        "Exactly one fixed-order U then M pair, two fresh owned servers and no standalone preflight server",
+        "On each server, original authenticated readiness and render/token gates precede identical cache-enabled seed primer (max_tokens=1)",
+        "Identical shared target (max_tokens=32); cache_prompt=false for U and true for M is the target treatment",
+        "Same pinned Qwen3.5-0.8B Q4_K_M, nine-file CPU runtime, public fixture, alias, template, schema and launch settings",
+        "Client requests temperature=0, seed=42, thinking off and usage streaming; optional backend-applied echoes remain null",
+        "Original helper/parser/resource guard reused; source/stage hashes and aggregate deadline checked before each launch"
+      ],
+      "changes_from_attempt02": [
+        "HTTP deadline 30 to 75 seconds",
+        "Reduce 21-server preflight/full-study schedule to exactly two servers for one shared pair",
+        "Private wrapper retains requested/default/optional applied metadata, partial evidence and durable launch receipts"
+      ],
+      "limits": {
+        "attempt_seconds": 1200,
+        "server_memory_bytes": 2147483648,
+        "staging_bytes_exclusive": 681574400,
+        "evidence_bytes_exclusive": 10485760,
+        "HTTP_seconds": 75,
+        "startup_seconds": 45,
+        "logical_CPU_affinity_count": 1
+      },
+      "generation_requests_issued": 4,
+      "maximum_declared_output_tokens": 66,
+      "actual_output_tokens_total": 54,
+      "owned_launches": 2,
+      "standalone_preflight_launches": 0,
+      "completed_comparison_cells": 2,
+      "completed_pairs": 1,
+      "extra_invocations_or_failed_cell_relaunches": 0,
+      "token_preflight": {
+        "seed": {
+          "rendered_utf8_sha256": "b4896838bce3a0152b33de29c9967fd6c885865febce0c1186220f2f6123164b",
+          "options": {
+            "false": {
+              "count": 438,
+              "tokens_json_sha256": "db9751695631733bedb44de28b4b13d8fe8f3aa7ea0de12311036c16249f3f1e"
+            },
+            "true": {
+              "count": 438,
+              "tokens_json_sha256": "db9751695631733bedb44de28b4b13d8fe8f3aa7ea0de12311036c16249f3f1e"
+            }
+          }
+        },
+        "shared": {
+          "rendered_utf8_sha256": "f01f1dc8ca0243650dccd30f60c5ad7d25a1804b46e8d0f2af35ae2d093baee7",
+          "options": {
+            "false": {
+              "count": 438,
+              "tokens_json_sha256": "6ae62c292f0d0894ac106ae8583cc274829465b4781badf3fa3dbd21ac20b551"
+            },
+            "true": {
+              "count": 438,
+              "tokens_json_sha256": "6ae62c292f0d0894ac106ae8583cc274829465b4781badf3fa3dbd21ac20b551"
+            }
+          }
+        },
+        "changed": {
+          "rendered_utf8_sha256": "cbb5ea6aba5acc5875503c8e1dde48ce3d620a1159831e6e5dcbeab8cb33823b",
+          "options": {
+            "false": {
+              "count": 438,
+              "tokens_json_sha256": "6d1d4a522b2dee86c5ebbf7088f47be82f5d57b2ccd652fc133fee65a468d9ae"
+            },
+            "true": {
+              "count": 438,
+              "tokens_json_sha256": "6d1d4a522b2dee86c5ebbf7088f47be82f5d57b2ccd652fc133fee65a468d9ae"
+            }
+          }
+        }
+      },
+      "token_fingerprints_match_between_servers": true,
+      "usage_reconciled": true,
+      "tokenization_choice": "false",
+      "both_add_special_options_have_same_tokens": true,
+      "runs": [
+        {
+          "label": "U",
+          "variant": "shared",
+          "planned_target_cache_prompt": false,
+          "started_utc": "2026-11-03T03:12:17.103838+00:00",
+          "phase": "completed",
+          "requested_parameters": {
+            "primer": {
+              "temperature": 0,
+              "cache_prompt": true,
+              "max_tokens": 1,
+              "seed": 42,
+              "stream": true,
+              "reasoning_enabled": false,
+              "include_usage": true,
+              "source": "client request, not a backend-applied assertion"
+            },
+            "target": {
+              "temperature": 0,
+              "cache_prompt": false,
+              "max_tokens": 32,
+              "seed": 42,
+              "stream": true,
+              "reasoning_enabled": false,
+              "include_usage": true,
+              "source": "client request, not a backend-applied assertion"
+            }
+          },
+          "startup_ms": 1978.087500001493,
+          "reported_server_defaults": {
+            "source": "/props.default_generation_settings",
+            "scope": "server defaults only; not applied per-request parameters",
+            "parameters": {
+              "n_ctx": 2048,
+              "ignore_eos": false,
+              "temperature": 0.800000011920929,
+              "presence_penalty": 0.0,
+              "repeat_penalty": 1.0,
+              "repeat_last_n": 64,
+              "frequency_penalty": 0.0,
+              "max_tokens": -1,
+              "top_p": 0.949999988079071,
+              "n_keep": 0,
+              "n_predict": -1,
+              "min_p": 0.05000000074505806,
+              "seed": 4294967295,
+              "stream": false,
+              "typical_p": 1.0,
+              "top_k": 40
+            }
+          },
+          "after_ready": {
+            "working_set_bytes": 677949440,
+            "private_bytes": 376332288,
+            "commit_bytes": 376332288,
+            "peak_working_set_bytes": 677949440,
+            "peak_commit_bytes": 376340480
+          },
+          "primer": {
+            "content": "{",
+            "content_withheld": false,
+            "response_content_sha256": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+            "response_checksum_scope": "complete-content",
+            "finish_reason": "length",
+            "usage": {
+              "completion_tokens": 1,
+              "prompt_tokens": 438,
+              "total_tokens": 439,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "reported_timings": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "prompt_ms": 50579.839,
+              "prompt_per_token_ms": 115.47908447488584,
+              "prompt_per_second": 8.659576793038033,
+              "predicted_n": 1,
+              "predicted_ms": 0.001,
+              "predicted_per_token_ms": 0.0,
+              "predicted_per_second": 0.0
+            },
+            "metrics": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "predicted_n": 1,
+              "prompt_ms": 50579.839,
+              "predicted_ms": 0.001
+            },
+            "ttft_ms": 50588.28600000015,
+            "request_ms": 50588.61109999998,
+            "unknown_reasons": {},
+            "sse_bytes": 1319,
+            "done": true,
+            "complete": true,
+            "response_status": "complete",
+            "http_status": 200,
+            "failure_reason": null,
+            "required_metrics_supported": true,
+            "applied_parameters": null,
+            "applied_parameters_unknown_reason": "No whitelisted per-request parameters reported in SSE",
+            "applied_parameter_reports_conflict": false,
+            "counts_validity": {
+              "supported": true,
+              "consistent": true,
+              "reasons": [],
+              "declared_output_cap": 1
+            }
+          },
+          "tokenization_usage_candidates": [
+            "false",
+            "true"
+          ],
+          "after_primer": {
+            "working_set_bytes": 772833280,
+            "private_bytes": 461660160,
+            "commit_bytes": 461660160,
+            "peak_working_set_bytes": 772833280,
+            "peak_commit_bytes": 461676544
+          },
+          "before_target": {
+            "working_set_bytes": 772833280,
+            "private_bytes": 461660160,
+            "commit_bytes": 461660160,
+            "peak_working_set_bytes": 772833280,
+            "peak_commit_bytes": 461676544
+          },
+          "target": {
+            "content": "{\n  \"budget_eur\": 7200,\n  \"source\": \"D2\"\n}",
+            "content_withheld": false,
+            "response_content_sha256": "7997f973193ff574f3d94c90dd735a6f31291039ec74e196f23f62252d156159",
+            "response_checksum_scope": "complete-content",
+            "finish_reason": "stop",
+            "usage": {
+              "completion_tokens": 26,
+              "prompt_tokens": 438,
+              "total_tokens": 464,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "reported_timings": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "prompt_ms": 51378.98,
+              "prompt_per_token_ms": 117.30360730593608,
+              "prompt_per_second": 8.524887025783697,
+              "predicted_n": 26,
+              "predicted_ms": 4597.965,
+              "predicted_per_token_ms": 183.9186,
+              "predicted_per_second": 5.437187973375178
+            },
+            "metrics": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "predicted_n": 26,
+              "prompt_ms": 51378.98,
+              "predicted_ms": 4597.965
+            },
+            "ttft_ms": 51407.768600000054,
+            "request_ms": 56005.996900001264,
+            "unknown_reasons": {},
+            "sse_bytes": 7366,
+            "done": true,
+            "complete": true,
+            "response_status": "complete",
+            "http_status": 200,
+            "failure_reason": null,
+            "required_metrics_supported": true,
+            "applied_parameters": null,
+            "applied_parameters_unknown_reason": "No whitelisted per-request parameters reported in SSE",
+            "applied_parameter_reports_conflict": false,
+            "counts_validity": {
+              "supported": true,
+              "consistent": true,
+              "reasons": [],
+              "declared_output_cap": 32
+            }
+          },
+          "after_target": {
+            "working_set_bytes": 772792320,
+            "private_bytes": 461570048,
+            "commit_bytes": 461570048,
+            "peak_working_set_bytes": 772853760,
+            "peak_commit_bytes": 461680640
+          },
+          "grade": {
+            "passed": true,
+            "reason": "exact_match",
+            "correctFields": 2,
+            "totalFields": 2,
+            "answer": {
+              "budget_eur": 7200,
+              "source": "D2"
+            }
+          },
+          "owned_server": {
+            "label": "U",
+            "limits_verified": true,
+            "cleanup_exit_confirmed": true,
+            "memory_cap_bytes": 2147483648,
+            "log_cap_bytes": 65536,
+            "raw_log_bytes": 4326,
+            "peak_working_set_bytes": 772853760,
+            "peak_commit_bytes": 461680640,
+            "errors": [],
+            "affinity_mask": 1,
+            "job_limit_flags": 8472,
+            "working_set_max_bytes": 2147483648,
+            "working_set_flags": 6,
+            "readiness": {
+              "status": "ready",
+              "ready": true,
+              "stage": "properties",
+              "events": [
+                {
+                  "ordinal": 1,
+                  "stage": "initial_health",
+                  "elapsed_ms": 1030.9999999990396,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 2,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 3,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 4,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 5,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 6,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 7,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 8,
+                  "stage": "initial_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 9,
+                  "stage": "inner_health",
+                  "elapsed_ms": 16.00000000144064,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 10,
+                  "stage": "wrong_key_probe",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 401,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 11,
+                  "stage": "authorized_tokenizer",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 12,
+                  "stage": "model_inventory",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 13,
+                  "stage": "properties",
+                  "elapsed_ms": 15.000000001236913,
+                  "http_status": 200
+                }
+              ],
+              "events_seen": 13,
+              "events_dropped": 0,
+              "last_transport_error": {
+                "ordinal": 7,
+                "stage": "initial_health",
+                "elapsed_ms": 14.999999999417923,
+                "http_status": 503,
+                "exception_type": "BackendHttpError",
+                "errno": null,
+                "winerror": null
+              },
+              "health_ok": true,
+              "wrong_key_rejected": true,
+              "authorized_tokenizer": true,
+              "model_alias_verified": true,
+              "context_slots_verified": true,
+              "elapsed_ms": 1936.9999999998981
+            },
+            "exit_code": 57348,
+            "fault": null
+          },
+          "finished_utc": "2026-11-03T03:14:05.951337+00:00"
+        },
+        {
+          "label": "M",
+          "variant": "shared",
+          "planned_target_cache_prompt": true,
+          "started_utc": "2026-11-03T03:14:06.523338+00:00",
+          "phase": "completed",
+          "requested_parameters": {
+            "primer": {
+              "temperature": 0,
+              "cache_prompt": true,
+              "max_tokens": 1,
+              "seed": 42,
+              "stream": true,
+              "reasoning_enabled": false,
+              "include_usage": true,
+              "source": "client request, not a backend-applied assertion"
+            },
+            "target": {
+              "temperature": 0,
+              "cache_prompt": true,
+              "max_tokens": 32,
+              "seed": 42,
+              "stream": true,
+              "reasoning_enabled": false,
+              "include_usage": true,
+              "source": "client request, not a backend-applied assertion"
+            }
+          },
+          "startup_ms": 1270.93160000004,
+          "reported_server_defaults": {
+            "source": "/props.default_generation_settings",
+            "scope": "server defaults only; not applied per-request parameters",
+            "parameters": {
+              "n_ctx": 2048,
+              "ignore_eos": false,
+              "temperature": 0.800000011920929,
+              "presence_penalty": 0.0,
+              "repeat_penalty": 1.0,
+              "repeat_last_n": 64,
+              "frequency_penalty": 0.0,
+              "max_tokens": -1,
+              "top_p": 0.949999988079071,
+              "n_keep": 0,
+              "n_predict": -1,
+              "min_p": 0.05000000074505806,
+              "seed": 4294967295,
+              "stream": false,
+              "typical_p": 1.0,
+              "top_k": 40
+            }
+          },
+          "after_ready": {
+            "working_set_bytes": 677752832,
+            "private_bytes": 376860672,
+            "commit_bytes": 376860672,
+            "peak_working_set_bytes": 677752832,
+            "peak_commit_bytes": 376868864
+          },
+          "primer": {
+            "content": "{",
+            "content_withheld": false,
+            "response_content_sha256": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+            "response_checksum_scope": "complete-content",
+            "finish_reason": "length",
+            "usage": {
+              "completion_tokens": 1,
+              "prompt_tokens": 438,
+              "total_tokens": 439,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "reported_timings": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "prompt_ms": 50504.702,
+              "prompt_per_token_ms": 115.30753881278538,
+              "prompt_per_second": 8.672459843441905,
+              "predicted_n": 1,
+              "predicted_ms": 0.001,
+              "predicted_per_token_ms": 0.0,
+              "predicted_per_second": 0.0
+            },
+            "metrics": {
+              "cache_n": 0,
+              "prompt_n": 438,
+              "predicted_n": 1,
+              "prompt_ms": 50504.702,
+              "predicted_ms": 0.001
+            },
+            "ttft_ms": 50513.199499999246,
+            "request_ms": 50513.433899999654,
+            "unknown_reasons": {},
+            "sse_bytes": 1319,
+            "done": true,
+            "complete": true,
+            "response_status": "complete",
+            "http_status": 200,
+            "failure_reason": null,
+            "required_metrics_supported": true,
+            "applied_parameters": null,
+            "applied_parameters_unknown_reason": "No whitelisted per-request parameters reported in SSE",
+            "applied_parameter_reports_conflict": false,
+            "counts_validity": {
+              "supported": true,
+              "consistent": true,
+              "reasons": [],
+              "declared_output_cap": 1
+            }
+          },
+          "tokenization_usage_candidates": [
+            "false",
+            "true"
+          ],
+          "after_primer": {
+            "working_set_bytes": 772599808,
+            "private_bytes": 462749696,
+            "commit_bytes": 462749696,
+            "peak_working_set_bytes": 772599808,
+            "peak_commit_bytes": 462753792
+          },
+          "before_target": {
+            "working_set_bytes": 772599808,
+            "private_bytes": 462749696,
+            "commit_bytes": 462749696,
+            "peak_working_set_bytes": 772599808,
+            "peak_commit_bytes": 462753792
+          },
+          "target": {
+            "content": "{\n  \"budget_eur\": 7200,\n  \"source\": \"D2\"\n}",
+            "content_withheld": false,
+            "response_content_sha256": "7997f973193ff574f3d94c90dd735a6f31291039ec74e196f23f62252d156159",
+            "response_checksum_scope": "complete-content",
+            "finish_reason": "stop",
+            "usage": {
+              "completion_tokens": 26,
+              "prompt_tokens": 438,
+              "total_tokens": 464,
+              "prompt_tokens_details": {
+                "cached_tokens": 399
+              }
+            },
+            "reported_timings": {
+              "cache_n": 399,
+              "prompt_n": 39,
+              "prompt_ms": 4647.353,
+              "prompt_per_token_ms": 119.16289743589743,
+              "prompt_per_second": 8.39187382581009,
+              "predicted_n": 26,
+              "predicted_ms": 4544.398,
+              "predicted_per_token_ms": 181.77592,
+              "predicted_per_second": 5.5012787172250315
+            },
+            "metrics": {
+              "cache_n": 399,
+              "prompt_n": 39,
+              "predicted_n": 26,
+              "prompt_ms": 4647.353,
+              "predicted_ms": 4544.398
+            },
+            "ttft_ms": 4666.428200000155,
+            "request_ms": 9210.989200000768,
+            "unknown_reasons": {},
+            "sse_bytes": 7367,
+            "done": true,
+            "complete": true,
+            "response_status": "complete",
+            "http_status": 200,
+            "failure_reason": null,
+            "required_metrics_supported": true,
+            "applied_parameters": null,
+            "applied_parameters_unknown_reason": "No whitelisted per-request parameters reported in SSE",
+            "applied_parameter_reports_conflict": false,
+            "counts_validity": {
+              "supported": true,
+              "consistent": true,
+              "reasons": [],
+              "declared_output_cap": 32
+            }
+          },
+          "after_target": {
+            "working_set_bytes": 752406528,
+            "private_bytes": 442482688,
+            "commit_bytes": 442482688,
+            "peak_working_set_bytes": 772636672,
+            "peak_commit_bytes": 462782464
+          },
+          "grade": {
+            "passed": true,
+            "reason": "exact_match",
+            "correctFields": 2,
+            "totalFields": 2,
+            "answer": {
+              "budget_eur": 7200,
+              "source": "D2"
+            }
+          },
+          "owned_server": {
+            "label": "M",
+            "limits_verified": true,
+            "cleanup_exit_confirmed": true,
+            "memory_cap_bytes": 2147483648,
+            "log_cap_bytes": 65536,
+            "raw_log_bytes": 3601,
+            "peak_working_set_bytes": 772636672,
+            "peak_commit_bytes": 462782464,
+            "errors": [],
+            "affinity_mask": 1,
+            "job_limit_flags": 8472,
+            "working_set_max_bytes": 2147483648,
+            "working_set_flags": 6,
+            "readiness": {
+              "status": "ready",
+              "ready": true,
+              "stage": "properties",
+              "events": [
+                {
+                  "ordinal": 1,
+                  "stage": "initial_health",
+                  "elapsed_ms": 515.9999999996217,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 2,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 3,
+                  "stage": "initial_health",
+                  "elapsed_ms": 16.00000000144064,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 4,
+                  "stage": "initial_health",
+                  "elapsed_ms": 31.000000000858563,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 5,
+                  "stage": "initial_health",
+                  "elapsed_ms": 0,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 6,
+                  "stage": "initial_health",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 503,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 7,
+                  "stage": "initial_health",
+                  "elapsed_ms": 31.9999999992433,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 8,
+                  "stage": "inner_health",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 200,
+                  "health_ok": true
+                },
+                {
+                  "ordinal": 9,
+                  "stage": "wrong_key_probe",
+                  "elapsed_ms": 16.00000000144064,
+                  "http_status": 401,
+                  "exception_type": "BackendHttpError",
+                  "errno": null,
+                  "winerror": null
+                },
+                {
+                  "ordinal": 10,
+                  "stage": "authorized_tokenizer",
+                  "elapsed_ms": 0,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 11,
+                  "stage": "model_inventory",
+                  "elapsed_ms": 14.999999999417923,
+                  "http_status": 200
+                },
+                {
+                  "ordinal": 12,
+                  "stage": "properties",
+                  "elapsed_ms": 15.99999999962165,
+                  "http_status": 200
+                }
+              ],
+              "events_seen": 12,
+              "events_dropped": 0,
+              "last_transport_error": {
+                "ordinal": 6,
+                "stage": "initial_health",
+                "elapsed_ms": 15.99999999962165,
+                "http_status": 503,
+                "exception_type": "BackendHttpError",
+                "errno": null,
+                "winerror": null
+              },
+              "health_ok": true,
+              "wrong_key_rejected": true,
+              "authorized_tokenizer": true,
+              "model_alias_verified": true,
+              "context_slots_verified": true,
+              "elapsed_ms": 1265.9999999996217
+            },
+            "exit_code": 57348,
+            "fault": null
+          },
+          "finished_utc": "2026-11-03T03:15:07.781121+00:00"
+        }
+      ],
+      "assessment": {
+        "complete_correct_pair": true,
+        "same_prompt_token_count": true,
+        "additional_reuse_observed": true,
+        "mechanism_status": "additional_reuse_observed",
+        "pair_count": 1,
+        "fixed_order": "U then M",
+        "changed_prefix_control_present": false,
+        "variability_measured": false,
+        "reliable_speedup_established": false,
+        "performance_claim": null
+      },
+      "client_timer": {
+        "name": "perf_counter",
+        "resolution_seconds": 1e-07,
+        "empirical_min_positive_gap_seconds": 1.9999970390927047e-07,
+        "sample_reads": 2000,
+        "monotonic": true,
+        "timer_is_not_CPU_frequency": true
+      },
+      "model": {
+        "name": "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "bytes": 532517120,
+        "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+      },
+      "runtime_identity_reference": "../../PREFIX-004-identity.json",
+      "cleanup": {
+        "owned_exit_confirmed": true,
+        "exact_owned_PIDs_absent_after_exit": true,
+        "credential_directory_empty": true,
+        "errors": []
+      },
+      "staging": {
+        "files": 10,
+        "total_bytes": 557519968,
+        "all_hashes_reverified_after_execution": true
+      },
+      "raw_evidence_retained_privately": [
+        {
+          "name": "attempt.json",
+          "bytes": 23930,
+          "sha256": "bb99c503eb963b01e1c1f977c7d8be26241ddfc8fd5e2b1e15e68a3cd1544c75"
+        },
+        {
+          "name": "invocation-start.json",
+          "bytes": 1121,
+          "sha256": "01616e354ee873f6592b5b04c141748a129cdc3932e2bd080a1e18d08e94610a"
+        },
+        {
+          "name": "M-launch.json",
+          "bytes": 243,
+          "sha256": "d592821132c9b1864dff0aa2e6c859e2bbdc59bb4638a80138df7d18a17bc8ce"
+        },
+        {
+          "name": "M-token-preflight.json",
+          "bytes": 42392,
+          "sha256": "9d659f191bc21427ed07fb7ba88fe0a8bfcffa46336ee8ea11b60b878586a6d4"
+        },
+        {
+          "name": "M.json",
+          "bytes": 9269,
+          "sha256": "c2e20cd4275920ac938175caf2f07f8badedba4aca9358369d72e3f2b0efa6ec"
+        },
+        {
+          "name": "M.server.log",
+          "bytes": 3601,
+          "sha256": "29b17f4149180729a46ab47518cd682a64f9d52f98da8da0608da1446f75617c"
+        },
+        {
+          "name": "U-launch.json",
+          "bytes": 243,
+          "sha256": "d977d20552f5a7228b0a3f5d4fba4e948fde09bbfad257ba3e6fd939837250a3"
+        },
+        {
+          "name": "U-token-preflight.json",
+          "bytes": 42392,
+          "sha256": "9d659f191bc21427ed07fb7ba88fe0a8bfcffa46336ee8ea11b60b878586a6d4"
+        },
+        {
+          "name": "U.json",
+          "bytes": 9546,
+          "sha256": "cecd96db7421b410142143bf50f1689dac889414acb9ce9f265560fa14c458c8"
+        },
+        {
+          "name": "U.server.log",
+          "bytes": 4326,
+          "sha256": "6ecd3e748341b5a797cc9b5f7191deaca108ca82ab6eb1fd20d79f8dc7d3823d"
+        }
+      ],
+      "raw_evidence_bytes": 137063,
+      "prior_attempt_raw_hashes_reverified": {
+        "01": true,
+        "02": true
+      },
+      "interpretation": {
+        "observed": "Existing llama.cpp prefix reuse operated on this fixed real-model fixture; both target answers passed",
+        "cached_tokens_observed": 399,
+        "structural_shared_LCP": 404,
+        "why_cached_count_is_below_LCP": null,
+        "reason_for_unknown_cached_vs_LCP_gap": "No internal recurrent-checkpoint attribution was collected",
+        "timings_are_descriptive_single_fixed_order_observations": true,
+        "reliable_speedup_established": false,
+        "memory_saving_established": false,
+        "language_quality_generalization": null,
+        "usual_4B_model_applicability": null,
+        "new_RNL_kernel_architecture_or_training_result": false,
+        "application_change_proposed": false,
+        "next_model_execution_authorized_by_result": false
+      },
+      "unknowns": [
+        "Per-request applied parameter echoes absent; server defaults are not those echoes",
+        "Single fixed order: no timing variability, repeat runs or changed-prefix target control",
+        "No cold application latency, held-out language-quality, real user workload or usual 4B-model result",
+        "Model working-set/commit snapshots exclude controller and are not a full memory census",
+        "No source-to-binary build attestation or explanation of the five-token LCP/cache gap"
+      ],
+      "training_GPU_install_security_setting_or_application_change": false,
+      "performance_claim": null
     }
   },
   "candidate_for_revia": false,

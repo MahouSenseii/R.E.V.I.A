@@ -1,4 +1,115 @@
-# PREFIX-004: attempt02 reached the primer deadline
+# PREFIX-004: existing prefix reuse observed in one real-model pair
+
+Pair03 completed the approved cache-off/cache-on shared-prefix check on the
+pinned Qwen3.5-0.8B Q4_K_M CPU runtime. Cache-on reported399 reused prompt tokens
+and39 evaluated tokens; cache-off reported0 reused and438 evaluated. Both targets
+reported438 input and26 generated tokens, completed with stop, and returned the
+same expected JSON answer: budget_eur7200, sourceD2. Usage and backend counts
+reconcile. This qualifies existing llama.cpp reuse on this fixture, not a new RNL
+kernel or a reliable speedup. RNL-003's positive synthetic result remains intact.
+
+## Pair03 method and approved change
+
+Exactly one invocation launched two fresh owned servers, U then M. Each passed
+authenticated readiness and token gates, processed the identical cache-enabled
+one-token seed primer, then the same shared target with max_tokens32. Only the
+target cache_prompt flag varied between U=false and M=true. There was no third
+preflight server, second pair, failed-cell relaunch or adjustment during the run.
+
+The same model/runtime/fixtures/template/schema and CPU launch flags were pinned.
+The per-request HTTP deadline changed from30 to75 seconds; the sampling scope
+shrunk from the unfinished21-server study to this one pair. Remaining limits
+stayed: one logical CPU,2GiB server commit/hard working set,1200s aggregate,
+45s readiness,650MiB staging and10MiB evidence. Four generation requests declared
+at most66 output tokens and reported54 actual tokens including both primers.
+
+The private wrapper reused frozen harnessE8 and its helper/resource guard without
+changing published source. Fourteen pure mocked controls passed after a reviewer
+required deadline checks following potentially slow hash verification; an
+independent frozen-source review preceded execution. Full source/config/protocol
+hashes and the additive method are retained in the existing summary. The original
+[protocol](PREFIX-004.md) describes the earlier full-study scope; it is not silently
+rewritten to claim the reduced pair was that full study.
+
+## Pair03 observations, including primer cost
+
+| Measurement | U: cache off | M: cache on |
+| --- | ---: | ---: |
+| Primer prompt tokens / generated tokens |438 /1 |438 /1 |
+| Primer request time |50.589s |50.513s |
+| Shared target reused / evaluated tokens |0 /438 |399 /39 |
+| Shared target generated tokens |26 |26 |
+| Backend target prompt-evaluation time |51.379s |4.647s |
+| Backend target generation time |4.598s |4.544s |
+| Client target first-content time |51.408s |4.666s |
+| Client target complete request time |56.006s |9.211s |
+| Target answer / finish |7200,D2 / stop |7200,D2 / stop |
+
+These are two individual observations in fixed order, not estimates with measured
+variability. The cached target was warm: its fresh-server primer still cost about
+50.5 seconds. Primer-plus-target request costs were106.595s for U and59.724s for M,
+excluding readiness/staging/cleanup. The whole172.890-second attempt includes
+both arms and those other costs; it is not application TTFT or a paired speedup.
+On this run, either fresh primer exceeded the old30-second request budget.
+Attempt02's original failure remains separately preserved below.
+
+Rendering/tokenization matched across both servers: seed/shared/changed438,
+shared LCP404 and changed LCP4 under both add-special options. Backend usage
+reconciled to438; both options have identical token vectors, so selecting false
+does not discriminate a unique special-token convention. The observed reuse was
+399, not the entire404-token LCP. No internal checkpoint attribution was collected
+to explain that five-token gap. The changed variant was only tokenized; no changed-
+prefix generation control ran. Both target content checksums also matched.
+
+Requested temperature0, seed42, thinking-off, output caps and cache flags are
+client metadata. No whitelisted per-request applied-parameter echo appeared in
+SSE, so applied_parameters remains null. Recorded /props values are clearly
+labeled server defaults, not independent proof of applied request settings.
+Coherent emitted usage/cache/evaluated counts provide the mechanism evidence.
+
+## Costs, cleanup and limits
+
+Both owned resource jobs verified the same one-CPU affinity, memory caps and
+ownership controls. U peak working set/commit:772,853,760/461,680,640B; M:
+772,636,672/462,782,464B. These readings include model/runtime and exclude the
+controller; no memory saving is established. CPU instruction/thread census,
+source-to-binary build attestation and whole-machine contention are unmeasured.
+
+The staged ten-file557,519,968-byte allowlist matched its source hashes before
+and after. Ten private raw evidence files total137,063B. Both owned PIDs were
+confirmed absent after exit; monitors/jobs closed and credentials were removed.
+Controller exited0, no cleanup error or extra launch occurred. Attempts01/02 raw
+hashes were reverified unchanged; both previous public JSON objects are preserved
+in the [three-attempt summary](results/PREFIX-004/summary.json).
+
+One fixed public two-field answer is not language-quality generalization or a
+real user workload. The usual4B model, long-context turnover, repeated-run
+variability, changed-prefix negative control and application latency remain
+unmeasured. This result verifies an existing backend mechanism; it demonstrates
+no new RNL architecture, compression, training, adaptive learning or product gain.
+Candidate for Revia and Integrated remain None. No GPU, training, installation,
+security-setting change, private conversation or application modification ran.
+
+## Next decision
+
+This approved pair is concluded. Preserve the positive real-model mechanism
+evidence alongside the synthetic RNL-003 result and earlier failures. The smallest
+later qualification would add a changed-prefix negative control and repeated
+balanced shared-prefix measurements only if that answers a concrete Revia need;
+no further model run is authorized by this outcome. Existing prefix reuse is a
+workable ingredient, not proof that a new cache should be added. RNL's broader
+trainable adaptive/stateful goal still needs separate architecture and held-out
+quality evidence; cache work does not define that whole research program.
+
+---
+
+## Historical attempt02 and attempt01 records
+
+The following report is retained from the prior checkpoint. Its next-decision
+and no-subsequent-invocation statements describe that checkpoint, before the
+separately approved pair03. No earlier failure or null metric was replaced.
+
+### Attempt02 (historical): reached the primer deadline
 
 Attempt02 passed real-model authenticated readiness and structural token checks,
 then stopped at the unchanged 30-second HTTP deadline during the common seed
