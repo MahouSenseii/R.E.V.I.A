@@ -1,0 +1,35 @@
+{
+  "experiment": "STATE-008",
+  "status": "complete_material_and_reliability_screens_missed",
+  "cells_run": 6,
+  "paired_seeds": 3,
+  "optimizer_updates": 6912,
+  "outer_wall_seconds": 386.6447189,
+  "weight_hashes_matched": 48,
+  "individual_predictions_retained_locally": 16128,
+  "mean_final_individual_accuracy": {
+    "gru": 0.2425595238095238,
+    "rnn": 0.20634920634920634
+  },
+  "final_quartets_correct_per_seed": 0,
+  "quartets_per_set": 168,
+  "all_predeclared_screens_passed": false,
+  "posthoc_query_argmax_unchanged": {
+    "gru": 0.9345238095238095,
+    "rnn": 0.9117063492063492
+  },
+  "posthoc_final_three_correct_group_runs": {
+    "gru": 7,
+    "rnn": 3
+  },
+  "group_runs_per_model": 504,
+  "group_runs_are_independent": false,
+  "rare_three_correct_is_training_induced": null,
+  "cleanup_confirmed": true,
+  "independent_review": "passed",
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "report": "RESULTS-STATE-008.md",
+  "summary": "results/STATE-008/summary.json",
+  "next_step": "Frozen-state three-arm reader source/controls prepared locally; native execution/training unrun and awaiting exact approval; no automatic integration."
+}

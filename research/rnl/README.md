@@ -24,8 +24,8 @@ separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Counterfactual query/value controls proposed to distinguish keyed recall from recency; unimplemented and unrun |
-| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go; STATE-007 measured modest learning gains while missing stronger targets, then a no-training audit measured a stronger recency baseline and small final neural margins |
+| Experimental | Hypothesis, static review or proposed experiment | A frozen-state reader probe is prepared locally to test query-conditioned decodability; native execution and training remain unrun |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair, STATE-006's six-cell no-go, STATE-007's modest learning gains/recency audit, and STATE-008's partial individual answers with zero fully correct groups and post hoc query-invariance analysis |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -129,13 +129,37 @@ matched, and the owned worker exited. The audit took 12.532 seconds with no mode
 call or training. Earlier measured learning gains and failed targets are intact.
 
 These are aggregate comparisons, not evidence of what rule a network learned.
-Individual predictions/per-delay neural scores were not retained. The next
-proposal uses paired query changes and stored-value swaps while holding the
-latest write fixed, retaining per-example predictions. Existing weights were
-hashed but not saved, so evaluating the same trained models would require an
-exact training replay with hash checks. That experiment is unimplemented/unrun;
-no further training starts automatically. Candidate for Revia and Integrated
-remain None.
+Individual predictions/per-delay neural scores were not retained in STATE-007.
+Its counterfactual follow-up is now completed in STATE-008 below, with the
+original training fixed, weight checks and retained individual predictions.
+Candidate for Revia and Integrated remain None.
+
+STATE-008 replayed all six original trajectories and matched all 48 checkpoint
+hashes. On 672 new examples per set, final means were 24.26% GRU / 20.63% RNN
+against 12.5% constant/query-key controls, 0% latest-write and 100% dictionary
+reference. Every seed scored 0/168 fully correct four-case groups and missed
+the original screens. Individual diagnostic gains remain measured. No reliable
+joint keyed recall, cross-request state or application improvement is established.
+
+All 16,128 predictions are retained locally. Post hoc analysis found the predicted
+class unchanged after switching the requested key in 93.45% GRU / 91.17% RNN final
+pairs. Rare group-runs reached three of four correct (7/3), preserving partial
+sensitivity; this is not a new success gate or proof of training-induced ability.
+Argmax stability does not establish hidden-state/logit invariance or lost facts.
+Shared groups/seed-runs are dependent, and this challenge differs from training.
+
+The next proposal freezes the encoder and compares query-selected readers of
+trained and initial states, with a query-blind negative control. It tests what
+can be decoded under new probe supervision; selection is supplied, not learned
+routing. The mean control is not an equally expressive competitor. The proposal
+has local source and control preparation; native execution/training remain unrun and require an exact reviewed execution approval.
+
+See [results and error patterns](RESULTS-STATE-008.md), [status](STATE-008-status.json),
+[exact aggregates](results/STATE-008/summary.json), [method](STATE-008.md),
+[worker](state008.py), [data/metrics](state008_data.py),
+[configuration](STATE-008-config.json), [data controls](test_state008_data.py)
+and [worker controls](test_state008.py).
+No further training or integration starts automatically.
 
 [READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
 permitted-context Python HTTP pass; its0.609s duration is not model latency or
