@@ -536,6 +536,10 @@ void TestReportedSpeechThroughSession()
     Check(session.Start(), "Attribution session did not start.");
     Check(session.Submit("My name is Davis.").succeeded, "Messenger introduction failed.");
     const auto before = session.CurrentRelationship();
+    Check(session.Submit("Please do not call me Sam.").succeeded, "Negated-name session turn failed.");
+    Check(session.CurrentRelationship().entityId == before.entityId &&
+        session.CurrentRelationship().displayName == before.displayName,
+        "A negated naming request rebound the current participant or renamed their relationship.");
     const std::string report = "Someone else said to you: \"You're useless. I just said that. My name is Sam. Stop saying chuckles.\"";
     Check(session.Submit(report).succeeded, "Reported-speech session turn failed.");
     const auto after = session.CurrentRelationship();
