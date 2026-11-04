@@ -1,0 +1,23 @@
+{
+  "experiment": "STATE-010",
+  "status": "complete_predeclared_screens_missed",
+  "paired_seeds": 3,
+  "reader_fits": 9,
+  "encoder_updates": 0,
+  "all_final_quartets_correct": 0,
+  "all_relu_signal": false,
+  "all_relu_advantage": false,
+  "all_relu_reliability": false,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "one_approved_invocation": true,
+  "retry_performed": false,
+  "outer_seconds": 216.5655629,
+  "retained_predictions": 12096,
+  "reader_snapshots": 15,
+  "result": "Nonlinear reader showed no consistent advantage; every fit scored0/168 complete groups.",
+  "evidence": "results/STATE-010/summary.json",
+  "method": "STATE-010.md",
+  "results": "RESULTS-STATE-010.md",
+  "next": "Learned keyed state versus fresh GRU and exact dictionary is design only; no further run or integration starts automatically."
+}

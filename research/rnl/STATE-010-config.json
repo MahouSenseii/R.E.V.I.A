@@ -1,0 +1,245 @@
+{
+  "schema": "STATE-010-config-v1",
+  "models": [
+    "gru"
+  ],
+  "seeds": [
+    11,
+    23,
+    37
+  ],
+  "arms": [
+    "direct_linear",
+    "factorized_identity",
+    "factorized_relu"
+  ],
+  "curves": [
+    0,
+    168,
+    1008
+  ],
+  "encoder_updates": 0,
+  "updates": 1008,
+  "batch": 16,
+  "train_count": 2688,
+  "epochs": 6,
+  "train_blocks": [
+    "state010_train_0",
+    "state010_train_1",
+    "state010_train_2",
+    "state010_train_3"
+  ],
+  "groups": 168,
+  "count": 672,
+  "evaluation_seed": 10010,
+  "diagnostic_name": "state010_diagnostic",
+  "final_name": "state010_final",
+  "history_events": 63,
+  "features": 32,
+  "reader_seed_base": 1001000,
+  "learning_rate": 0.003,
+  "weight_decay": 0,
+  "gradient_clip": 1.0,
+  "torch_version": "2.15.0+cpu",
+  "source_raw_result_sha256": "6aab4c7e3f9b0109f07c46a5b0c64c65f9579875a70e1a4a832b8c38b61cde57",
+  "reference_encoder_parameter_sha256": {
+    "11": "e35c3cb9d1c01d6631c785ec1cb115200b4601994d9f9d68e2eedfd64fa6dbd1",
+    "23": "d6084d47f16904c64199f61127a59cec12487d0cca3fb8905f82dc18b0176daa",
+    "37": "f8ee8848bb90ce725d401d26ab4e8572efb6ed6b08acd4f3a2b5b85d65387f3b"
+  },
+  "source_encoders": {
+    "11": {
+      "bytes": 19872,
+      "kind": "encoder",
+      "name": "trained-encoder.f32",
+      "parameter_sha256": "e35c3cb9d1c01d6631c785ec1cb115200b4601994d9f9d68e2eedfd64fa6dbd1",
+      "sha256": "97751b766cdc8b521b57a5b1038dcca1306f37ed2df49468ce245b46d412c942",
+      "tensors": [
+        {
+          "bytes": 32,
+          "name": "head.bias",
+          "offset_bytes": 0,
+          "shape": [
+            8
+          ]
+        },
+        {
+          "bytes": 1024,
+          "name": "head.weight",
+          "offset_bytes": 32,
+          "shape": [
+            8,
+            32
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_hh_l0",
+          "offset_bytes": 1056,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_ih_l0",
+          "offset_bytes": 1440,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 12288,
+          "name": "recurrent.weight_hh_l0",
+          "offset_bytes": 1824,
+          "shape": [
+            96,
+            32
+          ]
+        },
+        {
+          "bytes": 5760,
+          "name": "recurrent.weight_ih_l0",
+          "offset_bytes": 14112,
+          "shape": [
+            96,
+            15
+          ]
+        }
+      ]
+    },
+    "23": {
+      "bytes": 19872,
+      "kind": "encoder",
+      "name": "trained-encoder.f32",
+      "parameter_sha256": "d6084d47f16904c64199f61127a59cec12487d0cca3fb8905f82dc18b0176daa",
+      "sha256": "752fae34c18eba54f6074a40cbd30539a95828dcb4f6b5138e837cdbe3416f98",
+      "tensors": [
+        {
+          "bytes": 32,
+          "name": "head.bias",
+          "offset_bytes": 0,
+          "shape": [
+            8
+          ]
+        },
+        {
+          "bytes": 1024,
+          "name": "head.weight",
+          "offset_bytes": 32,
+          "shape": [
+            8,
+            32
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_hh_l0",
+          "offset_bytes": 1056,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_ih_l0",
+          "offset_bytes": 1440,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 12288,
+          "name": "recurrent.weight_hh_l0",
+          "offset_bytes": 1824,
+          "shape": [
+            96,
+            32
+          ]
+        },
+        {
+          "bytes": 5760,
+          "name": "recurrent.weight_ih_l0",
+          "offset_bytes": 14112,
+          "shape": [
+            96,
+            15
+          ]
+        }
+      ]
+    },
+    "37": {
+      "bytes": 19872,
+      "kind": "encoder",
+      "name": "trained-encoder.f32",
+      "parameter_sha256": "f8ee8848bb90ce725d401d26ab4e8572efb6ed6b08acd4f3a2b5b85d65387f3b",
+      "sha256": "3d0b7ea232cd045d2426cbec158e81695fa9c4e46ff427c90ed75906ea8a437c",
+      "tensors": [
+        {
+          "bytes": 32,
+          "name": "head.bias",
+          "offset_bytes": 0,
+          "shape": [
+            8
+          ]
+        },
+        {
+          "bytes": 1024,
+          "name": "head.weight",
+          "offset_bytes": 32,
+          "shape": [
+            8,
+            32
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_hh_l0",
+          "offset_bytes": 1056,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 384,
+          "name": "recurrent.bias_ih_l0",
+          "offset_bytes": 1440,
+          "shape": [
+            96
+          ]
+        },
+        {
+          "bytes": 12288,
+          "name": "recurrent.weight_hh_l0",
+          "offset_bytes": 1824,
+          "shape": [
+            96,
+            32
+          ]
+        },
+        {
+          "bytes": 5760,
+          "name": "recurrent.weight_ih_l0",
+          "offset_bytes": 14112,
+          "shape": [
+            96,
+            15
+          ]
+        }
+      ]
+    }
+  },
+  "set_fingerprints": {
+    "state010_train_0": "8091749d2e662926687f2d9b5a4e82a4ee0c7a75bed00989ea274ad2a7c0c2bf",
+    "state010_train_1": "b88b7290c14c6ca3577ac6b1e1c271731a4b7f7f07c833f966a80efd1a383814",
+    "state010_train_2": "816418c58ad9d513e9e76e76e423bf450591dba5246532fbd8b018a5479a7f67",
+    "state010_train_3": "887bf25119c4935c4fa4cc62cf02c6fd911140f6b3f176b5d06ee75d0c8e9086",
+    "state010_diagnostic": "108f568a00b700d3aa4d714f606eabb51efda29f7be2199031ed81ce4f523265",
+    "state010_final": "a2910e23cbf2852f5ba36ca30776994b36ea38659869d2d0be57dd912f1adaac"
+  },
+  "signal_final_quartets": 17,
+  "signal_final_individual": 168,
+  "decoder_advantage_quartets": 17,
+  "reliability_final_quartets": 135,
+  "reliability_final_individual": 605
+}

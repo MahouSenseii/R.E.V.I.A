@@ -6,7 +6,31 @@ goal. It does not replace or train Revia's installed language model. Practical
 memory and corrections remain a separate path. Useful results may become small,
 separately reviewed Revia changes later.
 
-## Latest measured study - STATE-009
+## Latest measured study - STATE-010
+
+The nonlinear reader showed no consistent benefit. Direct/identity/ReLU readers
+answered 27.88%/29.56%/27.93% of individual questions correctly, versus 12.5%
+references, but every arm/seed scored **0/168 complete four-case groups** and
+missed all fixed screens. Learning curves improved; this does not prove
+convergence, absent facts or that broader RNL research is impossible.
+
+Nine reader fits reused three saved encoders with zero encoder updates. The
+single CPU run took 216.566 seconds; controls, 12096 retained predictions, 15 safe
+FP32 snapshots and owned cleanup reconciled. Main matrix MACs and similar
+parameters do not match total compute; supplied key selection is not routing
+learned by the model. No LLM or Revia improvement is established.
+
+Saved-row errors support investigating learned keyed write/read structure,
+not another automatic activation grid. A design-only comparison would use a
+fresh GRU on the same recipe and a simple external dictionary, which already
+solves this symbolic task without training. No next model has run.
+
+See [results](RESULTS-STATE-010.md), [method](STATE-010.md),
+[status](STATE-010-status.json), [exact aggregates](results/STATE-010/summary.json),
+[configuration](STATE-010-config.json), [worker](state010.py), [data](state010_data.py),
+[worker controls](test_state010.py) and [data controls](test_state010_data.py).
+
+## Earlier frozen-state readout - STATE-009
 
 Trained-state readers answered 27.28% of individual questions correctly, versus
 17.11% for trained readers over initial encoder states. A separately trained
@@ -27,11 +51,9 @@ predictions, 15 safe FP32 snapshots, resource caps and cleanup reconciled. Weigh
 remain local so future work can avoid encoder replay. No installed Revia model,
 application integration or general language-quality result is established.
 
-The recommended next question is whether a small nonlinear reader improves joint
-recall over matched identity and direct linear references using saved states and
-fresh confirmation groups. Learned keyed write/read state and an end-to-end GRU
-training-recipe control remain separate architecture/learning hypotheses. No
-next-probe code, new dataset, training or automatic integration has run.
+That nonlinear-reader follow-up is now completed in STATE-010 above. It does not
+identify the cause of these earlier findings, which remain unchanged. Learned
+keyed state and an end-to-end training-recipe control remain unrun hypotheses.
 
 See [results and interpretations](RESULTS-STATE-009.md), [method](STATE-009.md),
 [status](STATE-009-status.json), [exact aggregates](results/STATE-009/summary.json),
@@ -57,8 +79,8 @@ See [results and interpretations](RESULTS-STATE-009.md), [method](STATE-009.md),
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | A nonlinear-reader control over saved states is proposed; learned keyed state and an encoder-training recipe control remain alternatives. No next experiment has run |
-| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair, STATE-006's six-cell no-go, STATE-007's modest learning gains/recency audit, STATE-008's partial individual answers/zero full groups, and STATE-009's partial readout signal with every full-group screen missed |
+| Experimental | Hypothesis, static review or proposed experiment | Learned keyed write/read state versus a fresh GRU and exact dictionary is design only; no next model or training has run |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair, STATE-006's six-cell no-go, STATE-007's modest learning gains/recency audit, STATE-008's partial individual answers/zero full groups, STATE-009's partial readout signal, and STATE-010's negative nonlinear-reader comparison; all full-group screens missed |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
