@@ -14,6 +14,23 @@ using revia::identity::ReadConversationSignals;
 using revia::identity::BuildRelationshipEvent;
 using revia::emotion::BuildConversationStimulus;
 
+void TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker()
+{
+    using revia::identity::ReadStatedName;
+    for (const std::string input : {"Don't call me Sam.", "Do not call me Sam.", "Please never call me Sam.",
+             "You must not call me Sam.", "Don't ever call me Sam.", "I asked you not to call me Sam.",
+             "I don't want you to call me Sam.", "Don’t call me Sam."})
+        Check(ReadStatedName(input).empty(), "A rejected name became the current speaker's introduction: " + input);
+    std::string missingAffirmative;
+    for (const std::string input : {"Don't call me Sam. Call me Alex.", "Call me Alex. Don't call me Sam.",
+             "She said \"Don't call me Sam.\" Call me Alex.", "Don't call me Sam, you can call me Alex.",
+             "Do not forget that my name is Alex.", "I'm not upset; call me Alex.",
+             "Why not call me Alex?", "Don't call me Sam. Why not call me Alex?",
+             "I'm not \"upset.\" Call me Alex."})
+        if (ReadStatedName(input)!="Alex") missingAffirmative += "\n" + input;
+    Check(missingAffirmative.empty(), "Rejected affirmative introductions:" + missingAffirmative);
+}
+
 void TestReferenceCheckDoesNotInventRepeatedCorrection()
 {
     const std::string input = "Check your explanation against these supplied facts: the compiler produces object files; "
@@ -72,6 +89,7 @@ void TestActualHostilityAndQuotedSignalsRemainDistinct()
 
 void RunRelationshipEvidenceTests()
 {
+    TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker();
     TestReferenceCheckDoesNotInventRepeatedCorrection();
     TestRepeatSignalsRequirePhraseBoundaries();
     TestActualHostilityAndQuotedSignalsRemainDistinct();

@@ -13,6 +13,39 @@ namespace revia::identity
 
 namespace
 {
+    bool NamingIsNegated(const std::string& input, const std::size_t at)
+    {
+        // Only a directly negated naming occurrence is excluded. A negation elsewhere
+        // ("don't forget that my name is Alex") does not negate the introduction.
+        const std::size_t begin = at > 64 ? at - 64 : 0;
+        std::string lead;
+        for (std::size_t index = begin; index < at; ++index)
+        {
+            const unsigned char ch = static_cast<unsigned char>(input[index]);
+            if (std::isspace(ch) != 0)
+            {
+                if (!lead.empty() && lead.back() != ' ') lead.push_back(' ');
+            }
+            else lead.push_back(static_cast<char>(std::tolower(ch)));
+        }
+        while (!lead.empty() && lead.back() == ' ') lead.pop_back();
+        for (std::size_t quote = lead.find("\xE2\x80\x99"); quote != std::string::npos;
+            quote = lead.find("\xE2\x80\x99", quote + 1))
+            lead.replace(quote, 3, "'");
+        // "Why not call me Alex?" is a suggestion, not a rejected name.
+        if (lead == "why not" || lead.ends_with(" why not")) return false;
+        for (const std::string_view suffix : {"not", "never", "don't", "dont", "cannot", "can't", "cant",
+                 "mustn't", "shouldn't", "wouldn't", "won't", "don't ever", "do not ever", "never ever",
+                 "not to", "don't want you to", "do not want you to", "don't want to", "do not want to"})
+        {
+            if (!lead.ends_with(suffix)) continue;
+            const auto start = lead.size() - suffix.size();
+            if (start == 0 || (std::isalnum(static_cast<unsigned char>(lead[start - 1])) == 0 && lead[start - 1] != '_'))
+                return true;
+        }
+        return false;
+    }
+
     std::string Lower(std::string value)
     {
         std::transform(value.begin(), value.end(), value.begin(),
@@ -148,7 +181,11 @@ std::string ReadStatedName(const std::string& userInput)
     const std::string lowered = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
     for (const Opener& opener : openers)
     {
-        const std::size_t at = lowered.find(opener.text);
+        std::size_t at = lowered.find(opener.text);
+        // The authored copy chooses the occurrence. Original-text lookbehind keeps
+        // quote boundaries rather than joining a masked quote onto a prior "not".
+        while (at != std::string::npos && NamingIsNegated(userInput, at))
+            at = lowered.find(opener.text, at + opener.text.size());
         if (at == std::string::npos)
         {
             continue;
