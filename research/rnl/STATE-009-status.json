@@ -1,0 +1,47 @@
+{
+  "experiment": "STATE-009",
+  "status": "complete_predeclared_screens_missed",
+  "paired_seeds": 3,
+  "head_fits": 9,
+  "outer_wall_seconds": 305.5761761,
+  "original_hashes_matched": 24,
+  "retained_predictions_locally": 12096,
+  "fitted_readout_individual_accuracy": {
+    "trained_selected": 0.2728174603174603,
+    "trained_blind": 0.27529761904761907,
+    "initial_selected": 0.17113095238095238
+  },
+  "full_quartets_correct_per_arm_seed": 0,
+  "quartets_per_set": 168,
+  "all_predeclared_screens_passed": false,
+  "partial_query_pairs_correct": {
+    "trained_selected": 39,
+    "trained_blind": 0,
+    "initial_selected": 24
+  },
+  "query_pairs_per_arm_pool": 1008,
+  "posthoc_three_correct_group_runs": {
+    "trained_selected": 15,
+    "trained_blind": 0,
+    "initial_selected": 3
+  },
+  "group_runs_per_arm_pool": 504,
+  "group_runs_independent": false,
+  "query_corruption_correct": {
+    "recorded_query": 550,
+    "other_recorded_key": 533
+  },
+  "query_corruption_seed_net_advantage": [
+    -2,
+    13,
+    6
+  ],
+  "initial_encoder_reader_is_trained": true,
+  "cleanup_confirmed": true,
+  "independent_result_review": "passed",
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "report": "RESULTS-STATE-009.md",
+  "summary": "results/STATE-009/summary.json",
+  "next_question": "Proposed factorized identity/ReLU reader control plus direct linear reference; unimplemented/unrun. Explicit learned memory and encoder-training recipe remain alternative hypotheses."
+}

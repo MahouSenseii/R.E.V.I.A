@@ -6,6 +6,39 @@ goal. It does not replace or train Revia's installed language model. Practical
 memory and corrections remain a separate path. Useful results may become small,
 separately reviewed Revia changes later.
 
+## Latest measured study - STATE-009
+
+Trained-state readers answered 27.28% of individual questions correctly, versus
+17.11% for trained readers over initial encoder states. A separately trained
+query-blind mean reader scored 27.53%. Every arm/seed scored **0/168 complete
+four-case groups**, missing all predeclared screens. Similar mean accuracy does
+not establish equivalence or show that the query had no effect: the readout
+policies differ in effective expressivity and training gradients.
+
+Partial recall remains useful evidence: trained-state selected readers solved
+both queries on 39/1,008 pairs, versus 24 for initial-state readers and zero for
+blind by construction. A post hoc audit found 15 versus 3 three-of-four group-runs;
+these share groups across seeds and are not a replacement success gate. Reusing
+the other recorded key's output gives 533 versus 550 correct for trained selected,
+with mixed seed signs. This fixed-sample key-corruption check adds no model call.
+
+The single approved run took 305.576 seconds. All 24 original hashes, 12,096
+predictions, 15 safe FP32 snapshots, resource caps and cleanup reconciled. Weights
+remain local so future work can avoid encoder replay. No installed Revia model,
+application integration or general language-quality result is established.
+
+The recommended next question is whether a small nonlinear reader improves joint
+recall over matched identity and direct linear references using saved states and
+fresh confirmation groups. Learned keyed write/read state and an end-to-end GRU
+training-recipe control remain separate architecture/learning hypotheses. No
+next-probe code, new dataset, training or automatic integration has run.
+
+See [results and interpretations](RESULTS-STATE-009.md), [method](STATE-009.md),
+[status](STATE-009-status.json), [exact aggregates](results/STATE-009/summary.json),
+[executed configuration](STATE-009-config.json), [worker](state009.py),
+[data and accounting](state009_data.py), [worker controls](test_state009.py) and
+[data controls](test_state009_data.py).
+
 ## Scope and isolation
 
 - Research branch: `research/rnl-sandbox`, started from verified GitHub `main`
@@ -24,8 +57,8 @@ separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | A frozen-state reader probe is prepared locally to test query-conditioned decodability; native execution and training remain unrun |
-| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair, STATE-006's six-cell no-go, STATE-007's modest learning gains/recency audit, and STATE-008's partial individual answers with zero fully correct groups and post hoc query-invariance analysis |
+| Experimental | Hypothesis, static review or proposed experiment | A nonlinear-reader control over saved states is proposed; learned keyed state and an encoder-training recipe control remain alternatives. No next experiment has run |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair, STATE-006's six-cell no-go, STATE-007's modest learning gains/recency audit, STATE-008's partial individual answers/zero full groups, and STATE-009's partial readout signal with every full-group screen missed |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -148,11 +181,10 @@ sensitivity; this is not a new success gate or proof of training-induced ability
 Argmax stability does not establish hidden-state/logit invariance or lost facts.
 Shared groups/seed-runs are dependent, and this challenge differs from training.
 
-The next proposal freezes the encoder and compares query-selected readers of
-trained and initial states, with a query-blind negative control. It tests what
-can be decoded under new probe supervision; selection is supplied, not learned
-routing. The mean control is not an equally expressive competitor. The proposal
-has local source and control preparation; native execution/training remain unrun and require an exact reviewed execution approval.
+The frozen-state reader follow-up is now completed in STATE-009, summarized
+above. It compares trained and initial encoder states with trained readers and
+a query-blind negative control. These earlier STATE-008 results remain unchanged;
+the later readout result does not identify the original failure cause.
 
 See [results and error patterns](RESULTS-STATE-008.md), [status](STATE-008-status.json),
 [exact aggregates](results/STATE-008/summary.json), [method](STATE-008.md),
