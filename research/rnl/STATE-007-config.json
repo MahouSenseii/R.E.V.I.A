@@ -1,0 +1,54 @@
+{
+  "schema": "STATE-007-config-v1",
+  "experiment": "STATE-007",
+  "seeds": [
+    11,
+    23,
+    37
+  ],
+  "models": [
+    "rnn",
+    "gru"
+  ],
+  "updates": 1152,
+  "batch": 16,
+  "train_count": 3072,
+  "epochs": 6,
+  "checkpoints": [
+    0,
+    32,
+    64,
+    128,
+    192,
+    384,
+    768,
+    1152
+  ],
+  "diagnostic_name": "state007_diagnostic_A",
+  "final_name": "state007_final_A",
+  "evaluation_seed": 7007,
+  "probe_count": 128,
+  "diagnostic_count": 512,
+  "final_count": 512,
+  "lag_range": [
+    1,
+    8
+  ],
+  "improvement_threshold": 0.1,
+  "train_threshold": 0.95,
+  "final_threshold": 0.9,
+  "reference_A_sha256": {
+    "rnn/11": "638e8bc6fa9ae5b56f0ecc3a9dcb57988fa0f98f10f61419bcb5b4726f3a8863",
+    "gru/11": "63541e6ca48e4534afc6094ed2791d0fe2dd09907bfef0ae9e029fcd520029ac",
+    "gru/23": "dd1e1f428ff45c83cd01685ea38f8948a0b643e0b38a138f2834f6c83a47fbc5",
+    "rnn/23": "16694ee85c31fb9972d0cfc278f91b17070ef88c2e314fe75431993894c15897",
+    "rnn/37": "90884a5db776ba1fb6b73fe8507d068799f09f8681644d8ea0a86f4820e7a39e",
+    "gru/37": "15d5e4996621406f4976e35b3ba1824a1174c96039262ecbee5622f87b321f6a"
+  },
+  "reference_result_sha256": "4d10f420ded93e3f019a4bda8065644d3ce8050a243646c2552220de6c1327a1",
+  "reference_scientific_worker_sha256": "4ee97f055305eabf0a94b15c216e86deb7d94d349c45722f870195aa6196cb3d",
+  "reference_data_worker_sha256": "39595a540af3bf03f0ec79fc613caccbcc262b4cacf70e84da4ea77fd38fac32",
+  "torch_version": "2.15.0+cpu",
+  "purpose": "More updates on the same unique short-lag A data; no B phase, new architecture, persistent cross-request state or application claim.",
+  "preparation_only": true
+}

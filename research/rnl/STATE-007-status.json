@@ -1,0 +1,33 @@
+{
+  "experiment": "STATE-007",
+  "status": "complete_directional_progress_stronger_screens_failed",
+  "controller_exit_code": 0,
+  "wall_seconds": 360.4172099,
+  "paired_seeds": 3,
+  "cells_run": 6,
+  "optimizer_updates": 6912,
+  "learning_curve_checkpoints": 48,
+  "observed_all_seed_increase": {
+    "gru": true,
+    "rnn": true
+  },
+  "material_gain_screen": {
+    "gru": false,
+    "rnn": false
+  },
+  "basic_learnability_screen": {
+    "gru": false,
+    "rnn": false
+  },
+  "query_chance": 0.125,
+  "dictionary_replay": 1.0,
+  "unmeasured_recency_baseline": true,
+  "original_STATE006_no_go_unchanged": true,
+  "candidate_for_revia": false,
+  "integrated_into_revia": false,
+  "report": "RESULTS-STATE-007.md",
+  "summary": "results/STATE-007/summary.json",
+  "cleanup_confirmed": true,
+  "extra_runs": 0,
+  "next_step": "Proposedexisting-setrecency-ruleaudit;unimplemented/unrun,nottraining."
+}

@@ -20,12 +20,12 @@ separately reviewed Revia changes later.
 - FIRST-001 ran reviewed CPU toy code in owned workers. No dependencies, GPU,
   training, model download, or other running workload was used.
 
-## Status ledger - 2026-11-03
+## Status ledger - 2026-11-04
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | A-only learning-exposure curve qualification proposed after STATE-006; unimplemented and unrun |
-| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go |
+| Experimental | Hypothesis, static review or proposed experiment | Audit of an unmeasured key-blind recency baseline proposed after STATE-007; unimplemented and unrun |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go; STATE-007 then measured modest all-seed learning gains while missing stronger targets |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -94,14 +94,37 @@ The original setup failure and intermediate timing/admission failures remain
 historical evidence; a separately approved single-deadline continuation completed.
 Candidate for Revia and Integrated remain None. No further run follows automatically.
 
-The smallest proposed follow-up keeps the original A task, paired GRU/RNN and
-one seed, records real loss/accuracy curves and extends same-distribution
-training to a fixed1,024 updates. It screens basic learnability; fresh examples
-and update count increase together, so it does not diagnose the original cause.
-It is unimplemented and unrun. See the [reviewed analysis and proposal](RESULTS-STATE-006.md),
-[status](STATE-006-status.json), [sanitized measurements and retained failure](results/STATE-006/summary.json)
-and [historical pre-attempt protocol](STATE-006.md). Earlier positive RNL-003 and
-PREFIX-004 results retain their own scope.
+The earlier A-only learning-exposure proposal was revised into STATE-007 to hold
+the unique examples fixed while
+adding repeated updates. The STATE-006 [report](RESULTS-STATE-006.md),
+[status](STATE-006-status.json), [evidence](results/STATE-006/summary.json) and
+historical protocol remain unchanged. Its longer-delay no-go was not repaired
+or superseded by the narrower follow-up.
+
+STATE-007 completed six cells / three paired seeds, repeating each original
+3,072-example short-delay A pool for1,152 updates. Mean diagnostic accuracy rose
+from30.60% to32.94% for GRU and22.66% to30.73% for RNN between192 and1,152 updates;
+every seed increased. None met the predeclared10-point material-gain or95%probe /
+90%final-holdout targets. Fresh holdout means were33.92% /32.03%, versus12.5%
+uniform/query-key baselines and100% dictionary replay (an exact task reference,
+not a matched learned competitor). Earlier peaks were not selected as outcomes.
+
+Initial and loss curves are now retained for this A-only study. Loss fell, but
+curves were not monotonic and known-example probe accuracy remained below43%.
+Convergence, the cause of limited recall and architectural superiority remain
+unresolved. It did not retest STATE-006's B/OOD/overwrite behavior; evaluation
+namespaces differ, so cross-study score changes are not same-test improvements.
+See [results and the proposed next audit](RESULTS-STATE-007.md),
+[status](STATE-007-status.json), [all48 checkpoint records](results/STATE-007/summary.json),
+[public pre-run protocol copy](STATE-007.md), [worker](state007.py),
+[configuration](STATE-007-config.json) and [nonmodel controls](test_state007.py).
+
+The next recommended step uses no training: measure a key-blind global-last-SET
+baseline on the existing fingerprinted diagnostic/final sets. The generator's
+NOOPs make this a relevant missing comparison, but its finite-set score and any
+network use of that shortcut are unmeasured. Report overall/per-delay counts;
+retained neural outputs support aggregate comparison only. This audit is
+unimplemented and unrun. Candidate for Revia and Integrated remain None.
 
 [READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
 permitted-context Python HTTP pass; its0.609s duration is not model latency or
