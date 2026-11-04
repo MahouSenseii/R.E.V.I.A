@@ -99,10 +99,46 @@ bool IsExplicitRuntimeQuestion(const std::string& input)
 {
     const std::string lowered = LowerCopy(input);
     constexpr std::string_view RuntimeSignals[] = {"are you online", "are you working", "is revia working", "system status",
-        "runtime status", "server", "backend", "llama", "language model", "gpu", "cpu", "voice output", "microphone", "durable memory",
+        "runtime status", "backend", "llama", "language model", "gpu", "cpu", "voice output", "microphone", "durable memory",
         "pipeline", "filter", "ai review", "response review"};
-    return std::any_of(std::begin(RuntimeSignals), std::end(RuntimeSignals),
-        [&lowered](const std::string_view signal) { return lowered.find(signal) != std::string::npos; });
+    if (std::any_of(std::begin(RuntimeSignals), std::end(RuntimeSignals),
+        [&lowered](const std::string_view signal) { return lowered.find(signal) != std::string::npos; }))
+        return true;
+
+    const auto isWordCharacter = [](const unsigned char character)
+    { return std::isalnum(character) || character == '_'; };
+    for (std::size_t position = lowered.find("server"); position != std::string::npos;
+         position = lowered.find("server", position + 6))
+    {
+        std::size_t end = position + 6;
+        if (end < lowered.size() && lowered[end] == 's') ++end;
+        std::size_t ownerEnd = position;
+        while (ownerEnd > 0 && std::isspace(static_cast<unsigned char>(lowered[ownerEnd - 1]))) --ownerEnd;
+        // "My server" is the user's subject. Keep other owners and ambiguous
+        // server questions as before; inspect each occurrence for mixed subjects.
+        const bool userOwned = ownerEnd < position && ownerEnd >= 2 &&
+            lowered.compare(ownerEnd - 2, 2, "my") == 0 &&
+            (ownerEnd == 2 || !isWordCharacter(lowered[ownerEnd - 3])) &&
+            (end == lowered.size() || !isWordCharacter(lowered[end]));
+        if (!userOwned) return true;
+    }
+
+    // A user-owned server can still be the subject of an explicit question
+    // about hosting Revia. These bounded relationships do not infer ownership.
+    constexpr std::string_view ReviaHostingSignals[] = {"is my server running revia", "is my server running you",
+        "are you running on my server", "is revia running on my server"};
+    for (const std::string_view signal : ReviaHostingSignals)
+    {
+        for (std::size_t position = lowered.find(signal); position != std::string::npos;
+             position = lowered.find(signal, position + signal.size()))
+        {
+            const std::size_t end = position + signal.size();
+            if ((position == 0 || !isWordCharacter(lowered[position - 1])) &&
+                (end == lowered.size() || !isWordCharacter(lowered[end])))
+                return true;
+        }
+    }
+    return false;
 }
 
 bool MentionsInternet(const std::string& text)

@@ -174,13 +174,59 @@ void Configure(const std::filesystem::path& root, int port, bool publicChannels 
         {"vision", {{"enabled", false}}},
         {"perception", {{"enabled", false}}}, {"initiative", {{"enabled", false}}},
         {"bargeIn", {{"enabled", false}}}, {"conversation", {{"archiveEnabled", false}}},
-        {"image", {{"enabled", false}}}, {"resources", {{"startupSampleSeconds", 0}}},
+        {"image", {{"enabled", false}}}, {"resources", {{"usageSampleSeconds", 0}}},
         {"responseFilter", {{"aiReviewEnabled", false}}}
     });
     Write(root / "Config/Profiles/fixture.json", {
         {"id", "fixture"}, {"displayName", "Fixture"}, {"systemPrompt", "You are Revia. Emotion owner fixture."},
         {"shouldSpeak", true}, {"memoryEnabled", false}
     });
+}
+
+void TestRuntimeStatusGroundingTracksServerSubject()
+{
+    tests::ScopedTestDirectory directory;
+    WorkingDirectory cwd(directory.root);
+    Backend backend;
+    Configure(directory.root, backend.port);
+    ReviaSession session;
+    Check(session.Start(), "Runtime subject session did not start.");
+
+    struct Case
+    {
+        const char* question;
+        bool expectsRuntimeStatus;
+    };
+    constexpr Case cases[] = {
+        {"Which Ubuntu version is my server on?", false},
+        {"Which Ubuntu version are my servers on?", false},
+        {"Is the enemy server online?", true},
+        {"Can you tell me about my server?", false},
+        {"Revia, which Ubuntu version is my server on?", false},
+        {"Is your server online?", true},
+        {"Is Revia's server online?", true},
+        {"Is the server online?", true},
+        {"Server status?", true},
+        {"Compare my server with your server status.", true},
+        {"Is my server running Revia?", true},
+        {"Are you running on my server?", true},
+        {"Is our server online?", true},
+        {"Are you online?", true},
+        {"Is your backend working?", true}
+    };
+    for (const auto& item : cases)
+    {
+        const std::string question = item.question;
+        Check(session.Submit(question).succeeded, "Runtime subject turn failed: " + question);
+        const auto request = backend.Request();
+        Check(tests::WithoutRuntimeBlock(request.at("messages").back().value("content", "")) == question,
+            "Runtime subject handling changed the user's words: " + question);
+        const bool hasRuntimeStatus = backend.Prompt().find(
+            std::string(identity::markers::RuntimeStatusGroundTruth)) != std::string::npos;
+        Check(hasRuntimeStatus == item.expectsRuntimeStatus,
+            "Runtime status grounding did not follow the server subject: " + question);
+    }
+    session.Stop();
 }
 
 bool SameAffect(const AffectSnapshot& left, const AffectSnapshot& right)
@@ -880,6 +926,7 @@ void TestIdleReviewRecoversWithResidentGpuMemory()
 
 void RunEmotionOwnershipTests()
 {
+    TestRuntimeStatusGroundingTracksServerSubject();
     TestPerTurnStateLeavesTheSystemMessageStable();
     TestContextCompactionKeepsCurrentState();
     TestContextBudgetsAndBoundedOverflowRecovery();
