@@ -92,6 +92,43 @@ void TestReassuranceDoesNotBecomeHostility()
         "The reassurance guard flattened a directly playful insult or removed its playful cue.");
 }
 
+void TestOrdinaryRecurrenceDoesNotInventCorrectionFriction()
+{
+    struct Example { const char* input; bool correction; };
+    std::string failures;
+    for (const auto& example : {
+             Example{"Good to see you again.", false},
+             Example{"I enjoyed talking with you again.", false},
+             Example{"Could you tell that joke again?", false},
+             Example{"The server is running again.", false},
+             Example{"You keep making me laugh.", false},
+             Example{"You keep telling great jokes.", false},
+             Example{"I will try again tomorrow.", false},
+             Example{"Again, that was a great joke!", false},
+             Example{"You keep getting better.", false},
+             Example{"She said \"Again.\"", false},
+             Example{"She said \"You keep missing that.\"", false},
+             Example{"I enjoyed chatting again, but no, I meant eight.", true},
+             Example{"You keep making me laugh, but you keep missing that number.", true},
+             Example{"Could you try again, using eight?", true},
+             Example{"No, try again.", true},
+             Example{"No. Try again.", true},
+             Example{"Nope, please try again.", true},
+             Example{"Please\ntry\tAGAIN!", true}})
+    {
+        const auto signals = ReadConversationSignals(example.input, {}, true);
+        const auto event = BuildRelationshipEvent("synthetic-speaker", signals);
+        const auto stimulus = BuildConversationStimulus("synthetic-speaker", signals);
+        if (signals.repeatedCorrection != example.correction ||
+            (event.conflict > 0.0F) != example.correction ||
+            (event.negativeInteraction > 0.0F) != example.correction ||
+            (stimulus.failure > 0.0F) != example.correction ||
+            stimulus.selfCaused != example.correction)
+            failures += "\n" + std::string(example.input);
+    }
+    Check(failures.empty(), "Ordinary recurrence invented correction friction or an explicit correction was lost:" + failures);
+}
+
 void TestReferenceCheckDoesNotInventRepeatedCorrection()
 {
     const std::string input = "Check your explanation against these supplied facts: the compiler produces object files; "
@@ -153,6 +190,7 @@ void RunRelationshipEvidenceTests()
     TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker();
     TestRejectedNameMatchDoesNotHideALaterIntroduction();
     TestReassuranceDoesNotBecomeHostility();
+    TestOrdinaryRecurrenceDoesNotInventCorrectionFriction();
     TestReferenceCheckDoesNotInventRepeatedCorrection();
     TestRepeatSignalsRequirePhraseBoundaries();
     TestActualHostilityAndQuotedSignalsRemainDistinct();

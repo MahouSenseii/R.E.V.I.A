@@ -84,6 +84,47 @@ namespace
             });
     }
 
+    bool IsDirectRetryRequest(const std::string& input)
+    {
+        std::string request;
+        request.reserve(input.size());
+        for (const unsigned char character : input)
+        {
+            if (std::isspace(character) != 0)
+            {
+                if (!request.empty() && request.back() != ' ') request.push_back(' ');
+            }
+            else request.push_back(static_cast<char>(character));
+        }
+        const auto begin = request.find_first_not_of(" .!?()[]");
+        if (begin == std::string::npos) return false;
+        const auto end = request.find_last_not_of(" .!?()[]");
+        request = request.substr(begin, end - begin + 1);
+        // A rejected answer may precede the same direct retry: "No, try again."
+        for (const std::string_view rejection : {"no", "nope"})
+        {
+            if (!request.starts_with(rejection) || request.size() == rejection.size()) continue;
+            const auto next = static_cast<unsigned char>(request[rejection.size()]);
+            if (std::isalnum(next) != 0 || next == '_') continue;
+            const auto retry = request.find_first_not_of(" ,.!?;:()[]", rejection.size());
+            if (retry == std::string::npos) return false;
+            request.erase(0, retry);
+            break;
+        }
+        if (request == "again") return true;
+        // An explicit check-then-retry instruction is still a retry, not ordinary recurrence.
+        if (request.starts_with("check ") && ContainsAnyWholePhrase(request, {"then try again"})) return true;
+        for (const std::string_view prefix :
+            {"try again", "please try again", "can you try again", "could you try again", "would you try again"})
+        {
+            if (!request.starts_with(prefix)) continue;
+            if (request.size() == prefix.size() ||
+                (std::isalnum(static_cast<unsigned char>(request[prefix.size()])) == 0 && request[prefix.size()] != '_'))
+                return true;
+        }
+        return false;
+    }
+
     bool NegatesJudgmentBefore(const std::string& original, const std::size_t at)
     {
         // Use original text at the authored occurrence's offset. Masked quotations
@@ -163,8 +204,14 @@ namespace
         signals.expressedAppreciation = ContainsAny(
             input, {"thank", "thanks", "appreciate", "well done", "good job", "nice work", "that helped", "perfect", "exactly right"});
 
+        // Recurrence and praise ("good to see you again", "you keep making me laugh")
+        // do not establish a failed answer. Keep explicit complaints and direct retries;
+        // never let a positive clause suppress a separate correction in the same turn.
         signals.repeatedCorrection = ContainsAnyWholePhrase(input,
-            {"you keep", "i already said", "i just said", "again", "still not", "that's not what", "that is not what", "no, i meant"});
+            {"i already said", "i just said", "still not", "that's not what", "that is not what", "no, i meant",
+                "you keep missing", "you keep forgetting", "you keep misreading", "you keep misunderstanding",
+                "you keep repeating yourself", "you keep getting it wrong", "you keep getting that wrong", "you keep making me repeat"}) ||
+            IsDirectRetryRequest(input);
 
         signals.collaborative =
             succeeded && ContainsAny(input, {"let's", "lets ", "we should", "can you help", "work on", "together", "figure out", "let us"});
