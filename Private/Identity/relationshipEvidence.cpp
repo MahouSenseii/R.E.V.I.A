@@ -279,6 +279,25 @@ namespace
         // A greeting must be followed by punctuation or a space and nothing else.
         return std::find(greetings.begin(), greetings.end(), lead) != greetings.end();
     }
+
+    bool IsExplicitNameCorrection(const std::string& input, const std::size_t at, const std::size_t end)
+    {
+        // Require a complete final introduction; a conditional, example or joke tail
+        // does not establish a replacement identity.
+        if (input.find_first_not_of(" \t\r\n.!", end) != std::string::npos) return false;
+        std::size_t before = at;
+        while (before > 0 && std::isspace(static_cast<unsigned char>(input[before - 1])) != 0) --before;
+        for (const std::string_view marker : {"actually,", "no,"})
+        {
+            if (before < marker.size()) continue;
+            std::size_t begin = before - marker.size();
+            if (Lower(input.substr(begin, marker.size())) != marker) continue;
+            while (begin > 0 && std::isspace(static_cast<unsigned char>(input[begin - 1])) != 0) --begin;
+            // Original bytes retain quotation boundaries that the authored view masks.
+            return begin == 0 || std::string_view(".!?;").find(input[begin - 1]) != std::string_view::npos;
+        }
+        return false;
+    }
 }
 
 std::string ReadStatedName(const std::string& userInput)
@@ -296,8 +315,9 @@ std::string ReadStatedName(const std::string& userInput)
     const std::string lowered = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
     for (const Opener& opener : openers)
     {
+        std::string stated;
         // A rejected match must not hide a later introduction using the same phrase.
-        // Keep the established opener priority and first valid match within it.
+        // Keep opener priority and the first valid match unless explicitly corrected.
         for (std::size_t at = lowered.find(opener.text); at != std::string::npos;
             at = lowered.find(opener.text, at + opener.text.size()))
         {
@@ -355,8 +375,10 @@ std::string ReadStatedName(const std::string& userInput)
                 continue;
             }
             name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-            return name;
+            if (stated.empty() || IsExplicitNameCorrection(userInput, at, index))
+                stated = name;
         }
+        if (!stated.empty()) return stated;
     }
     return {};
 }

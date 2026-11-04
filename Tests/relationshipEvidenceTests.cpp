@@ -56,6 +56,41 @@ void TestRejectedNameMatchDoesNotHideALaterIntroduction()
     Check(failures.empty(), "A rejected match hid a later introduction or changed established naming rules:" + failures);
 }
 
+void TestExplicitNameSelfCorrectionKeepsSpeakerOwnership()
+{
+    struct Example { const char* input; const char* expected; };
+    std::string failures;
+    for (const auto& example : {
+             Example{"My name is Sam. Actually, my name is Davis.", "Davis"},
+             Example{"Call me Sam. No, call me Davis.", "Davis"},
+             Example{"I'm upset. Call me Sam. No, call me Davis!", "Davis"},
+             Example{"My name is Sam. ACTUALLY,  my name is Davis.", "Davis"},
+             Example{"Call me Sam.\nNo,\tcall me Davis.", "Davis"},
+             Example{"My name is Sam. Actually, my name is Davis. No, my name is Alex.", "Alex"},
+             Example{"Call me Sam. Call me Alex.", "Sam"},
+             Example{"Call me Sam. My name is Davis.", "Davis"},
+             Example{"My name is Sam. Actually, my name is not Davis.", "Sam"},
+             Example{"Call me Sam. No, don't call me Davis.", "Sam"},
+             Example{"Call me Sam. \"No, call me Davis.\"", "Sam"},
+             Example{"Call me Sam. She said: \"No, call me Davis.\"", "Sam"},
+             Example{"Call me Sam. No, \"wait\" call me Davis.", "Sam"},
+             Example{"Call me Sam. \"No,\" call me Davis.", "Sam"},
+             Example{"Call me Sam. No, call me Davis if we use an alias.", "Sam"},
+             Example{"Call me Sam. No, call me Davis in this story.", "Sam"},
+             Example{"Call me Sam. No, call me Davis is just an example.", "Sam"},
+             Example{"Call me Sam. No, call me Davis. Just kidding.", "Sam"},
+             Example{"Call me Sam. No, call me Davis?", "Sam"},
+             Example{"Call me Sam. If we need an alias,\nactually, call me Davis.", "Sam"},
+             Example{"Call me Sam. Here is a fictional example:\nNo, call me Davis.", "Sam"},
+             Example{"Call me Sam. No, call me Davissssssssssssssssssssssssssssssssss.", "Sam"}})
+    {
+        const auto actual = revia::identity::ReadStatedName(example.input);
+        if (actual != example.expected)
+            failures += "\n" + std::string(example.input) + " => [" + actual + "]; expected [" + example.expected + "]";
+    }
+    Check(failures.empty(), "An explicit self-correction or its ownership boundaries were misread:" + failures);
+}
+
 void TestReassuranceDoesNotBecomeHostility()
 {
     struct Example { const char* input; bool hostile; };
@@ -230,6 +265,7 @@ void RunRelationshipEvidenceTests()
 {
     TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker();
     TestRejectedNameMatchDoesNotHideALaterIntroduction();
+    TestExplicitNameSelfCorrectionKeepsSpeakerOwnership();
     TestReassuranceDoesNotBecomeHostility();
     TestOrdinaryRecurrenceDoesNotInventCorrectionFriction();
     TestObjectModifiedCorrectionPreservesEvidence();
