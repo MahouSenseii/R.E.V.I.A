@@ -83,6 +83,37 @@ namespace
                 return false;
             });
     }
+
+    bool NegatesJudgmentBefore(const std::string& original, const std::size_t at)
+    {
+        // Use original text at the authored occurrence's offset. Masked quotations
+        // must not join a prior "I'm not saying" to a separate unquoted insult.
+        const std::size_t begin = at > 64 ? at - 64 : 0;
+        std::string lead;
+        for (std::size_t index = begin; index < at; ++index)
+        {
+            const unsigned char ch = static_cast<unsigned char>(original[index]);
+            if (std::isspace(ch) != 0)
+            {
+                if (!lead.empty() && lead.back() != ' ') lead.push_back(' ');
+            }
+            else lead.push_back(static_cast<char>(std::tolower(ch)));
+        }
+        while (!lead.empty() && lead.back() == ' ') lead.pop_back();
+        for (std::size_t quote = lead.find("\xE2\x80\x99"); quote != std::string::npos;
+            quote = lead.find("\xE2\x80\x99", quote + 1))
+            lead.replace(quote, 3, "'");
+        if (lead.ends_with(" that")) lead.resize(lead.size() - 5);
+        for (const std::string_view prefix :
+            {"i don't think", "i do not think", "i'm not saying", "i am not saying"})
+        {
+            if (!lead.ends_with(prefix)) continue;
+            const auto start = lead.size() - prefix.size();
+            if (start == 0 || (std::isalnum(static_cast<unsigned char>(lead[start - 1])) == 0 && lead[start - 1] != '_'))
+                return true;
+        }
+        return false;
+    }
     }
 
     ConversationSignals ReadConversationSignals(const std::string& userInput, const std::string& reply, const bool succeeded)
@@ -98,9 +129,19 @@ namespace
         // Aimed at Revia, not at the problem. The distinction matters: "this is broken" is
         // not evidence about the relationship, and treating it as such would make her resent
         // anyone doing difficult work with her.
-        signals.hostileTowardRevia =
-            ContainsAny(input, {"i hate you", "you're useless", "you are useless", "you're stupid", "you are stupid", "shut up",
-                                   "nobody likes you", "you suck", "you're worthless", "you are worthless"});
+        for (const std::string_view phrase :
+            {"i hate you", "you're useless", "you are useless", "you're stupid", "you are stupid", "shut up",
+                "nobody likes you", "you suck", "you're worthless", "you are worthless"})
+        {
+            for (std::size_t at = input.find(phrase); at != std::string::npos;
+                at = input.find(phrase, at + phrase.size()))
+            {
+                if (NegatesJudgmentBefore(userInput, at)) continue;
+                signals.hostileTowardRevia = true;
+                break;
+            }
+            if (signals.hostileTowardRevia) break;
+        }
 
         // A direct put-down is different from the user discussing their own care, or
         // quoting somebody else's words. Keep this narrow: the word therapy by itself
