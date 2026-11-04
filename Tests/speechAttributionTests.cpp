@@ -5,6 +5,7 @@
 #include "Agents/conversationStylePolicy.h"
 
 #include <iostream>
+#include <vector>
 
 namespace
 {
@@ -92,6 +93,43 @@ void TestSpeakerAndRecipientBoundaries()
         "Ordinary string literals received conversation-role markup.");
 }
 
+void TestOwnershipCorrectionDoesNotInventMessengerHistory()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const std::string ordinary = "That's what you said: \"The rover has six wheels.\"";
+    const std::string mistaken = "You're mixing up your own words.";
+    const std::vector<conversationMessage> context = {{"assistant", "The rover has six wheels."}};
+    std::string failures;
+    for (const std::string input : std::vector<std::string>{
+        ordinary,
+        "Those were your words. You said: \"The rover has six wheels.\"",
+        "My friend said to me: \"You're mistaken.\" That's what you said: \"The rover has six wheels.\"",
+        "That's what you said: \"The rover has six wheels.\" Someone else said: \"Use eight.\"",
+        "\"But that's what they said to you after you said\" is an example. Those were your words. You said: "
+        "\"The rover has six wheels.\" Someone else said: \"Hello.\"",
+        "But that's what they said \"maybe\" to you after you said: \"The rover has six wheels.\"",
+        "But that's what they said to you before you said: \"The rover has six wheels.\""})
+    {
+        const auto reply = policy.RefineReply(input, context, mistaken);
+        if (reply != "Those were my words.") failures += "\n" + input + " => " + reply;
+    }
+    const std::vector<conversationMessage> unrelated = {
+        {"user", "My friend said to you: \"Hello.\""}, {"assistant", "The rover has six wheels."}};
+    const auto unrelatedReply = policy.RefineReply(ordinary, unrelated, mistaken);
+    if (unrelatedReply != "Those were my words.") failures += "\nAn unrelated prior report => " + unrelatedReply;
+    Check(failures.empty(), "An ownership correction invented third-party response or messenger history:" + failures);
+
+    const std::string correct = "Those were my words. I'll correct the wheel count.";
+    Check(policy.RefineReply(ordinary, context, correct) == correct,
+        "A concise correct ownership acknowledgment was replaced.");
+    Check(policy.RefineReply("That is what they said to you after you said: \"The rover has six wheels.\"", context, mistaken) ==
+              "Those were my words. They were responding to me; you were passing their message along.",
+        "An explicit current linked messenger correction lost its established participants.");
+    const std::string playful = "Fine, but I'm keeping the imaginary crown.";
+    Check(policy.RefineReply("Let's keep joking.", {}, playful) == playful,
+        "Ownership repair changed unrelated playful conversation.");
+}
+
 void TestReportedRebuttalAndFollowup()
 {
     const std::string report = "Someone else said if you don't have feelings why are you getting defensive. "
@@ -153,6 +191,7 @@ void RunSpeechAttributionTests()
     TestLongWhitespaceAndIdentifiersKeepAttributionBounded();
     TestReportedSpeechDoesNotBecomeUserEvidence();
     TestSpeakerAndRecipientBoundaries();
+    TestOwnershipCorrectionDoesNotInventMessengerHistory();
     TestReportedRebuttalAndFollowup();
     std::cout << "Reported speech, messenger evidence, correction and follow-up attribution tests passed.\n";
 }

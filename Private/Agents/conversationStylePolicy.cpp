@@ -1039,7 +1039,18 @@ std::string ConversationStylePolicy::RefineReply(
             normalized.find("you ") != std::string::npos ||
             normalized.find("youre ") != std::string::npos ||
             normalized.find("your ") != std::string::npos)
-            return "Those were my words. They were responding to me; you were passing their message along.";
+        {
+            // Quotation masking must not join separate words into a speaker link.
+            std::string correction = NormalizeSentence(rawInput.substr(0, attribution.quotes.front().begin));
+            if (correction.starts_with("but ")) correction.erase(0, 4);
+            // Only this explicit current linkage supports the extra messenger history.
+            // An unrelated report or a different recipient does not establish it.
+            const bool linkedReply = attribution.refersToOtherPerson &&
+                (correction.starts_with("thats what they said to you after you said") ||
+                    correction.starts_with("that is what they said to you after you said"));
+            return linkedReply ? "Those were my words. They were responding to me; you were passing their message along."
+                               : "Those were my words.";
+        }
     }
 
     const auto authoredLower = LowerCopy(input);
