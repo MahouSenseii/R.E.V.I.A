@@ -181,66 +181,67 @@ std::string ReadStatedName(const std::string& userInput)
     const std::string lowered = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
     for (const Opener& opener : openers)
     {
-        std::size_t at = lowered.find(opener.text);
-        // The authored copy chooses the occurrence. Original-text lookbehind keeps
-        // quote boundaries rather than joining a masked quote onto a prior "not".
-        while (at != std::string::npos && NamingIsNegated(userInput, at))
-            at = lowered.find(opener.text, at + opener.text.size());
-        if (at == std::string::npos)
+        // A rejected match must not hide a later introduction using the same phrase.
+        // Keep the established opener priority and first valid match within it.
+        for (std::size_t at = lowered.find(opener.text); at != std::string::npos;
+            at = lowered.find(opener.text, at + opener.text.size()))
         {
-            continue;
-        }
-        // Whole words only: "recall me" is not "call me", "surname's" is not "name's".
-        if (at > 0 && std::isalpha(static_cast<unsigned char>(lowered[at - 1])) != 0)
-        {
-            continue;
-        }
-        if (opener.onlyAtStart && !StartsTheUtterance(lowered, at))
-        {
-            continue;
-        }
-        std::size_t index = at + opener.text.size();
-        std::string name;
-        // One word, letters and a couple of joining characters only. Taking the rest of
-        // the sentence would store "quentin and i work on revia" as somebody's name.
-        while (index < userInput.size() && name.size() < 32)
-        {
-            const unsigned char character = static_cast<unsigned char>(userInput[index]);
-            if (std::isalpha(character) != 0 || character == '-' || character == '\'')
+            // The authored copy chooses the occurrence. Original-text lookbehind keeps
+            // quote boundaries rather than joining a masked quote onto a prior "not".
+            if (NamingIsNegated(userInput, at)) continue;
+            // Whole words only: "recall me" is not "call me", "surname's" is not "name's".
+            if (at > 0 && std::isalpha(static_cast<unsigned char>(lowered[at - 1])) != 0)
             {
-                name.push_back(userInput[index]);
-                ++index;
                 continue;
             }
-            break;
+            if (opener.onlyAtStart && !StartsTheUtterance(lowered, at))
+            {
+                // A later occurrence cannot move back to the start of the utterance.
+                break;
+            }
+            std::size_t index = at + opener.text.size();
+            std::string name;
+            // One word, letters and a couple of joining characters only. Taking the rest of
+            // the sentence would store "quentin and i work on revia" as somebody's name.
+            while (index < userInput.size() && name.size() < 32)
+            {
+                const unsigned char character = static_cast<unsigned char>(userInput[index]);
+                if (std::isalpha(character) != 0 || character == '-' || character == '\'')
+                {
+                    name.push_back(userInput[index]);
+                    ++index;
+                    continue;
+                }
+                break;
+            }
+            if (name.size() < 2)
+            {
+                continue;
+            }
+            // Rejecting these matters: "call me later" and "this is fine" both match an
+            // opener, and storing them would rename the person to a stray word.
+            static const std::vector<std::string> notNames = {
+                "later", "back", "when", "if", "fine", "good", "it", "the", "a", "an",
+                "me", "you", "your", "my", "and", "but", "so", "that", "this", "what",
+                "where", "why", "how", "who", "which", "not", "part", "just", "really",
+                "very", "all", "about", "like", "going", "gonna", "getting", "what's",
+                "it's", "because", "now", "here", "there", "then", "too", "also",
+                "only", "still", "actually", "definitely", "probably", "literally",
+                "great", "cool", "nice", "awesome", "amazing", "weird", "strange", "crazy",
+                "wild", "wrong", "right", "true", "false", "bad", "worse", "better", "best",
+                "hard", "easy", "interesting", "important", "funny", "annoying", "broken",
+                "working", "done", "new", "old", "big", "small", "our", "his", "her",
+                "their", "its", "some", "any", "no", "one", "exactly", "insane", "revia",
+                "anytime", "tomorrow", "tonight", "whenever", "sometime", "again", "maybe"
+            };
+            const std::string loweredName = Lower(name);
+            if (std::find(notNames.begin(), notNames.end(), loweredName) != notNames.end())
+            {
+                continue;
+            }
+            name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            return name;
         }
-        if (name.size() < 2)
-        {
-            continue;
-        }
-        // Rejecting these matters: "call me later" and "this is fine" both match an
-        // opener, and storing them would rename the person to a stray word.
-        static const std::vector<std::string> notNames = {
-            "later", "back", "when", "if", "fine", "good", "it", "the", "a", "an",
-            "me", "you", "your", "my", "and", "but", "so", "that", "this", "what",
-            "where", "why", "how", "who", "which", "not", "part", "just", "really",
-            "very", "all", "about", "like", "going", "gonna", "getting", "what's",
-            "it's", "because", "now", "here", "there", "then", "too", "also",
-            "only", "still", "actually", "definitely", "probably", "literally",
-            "great", "cool", "nice", "awesome", "amazing", "weird", "strange", "crazy",
-            "wild", "wrong", "right", "true", "false", "bad", "worse", "better", "best",
-            "hard", "easy", "interesting", "important", "funny", "annoying", "broken",
-            "working", "done", "new", "old", "big", "small", "our", "his", "her",
-            "their", "its", "some", "any", "no", "one", "exactly", "insane", "revia",
-            "anytime", "tomorrow", "tonight", "whenever", "sometime", "again", "maybe"
-        };
-        const std::string loweredName = Lower(name);
-        if (std::find(notNames.begin(), notNames.end(), loweredName) != notNames.end())
-        {
-            continue;
-        }
-        name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-        return name;
     }
     return {};
 }

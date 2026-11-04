@@ -31,6 +31,31 @@ void TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker()
     Check(missingAffirmative.empty(), "Rejected affirmative introductions:" + missingAffirmative);
 }
 
+void TestRejectedNameMatchDoesNotHideALaterIntroduction()
+{
+    struct Example { const char* input; const char* expected; };
+    std::string failures;
+    for (const auto& example : {
+             Example{"My name is not Sam. My name is Davis.", "Davis"},
+             Example{"Call me later. Call me Alex.", "Alex"},
+             Example{"Please recall me tomorrow. Call me Alex.", "Alex"},
+             Example{"My name is X. My name is Davis.", "Davis"},
+             Example{"Don't call me Sam. Call me later. Call me Alex.", "Alex"},
+             Example{"I'm upset; call me later. Call me Alex.", "Alex"},
+             Example{"Call me later. Call me tomorrow.", ""},
+             Example{"My name is not Sam. My name is not Alex.", ""},
+             Example{"Call me later. She said \"Call me Alex.\"", ""},
+             Example{"This is fine. This is Alex.", ""},
+             Example{"Call me Sam. Call me Alex.", "Sam"},
+             Example{"Call me Sam. My name is Davis.", "Davis"}})
+    {
+        const auto actual = revia::identity::ReadStatedName(example.input);
+        if (actual != example.expected)
+            failures += "\n" + std::string(example.input) + " => [" + actual + "]; expected [" + example.expected + "]";
+    }
+    Check(failures.empty(), "A rejected match hid a later introduction or changed established naming rules:" + failures);
+}
+
 void TestReferenceCheckDoesNotInventRepeatedCorrection()
 {
     const std::string input = "Check your explanation against these supplied facts: the compiler produces object files; "
@@ -90,6 +115,7 @@ void TestActualHostilityAndQuotedSignalsRemainDistinct()
 void RunRelationshipEvidenceTests()
 {
     TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker();
+    TestRejectedNameMatchDoesNotHideALaterIntroduction();
     TestReferenceCheckDoesNotInventRepeatedCorrection();
     TestRepeatSignalsRequirePhraseBoundaries();
     TestActualHostilityAndQuotedSignalsRemainDistinct();
