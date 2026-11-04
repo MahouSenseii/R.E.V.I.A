@@ -56,6 +56,42 @@ void TestRejectedNameMatchDoesNotHideALaterIntroduction()
     Check(failures.empty(), "A rejected match hid a later introduction or changed established naming rules:" + failures);
 }
 
+void TestReassuranceDoesNotBecomeHostility()
+{
+    struct Example { const char* input; bool hostile; };
+    std::string failures;
+    for (const auto& example : {
+             Example{"I don't think you're useless.", false},
+             Example{"I do not think you are stupid.", false},
+             Example{"I'm not saying you're worthless.", false},
+             Example{"I am not saying that you are stupid.", false},
+             Example{"I DON'T\nTHINK\tTHAT you're useless.", false},
+             Example{"I don\xE2\x80\x99t think you're useless.", false},
+             Example{"She said \"You're useless.\" I don't think you are stupid.", false},
+             Example{"I'm sad. I don't think you're useless.", false},
+             Example{"Thanks. I don't think you're useless.", false},
+             Example{"I don't think you're useless. You're useless.", true},
+             Example{"I am not saying you are stupid, but you are useless.", true},
+             Example{"I'm not only saying you are stupid.", true},
+             Example{"I don't just think you're useless; I know it.", true},
+             Example{"I'm not upset. You're useless.", true},
+             Example{"I'm not saying \"this is fine\" you're useless.", true},
+             Example{"I don't think you're useless, but I hate you.", true}})
+    {
+        const auto signals = ReadConversationSignals(example.input, {}, true);
+        const auto event = BuildRelationshipEvent("synthetic-speaker", signals);
+        const auto stimulus = BuildConversationStimulus("synthetic-speaker", signals);
+        if (signals.hostileTowardRevia != example.hostile || (event.disrespectEvidence > 0.0F) != example.hostile ||
+            (stimulus.eventType == "hostile_remark") != example.hostile ||
+            (!example.hostile && (event.negativeInteraction != 0.0F || event.conflict != 0.0F)))
+            failures += "\n" + std::string(example.input);
+    }
+    Check(failures.empty(), "Reassurance became hostility or a real insult lost its evidence:" + failures);
+    const auto playful = ReadConversationSignals("You're useless, just kidding.", {}, true);
+    Check(playful.hostileTowardRevia && playful.explicitlyPlayful,
+        "The reassurance guard flattened a directly playful insult or removed its playful cue.");
+}
+
 void TestReferenceCheckDoesNotInventRepeatedCorrection()
 {
     const std::string input = "Check your explanation against these supplied facts: the compiler produces object files; "
@@ -116,6 +152,7 @@ void RunRelationshipEvidenceTests()
 {
     TestNegatedNamingDirectivesDoNotIntroduceTheSpeaker();
     TestRejectedNameMatchDoesNotHideALaterIntroduction();
+    TestReassuranceDoesNotBecomeHostility();
     TestReferenceCheckDoesNotInventRepeatedCorrection();
     TestRepeatSignalsRequirePhraseBoundaries();
     TestActualHostilityAndQuotedSignalsRemainDistinct();
