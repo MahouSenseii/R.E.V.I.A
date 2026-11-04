@@ -1655,8 +1655,8 @@
     "RNN_mean_gain_after192_percentage_points": 8.072916666666666,
     "GRU_mean_fresh_holdout_accuracy": 0.3391927083333333,
     "RNN_mean_fresh_holdout_accuracy": 0.3203125,
-    "global_last_SET_rule_finite_score": null,
-    "global_last_SET_rule_status": "Unmeasured; source-supported next comparison, not an established explanation of network behavior."
+    "global_last_SET_rule_finite_score": {"diagnostic": 0.263671875, "final_holdout": 0.314453125},
+    "global_last_SET_rule_status": "Measured no-training audit; same-set aggregate comparison only, network rule use remains unknown."
   },
   "distinction_from_STATE006": {
     "prior_no_go_unchanged": true,
@@ -1720,21 +1720,571 @@
     "tool_receipt": "400f3bfd7d1ec7b435ce471f24563a0def06b0fe85ad6604e50df7177a1648f3"
   },
   "next_step": {
-    "status": "proposed_unimplemented_unrun",
-    "question": "Do neural aggregate scores exceed a key-blind global-last-SET rule on the same existing frozen sets?",
-    "inputs": "OnlySTATE007diagnostic/final512-example sets, require recorded fingerprint matches; no new data or model calls.",
-    "rules": [
-      "constant",
-      "query-key-only",
-      "global-last-SET value",
-      "independent dictionary replay"
-    ],
-    "outputs": "Exact overall and per-delay counts/accuracy. Overallconstant/key-only12.5%; per-delaystrata need not be label-balanced.",
-    "hypothesis": "Post-targetNOOPs can leave the target as global lastSET; actualfinite-setscore and neuralruleusage are unknown.",
-    "limits_proposed_not_approved": "OneCPU,256MiB workerRAM,one60-secondoverallwindowincludingcleanup,2GiBcombineddisk/10MiBevidence retained,newoutput<=256KiB; exactprotocol/code needs review and applicable approval.",
-    "limitations": "No retained neuralpredictions/per-delay scores, so onlyaggregate comparisons; cannot establish networkrecencyusage or originalfailurecause.",
-    "later_option": "Lag1 two-cell immediatecopypositivecontrol, not automatic; global-lastSET already100% there, so success would not prove keyed memory."
-  },
+  "status": "proposed_unimplemented_unrun",
+  "question": "Do fixed STATE-007 trained models track both queried keys and earlier stored values when latest-write recency is uninformative?",
+  "design": "Related2x2query/value-swap quartets, fixed third-key latest write with distinct value; all four variants stay in one split.",
+  "training": "Preserve original STATE-007 data/model/updates; exact training replay and recorded weight-hash matches required because weights were not saved.",
+  "predictions": "Retain per-example targets, deterministic predictions and group/variant/lag identities at predeclared checkpoints, plus sealed final evaluation.",
+  "scope": "A new controlled behavioral evaluation, not an intervention on training or proof of internal neural mechanism.",
+  "execution": "Detailed local protocol/source/resource review and applicable approval required before replay; no automatic experiment."
+},
   "interpretation": "More repeated updates helped thisA-onlytaskmodestly acrossallseeds. Strongerscreensmissed; curvesnonmonotonic, known-example fitlow, convergence/cause/architecture superiorityunresolved. No persistentcross-requeststate, adaptiverouting, languagequality or applicationgain tested.",
-  "GPU_private_data_installation_application_or_security_changes": false
+  "GPU_private_data_installation_application_or_security_changes": false,
+  "recency_rule_audit": {
+  "status": "complete_no_model_or_training",
+  "one_invocation": true,
+  "wall_seconds": 12.531999999991967,
+  "method": {
+    "count_per_split": 512,
+    "seed": 7007,
+    "lag_range": [
+      1,
+      8
+    ],
+    "data_generator_sha256": "39595a540af3bf03f0ec79fc613caccbcc262b4cacf70e84da4ea77fd38fac32",
+    "canonical_fingerprint": "SHA256 of sorted compact JSON plus newline per episode, in split order",
+    "rules": [
+      "constant value0",
+      "final QUERY key as value",
+      "globally last SET value ignoring key",
+      "independent last-write dictionary replay checked against original oracle"
+    ],
+    "prediction_inputs": "Observable events only; seed/lag metadata used only for identity checks and reporting",
+    "both_fingerprints_verified_before_scoring": true
+  },
+  "sets": {
+    "diagnostic": {
+      "by_lag": {
+        "1": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "query_key": {
+              "accuracy": 0.09375,
+              "correct": 6
+            }
+          }
+        },
+        "2": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.265625,
+              "correct": 17
+            },
+            "query_key": {
+              "accuracy": 0.15625,
+              "correct": 10
+            }
+          }
+        },
+        "3": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.1875,
+              "correct": 12
+            },
+            "query_key": {
+              "accuracy": 0.0625,
+              "correct": 4
+            }
+          }
+        },
+        "4": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.125,
+              "correct": 8
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.140625,
+              "correct": 9
+            },
+            "query_key": {
+              "accuracy": 0.125,
+              "correct": 8
+            }
+          }
+        },
+        "5": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "query_key": {
+              "accuracy": 0.09375,
+              "correct": 6
+            }
+          }
+        },
+        "6": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.140625,
+              "correct": 9
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.15625,
+              "correct": 10
+            },
+            "query_key": {
+              "accuracy": 0.109375,
+              "correct": 7
+            }
+          }
+        },
+        "7": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.1875,
+              "correct": 12
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "query_key": {
+              "accuracy": 0.15625,
+              "correct": 10
+            }
+          }
+        },
+        "8": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.140625,
+              "correct": 9
+            },
+            "query_key": {
+              "accuracy": 0.203125,
+              "correct": 13
+            }
+          }
+        }
+      },
+      "count": 512,
+      "fingerprint": "4e3d63cc026ee586922598efdc6bb1f94360e197bb9750cd7566a43f340f64fb",
+      "neural_aggregate_comparison": [
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 160,
+          "neural_minus_last_set_correct": 25,
+          "seed": 11
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 162,
+          "neural_minus_last_set_correct": 27,
+          "seed": 11
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 176,
+          "neural_minus_last_set_correct": 41,
+          "seed": 23
+        },
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 144,
+          "neural_minus_last_set_correct": 9,
+          "seed": 23
+        },
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 168,
+          "neural_minus_last_set_correct": 33,
+          "seed": 37
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 168,
+          "neural_minus_last_set_correct": 33,
+          "seed": 37
+        }
+      ],
+      "rules": {
+        "constant0": {
+          "accuracy": 0.125,
+          "correct": 64
+        },
+        "dictionary": {
+          "accuracy": 1.0,
+          "correct": 512
+        },
+        "last_set": {
+          "accuracy": 0.263671875,
+          "correct": 135
+        },
+        "query_key": {
+          "accuracy": 0.125,
+          "correct": 64
+        }
+      }
+    },
+    "final": {
+      "by_lag": {
+        "1": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.1875,
+              "correct": 12
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "query_key": {
+              "accuracy": 0.15625,
+              "correct": 10
+            }
+          }
+        },
+        "2": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.203125,
+              "correct": 13
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.484375,
+              "correct": 31
+            },
+            "query_key": {
+              "accuracy": 0.15625,
+              "correct": 10
+            }
+          }
+        },
+        "3": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.078125,
+              "correct": 5
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.265625,
+              "correct": 17
+            },
+            "query_key": {
+              "accuracy": 0.140625,
+              "correct": 9
+            }
+          }
+        },
+        "4": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.0625,
+              "correct": 4
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.15625,
+              "correct": 10
+            },
+            "query_key": {
+              "accuracy": 0.078125,
+              "correct": 5
+            }
+          }
+        },
+        "5": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.203125,
+              "correct": 13
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.203125,
+              "correct": 13
+            },
+            "query_key": {
+              "accuracy": 0.125,
+              "correct": 8
+            }
+          }
+        },
+        "6": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.078125,
+              "correct": 5
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "query_key": {
+              "accuracy": 0.109375,
+              "correct": 7
+            }
+          }
+        },
+        "7": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.109375,
+              "correct": 7
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.15625,
+              "correct": 10
+            },
+            "query_key": {
+              "accuracy": 0.171875,
+              "correct": 11
+            }
+          }
+        },
+        "8": {
+          "count": 64,
+          "rules": {
+            "constant0": {
+              "accuracy": 0.078125,
+              "correct": 5
+            },
+            "dictionary": {
+              "accuracy": 1.0,
+              "correct": 64
+            },
+            "last_set": {
+              "accuracy": 0.140625,
+              "correct": 9
+            },
+            "query_key": {
+              "accuracy": 0.0625,
+              "correct": 4
+            }
+          }
+        }
+      },
+      "count": 512,
+      "fingerprint": "8a1e0184684ed7cc6f6f359a0ec10714283e719fb92730558eda61a790e82811",
+      "neural_aggregate_comparison": [
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 152,
+          "neural_minus_last_set_correct": -9,
+          "seed": 11
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 173,
+          "neural_minus_last_set_correct": 12,
+          "seed": 11
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 178,
+          "neural_minus_last_set_correct": 17,
+          "seed": 23
+        },
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 163,
+          "neural_minus_last_set_correct": 2,
+          "seed": 23
+        },
+        {
+          "count": 512,
+          "model": "rnn",
+          "neural_correct": 177,
+          "neural_minus_last_set_correct": 16,
+          "seed": 37
+        },
+        {
+          "count": 512,
+          "model": "gru",
+          "neural_correct": 170,
+          "neural_minus_last_set_correct": 9,
+          "seed": 37
+        }
+      ],
+      "rules": {
+        "constant0": {
+          "accuracy": 0.125,
+          "correct": 64
+        },
+        "dictionary": {
+          "accuracy": 1.0,
+          "correct": 512
+        },
+        "last_set": {
+          "accuracy": 0.314453125,
+          "correct": 161
+        },
+        "query_key": {
+          "accuracy": 0.125,
+          "correct": 64
+        }
+      }
+    }
+  },
+  "comparison": {
+    "neural_reference": "Saved final1152-update diagnostic and final-holdout counts for all six cells; no neural evaluation rerun",
+    "diagnostic_neural_above_last_SET": 6,
+    "final_neural_above_last_SET": 5,
+    "final_RNN11_neural_minus_last_SET_correct": -9,
+    "GRU_final_mean_margin_percentage_points": 2.473958333333333,
+    "RNN_final_mean_margin_percentage_points": 0.5859375,
+    "individual_neural_predictions_available": false,
+    "neural_rule_use": "unknown",
+    "dictionary_is_compute_matched_learned_competitor": false
+  },
+  "controls": {
+    "unique_disjoint_groups": true,
+    "events_per_episode": 64,
+    "final_initialized_query_and_actual_lag_verified": true,
+    "episodes_per_lag": 64,
+    "constant_query_key_correct_per_set": 64,
+    "dictionary_correct_per_set": 512,
+    "all10pins_verified_before_and_after": true,
+    "independent_review": "passed"
+  },
+  "resources": {
+    "limit_seconds": 60,
+    "worker_logical_CPU": 1,
+    "worker_commit_and_hard_working_set_limit_bytes": 268435456,
+    "peak_worker_working_set_bytes": 24551424,
+    "peak_worker_committed_bytes": 17833984,
+    "supervisor_peak_working_set_bytes": 25989120,
+    "new_retained_output_bytes": 8350,
+    "output_limit_bytes": 262144,
+    "aggregate_owned_disk_limit_bytes": 2147483648,
+    "aggregate_evidence_limit_bytes": 10485760,
+    "terminal_sample_before_controller_record": {
+      "evidence": 3272241,
+      "owned": 706964459
+    },
+    "controller_record_bytes": 313,
+    "disk_is_sampled_not_quota": true,
+    "later_review_records_outside_terminal_snapshot": true,
+    "exit_code": 0,
+    "limits_verified": true,
+    "cleanup_exit_confirmed": true,
+    "owned_worker_observed_absent": true
+  },
+  "source_and_evidence_sha256": {
+    "audit_worker": "68da2afe2d3b2a67543be6ec4ce4d7b389fbb1056d333756d7fdfaa8e296d91b",
+    "audit_tests": "dca88cfe04bfab5a4a6af6ab9eca28311cf42520db0c49cf2a99f527a18af76e",
+    "inputs": "c6693207489d0da96083674ae984e0032c8cee9bcd7930b97cc005deb869b65c",
+    "approved_request": "d0ffd3493dda84215c28b1a43a96187924e3d61d3cfb59add94e2c73499aeffe",
+    "scientific_raw_output": "311d3427f3032317e5f7069bfc9dd5500169f324100dfcbd59201fe7440df03c",
+    "guard_result": "ff14a5cd1597045af514281002051548706125b9d41c93ceeb2fe9f0a76a77ef",
+    "controller_result": "e1b30ba199bfb88e4ec934d97242c9ef209dc99d53c705ded476d83457ff8065"
+  },
+  "disclosure": "Machine paths, command lines, PIDs and operational logs remain local. Exact scientific aggregates are included; audit source and controller remain private by hash, not a self-contained execution package.",
+  "limitations": [
+    "Only the two existing fixed synthetic sets; not general language quality or application benefit.",
+    "No individual neural predictions/per-delay scores, so no paired neural error overlap or learned-rule inference.",
+    "Earlier learning gains and failed stronger screens remain unchanged.",
+    "No new neural training, installation, model call, GPU or application integration."
+  ]
+}
 }

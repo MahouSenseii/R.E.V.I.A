@@ -24,8 +24,8 @@ separately reviewed Revia changes later.
 
 | Stage | Meaning | Current evidence |
 | --- | --- | --- |
-| Experimental | Hypothesis, static review or proposed experiment | Audit of an unmeasured key-blind recency baseline proposed after STATE-007; unimplemented and unrun |
-| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go; STATE-007 then measured modest all-seed learning gains while missing stronger targets |
+| Experimental | Hypothesis, static review or proposed experiment | Counterfactual query/value controls proposed to distinguish keyed recall from recency; unimplemented and unrun |
+| Measured | Result with pinned inputs, method and limits; negative results count | FIRST-001 storage/equivalence, RNL-002 exact-cache contract, RNL-003 conditional synthetic CPU benefit, one PREFIX-004 real-model reuse pair and STATE-006's completed six-cell scientific no-go; STATE-007 measured modest learning gains while missing stronger targets, then a no-training audit measured a stronger recency baseline and small final neural margins |
 | Candidate for Revia | Independently reviewed benefit plus relevant held-out checks | None |
 | Integrated | Explicitly authorized, reviewed change landed in Revia with rollback | None |
 
@@ -114,17 +114,28 @@ curves were not monotonic and known-example probe accuracy remained below43%.
 Convergence, the cause of limited recall and architectural superiority remain
 unresolved. It did not retest STATE-006's B/OOD/overwrite behavior; evaluation
 namespaces differ, so cross-study score changes are not same-test improvements.
-See [results and the proposed next audit](RESULTS-STATE-007.md),
+See [results, the completed recency audit and next control proposal](RESULTS-STATE-007.md),
 [status](STATE-007-status.json), [all48 checkpoint records](results/STATE-007/summary.json),
 [public pre-run protocol copy](STATE-007.md), [worker](state007.py),
 [configuration](STATE-007-config.json) and [nonmodel controls](test_state007.py).
 
-The next recommended step uses no training: measure a key-blind global-last-SET
-baseline on the existing fingerprinted diagnostic/final sets. The generator's
-NOOPs make this a relevant missing comparison, but its finite-set score and any
-network use of that shortcut are unmeasured. Report overall/per-delay counts;
-retained neural outputs support aggregate comparison only. This audit is
-unimplemented and unrun. Candidate for Revia and Integrated remain None.
+The approved no-training recency audit is now complete. Returning the globally
+last SET value scored 135/512 (26.37%) on the same diagnostic set and 161/512
+(31.45%) on the final set. All six final diagnostic neural scores beat it; five
+final-holdout scores did, with RNN11 below it by nine answers. Final mean margins
+were only 2.47 percentage points for GRU and 0.59 for RNN. Dictionary replay was
+100%; constant/query-key rules were 12.5%. Both frozen fingerprints and controls
+matched, and the owned worker exited. The audit took 12.532 seconds with no model
+call or training. Earlier measured learning gains and failed targets are intact.
+
+These are aggregate comparisons, not evidence of what rule a network learned.
+Individual predictions/per-delay neural scores were not retained. The next
+proposal uses paired query changes and stored-value swaps while holding the
+latest write fixed, retaining per-example predictions. Existing weights were
+hashed but not saved, so evaluating the same trained models would require an
+exact training replay with hash checks. That experiment is unimplemented/unrun;
+no further training starts automatically. Candidate for Revia and Integrated
+remain None.
 
 [READINESS-005](READINESS-005.md) retains its diagnostic repair, socket denial and
 permitted-context Python HTTP pass; its0.609s duration is not model latency or

@@ -96,44 +96,77 @@ establish statistical or general architectural superiority. Parameters were
 4,968/4,964, with about 3.26% different estimated forward matrix work; training
 FLOPs were not measured. Candidate for Revia and Integrated remain None.
 
-## Smallest recommended next step: audit the recency baseline
+## Completed recency-rule audit: a stronger baseline
 
-Before another neural trial, reconstruct only the existing frozen STATE-007
-diagnostic/final sets and compare a stronger simple rule: return the value of the
-globally last SET, ignoring the query key. Require both recorded dataset
-fingerprints to match; use no new dataset, Torch, model call or training.
+One separately approved standard-library audit reconstructed only the existing
+`state007_diagnostic_A` and `state007_final_A` sets: 512 episodes each, seed7007,
+delays1-8. Both historical fingerprints matched before scoring. No model call,
+Torch or training was involved. Predictions used observable events only; metadata
+was used for identity checks and reporting.
 
-This comparison is currently missing. After the target SET, the generator adds
-other-key writes or NOOPs. If every intervening event is a NOOP, the global last
-SET is still the answer. Otherwise a random distractor value can match by chance.
-For the intended generator, the analytic expectation at delay L is
-1/8 + (7/8)*(0.3)^(L-1), about 28.124% when delays1-8 are uniform. This is NOT a
-measured finite-set score and must not be used to rank the recorded networks.
-The relevant source is [event generation](state006_data.py#L58).
+| Rule | Diagnostic | Final holdout |
+| --- | ---: | ---: |
+| Constant0 |64/512 (12.50%)|64/512 (12.50%)|
+| Query-key as value |64/512 (12.50%)|64/512 (12.50%)|
+| Globally last SET value, ignoring key |135/512 (26.37%)|161/512 (31.45%)|
+| Independent dictionary replay |512/512 (100%)|512/512 (100%)|
 
-The proposed audit compares constant, query-key-only, global-last-SET and
-independent dictionary-replay rules using observable events. Report exact overall
-and per-delay counts/accuracy. Constant/key-only scores are 12.5% overall on these
-balanced sets; individual delay strata need not preserve exact label balance.
-Compare the measured overall rule scores with the existing neural aggregates.
+Each delay has64 episodes. Last-SET correct counts at delays1-8 were
+64/17/12/9/7/10/7/9 on diagnostic and64/31/17/10/13/7/10/9 on final. It is100% at
+delay1 on both sets, so a lag1 copying test would not establish keyed memory.
+The evidence summary retains exact overall/per-delay counts for all four rules.
 
-This tests whether the networks exceeded a stronger key-blind benchmark. It
-cannot show that a network actually uses recency: neural predictions and per-delay
-neural scores were not retained, so error overlap/paired-correctness comparisons
-are unavailable. Training gains remain measured regardless of that audit.
+After the target SET, [the generator](state006_data.py#L58) allows other-key writes
+or NOOPs. This makes last-SET a relevant stronger comparison. The analytic
+expectation 1/8 + (7/8)*(0.3)^(L-1) remains an expectation, not the measured score;
+the two finite-set results above are used for every neural comparison.
 
-Only a small standard-library script would be needed. Proposed bounds are one
-CPU,256MiB worker RAM, a single60-second overall window including cleanup, and
-the existing2GiB combined disk/10MiB combined evidence ceilings, with new audit
-output at most256KiB. Exact code, input pins, resource feasibility and command
-still need review and applicable execution approval. The audit is unimplemented
-and unrun; do not regenerate episodes or evaluate rules as part of this update.
+All six saved final diagnostic scores exceeded135/512. Five final-holdout scores
+exceeded161/512: RNN11 scored152, nine answers below it. Final model means were
+33.92%GRU/32.03%RNN against31.45%recency, leaving mean margins of only
+**2.47 / 0.59 percentage points**. All twelve exact count comparisons are retained.
+Dictionary replay is an exact task reference, not a matched learned competitor.
 
-A two-cell lag1 GRU/RNN copying control can remain a later option, not an automatic
-next run. At lag1, the key-blind last-SET rule is100%, so passing would show only
-immediate copying. Changing lag also changes generator random draws/history,
-so it would not be a pure causal delay ablation. Neither proposal diagnoses the
-cause of limited recall or qualifies longer/keyed memory.
+The earlier learning gains and failed stronger screens remain unchanged. This
+audit supplies a stronger benchmark than guessing; it does not establish what
+rule the networks learned, causal explanations, reliable keyed recall or a new
+RNL architecture. Individual neural predictions/per-delay scores were not saved,
+so error overlap and per-delay neural comparisons cannot be recovered. These
+aggregate differences are not significance or architecture-superiority claims.
+
+Independent review reconciled both fingerprints, all ten input pins, per-delay
+sums and twelve saved neural comparisons. The one invocation completed in
+12.532s; its worker exited0 with oneCPU/256MiB commit and hard-working-set limits
+verified and cleanup confirmed. Peak worker WS/commit was24,551,424/17,833,984B;
+supervisor memory was separate. New retained output was8,350B. Terminal sampled
+owned/evidence bytes before the313B controller record were706,964,459/3,272,241,
+below the2GiB/10MiB ceilings; later local review records are outside that snapshot.
+Disk is sampled accounting, not a quota or instantaneous peak.
+
+The public summary records rules, exact counts, fingerprints and source/evidence
+hashes without machine paths. The small audit controller and operational logs
+remain local by hash; this is a method/evidence record, not a self-contained
+execution package. The scientific raw-output SHA256 is
+`311d3427f3032317e5f7069bfc9dd5500169f324100dfcbd59201fe7440df03c`.
+
+## Next proposed control: query and value changes with a fixed latest write
+
+Use counterfactual groups to ask whether predictions track the queried key and
+its stored value when globally latest content is uninformative. Change only the
+final query between two keys with different stored answers, and add a matched
+swap of those earlier stored values. Keep every other event, including a final
+other-key SET with a third value, fixed. Retain each example's target and
+prediction so paired failures, per-delay scores and rule comparisons are
+auditable. Split whole related groups together; no train/test near-twin leakage.
+
+Prefer keeping original STATE-007 training fixed for this capability question.
+Weights were hashed but not saved, so new neural evaluation would require exact
+training replay with recorded hash matches. It would be a controlled new
+evaluation, not another cache study or evidence that a new architecture learns
+better. A changed training task is a separate question. The detailed local plan
+must be reviewed with source, predictions, resource and stop rules before any
+execution approval. This proposal is unimplemented and unrun; no further
+training, public update or application integration starts automatically.
 
 ## Controls, resources, history and reproducibility boundary
 
