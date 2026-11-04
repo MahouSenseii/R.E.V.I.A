@@ -84,6 +84,33 @@ namespace
             });
     }
 
+    bool HasWrongResultComplaint(const std::string& input)
+    {
+        constexpr std::string_view prefix = "you keep getting ";
+        for (std::size_t at = input.find(prefix); at != std::string::npos; at = input.find(prefix, at + prefix.size()))
+        {
+            if (at > 0 && (std::isalnum(static_cast<unsigned char>(input[at - 1])) != 0 || input[at - 1] == '_')) continue;
+            const auto begin = at + prefix.size();
+            const auto punctuation = input.find_first_of(".,!?;:\r\n", begin);
+            const auto end = punctuation == std::string::npos ? input.size() : punctuation;
+            // Read one bounded result clause, not an unrelated later use of "wrong".
+            if (end - begin > 128) continue;
+            std::string_view result(input.data() + begin, end - begin);
+            while (!result.empty() && std::isspace(static_cast<unsigned char>(result.back())) != 0) result.remove_suffix(1);
+            if (result.ends_with(" again")) result.remove_suffix(6);
+            if (!result.ends_with(" wrong")) continue;
+            result.remove_suffix(6);
+            while (!result.empty() && std::isspace(static_cast<unsigned char>(result.back())) != 0) result.remove_suffix(1);
+            if (result.empty() || result == "not" || result == "never" || result.ends_with(" not") || result.ends_with(" never") ||
+                result.ends_with(" instead of") || result.ends_with(" rather than")) continue;
+            // Only a simple object phrase: praise or another action/relative clause
+            // ending in "wrong" does not establish that she got the object wrong.
+            if (ContainsAnyWholePhrase(std::string(result), {"better at", "good at", "and", "or", "but", "which", "what", "who"})) continue;
+            return true;
+        }
+        return false;
+    }
+
     bool IsDirectRetryRequest(const std::string& input)
     {
         std::string request;
@@ -211,7 +238,7 @@ namespace
             {"i already said", "i just said", "still not", "that's not what", "that is not what", "no, i meant",
                 "you keep missing", "you keep forgetting", "you keep misreading", "you keep misunderstanding",
                 "you keep repeating yourself", "you keep getting it wrong", "you keep getting that wrong", "you keep making me repeat"}) ||
-            IsDirectRetryRequest(input);
+            IsDirectRetryRequest(input) || HasWrongResultComplaint(input);
 
         signals.collaborative =
             succeeded && ContainsAny(input, {"let's", "lets ", "we should", "can you help", "work on", "together", "figure out", "let us"});
