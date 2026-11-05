@@ -1,13 +1,13 @@
 export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
-export const pin='d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a';
+export const pin='4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
   as_of:'2026-11-05',
   source_commit:pin,
-  source_pr:34,
+  source_pr:37,
   state:'Paused at a safe stopping point',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
-  ci:{run:41947710858,jobs_passed:6,passed:155,failed:0,optional_skips:2},
+  ci:{run:42062451066,jobs_passed:6,passed:155,failed:0,optional_skips:2},
   installed_app:'Not updated or freshly audited by this work',
   research:{
     public_source_commit:researchPin,
@@ -43,6 +43,10 @@ export const current={
 };
 
 export const changes=[
+  {pr:37,title:'Keep casual check-ins and stated names grounded.',
+    summary:'“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.',
+    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; the whole-word fix is PR #39.',
+    next:'Merge the PR #39 whole-word fix, then rebuild and requalify the installed app.'},
   {pr:34,title:'Keep corrections grounded in what was actually said.',
     summary:'Quoted corrections no longer create a messenger story in the host response rules.',
     detail:'The merged change adjusts conversationStylePolicy.cpp and speechAttributionTests.cpp. This host-code fix does not establish that a real model will never invent history.',
@@ -80,10 +84,10 @@ export const issues=[
     detail:'The cause of the early stop remains unresolved. Clearer receipts and private stopping diagnostics are merged; they have not demonstrated successful model completion.',
     next:'Review the saved evidence, verify the exact runtime package, and prepare one bounded known-path report check. Do not replay an old run automatically.'},
   {id:'history',area:'Revia',title:'Model-generated invented history remains open.',
-    summary:'The latest host-code correction passed regression checks. The broader model behavior still needs a real check.',
-    status:'Open · source fix has scoped evidence',
-    detail:'PR34 fixes a host-policy path. It is not proof of general conversational grounding, truthfulness or improvement in the installed model.',
-    next:'Separate host-policy evidence from a narrowly scoped real-model evaluation.'},
+    summary:'A scoped real-model check now covers two common cases. General grounding is still not established.',
+    status:'Open · narrowed by a scoped real-model check',
+    detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. This is not proof of general truthfulness or of improvement in the installed app.',
+    next:'Add more history-shaped turns to the fixed real-model check, then requalify the installed app.'},
   {id:'comparison',area:'RNL',title:'The direct comparison stopped before RNL ran.',
     summary:'32 Qwen 0.8B replies were saved. Supervision cleanup failed; RNL and exact lookup did not run.',
     status:'Incomplete · no grade or ranking',
