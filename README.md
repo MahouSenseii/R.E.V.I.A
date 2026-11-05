@@ -1,5 +1,9 @@
 # R.E.V.I.A
 
+For the current source status, evidence limits and next steps, start with the
+[AI handoff](docs/AI_HANDOFF.md) and the [readable Atlas](docs/atlas/index.html).
+The handoff distinguishes merged source, installed-app checks and local RNL research.
+
 R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC; an [optional cloud model](#optional-cloud-model) exists but is off unless you set it up.
 
 This is an active personal project, not a finished consumer app. This README says plainly what works, what has only been tested in code, and what is not done yet, then walks through getting her running from a clean Windows machine.
@@ -768,8 +772,8 @@ decisions, `Policy` for permission checks, and `Runtime` for session coordinatio
 Qt panels are in `Desktop`; setup and local services are in `Tools`.
 
 The [source and ownership map](docs/ARCHITECTURE.md#source-layout) covers every
-domain. [Coding conventions](AGENTS.md) describe file placement, compact function
-signatures, and short comments.
+domain. The [AI handoff](docs/AI_HANDOFF.md) records the current source state,
+evidence limits and continuation steps.
 
 | Path | Contents |
 |---|---|
