@@ -1,13 +1,13 @@
 export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
-export const pin='4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e';
+export const pin='c8f6362455bce01d1f6d666dbcc724e7747dc542';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
   as_of:'2026-11-05',
   source_commit:pin,
-  source_pr:37,
+  source_pr:39,
   state:'Paused at a safe stopping point',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
-  ci:{run:42062451066,jobs_passed:6,passed:155,failed:0,optional_skips:2},
+  ci:{run:42077079104,jobs_passed:6,passed:155,failed:0,optional_skips:2},
   installed_app:'Not updated or freshly audited by this work',
   research:{
     public_source_commit:researchPin,
@@ -43,10 +43,14 @@ export const current={
 };
 
 export const changes=[
+  {pr:39,title:'Match grounding repairs on whole words.',
+    summary:'Harmless words such as “creating” or “relying on” no longer cost a check-in or name reply its sentence.',
+    detail:'PR37’s phrase lists matched parts of words (“eating” inside “creating”, “come over” inside “become overly”, “my bad” inside “my badge”), so harmless sentences in check-ins and first-time name statements could be dropped. The lists now match whole words and phrases. Regressions cover every reported example and confirm that real bodily and mix-up claims are still removed. The installed app is unchanged.',
+    next:'Rebuild and requalify the installed app; widen the fixed-prompt check to more history-shaped turns.'},
   {pr:37,title:'Keep casual check-ins and stated names grounded.',
     summary:'“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.',
-    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; the whole-word fix is PR #39.',
-    next:'Merge the PR #39 whole-word fix, then rebuild and requalify the installed app.'},
+    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; PR #39 fixed this with whole-word matching.',
+    next:'Covered by PR #39; then rebuild and requalify the installed app.'},
   {pr:34,title:'Keep corrections grounded in what was actually said.',
     summary:'Quoted corrections no longer create a messenger story in the host response rules.',
     detail:'The merged change adjusts conversationStylePolicy.cpp and speechAttributionTests.cpp. This host-code fix does not establish that a real model will never invent history.',

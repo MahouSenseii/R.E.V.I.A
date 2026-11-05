@@ -6,6 +6,7 @@ import {repo,pin,researchPin,current,changes,issues,studies,publicFindings} from
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../docs/atlas');
 const publication=current.pages.verified_publication;
 const short=pin.slice(0,8),ci=current.ci,two=n=>String(n).padStart(2,'0');
+const count=n=>['Zero','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve'][n]??String(n);
 const read=name=>fs.readFileSync(path.join(root,name),'utf8');
 const write=(name,text)=>fs.writeFileSync(path.join(root,name),text.replaceAll('\r\n','\n'),'utf8');
 const e=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -93,7 +94,7 @@ let index=head('Project overview')+
   '<article class="workstream research-stream"><p class="eyebrow">02 / RESEARCH</p><div class="workstream-heading"><h2>RNL</h2>'+pill('Research paused')+'</div><p class="workstream-lead">A useful finding. An unfinished comparison.</p><p>Separate memory slots solved the small synthetic test. The LLM comparison stopped after saving 32 replies; no model ranking exists.</p>'+link('research.html','Explore the findings <span>→</span>','card-link')+'</article></div>'+
   '<div class="reading-note"><span aria-hidden="true">↳</span><p><strong>How to read this Atlas</strong> “Merged” describes source code. “Measured” applies to a named test. Neither means the installed application is qualified. This is a manually checked snapshot.</p></div>'+
   search('Find a change, capability or open issue')+
-  section('revia','01 / REVIA PROGRESS','The latest changes, plainly.','Eight merged fixes bring the overview up to PR #'+current.source_pr+'. Each record keeps the source change separate from what still needs checking.',changeRows()+
+  section('revia','01 / REVIA PROGRESS','The latest changes, plainly.',count(changes.length)+' merged fixes bring the overview up to PR #'+current.source_pr+'. Each record keeps the source change separate from what still needs checking.',changeRows()+
     '<p class="section-end">'+link('#dated-records','Earlier repairs, tooling and retained failures ↓')+'</p>')+
   section('systems','02 / CAPABILITIES','What Revia is built to do.','The source contains 20 capability areas. These describe the implementation; live use and release readiness have their own evidence.',capabilityRows())+
   section('verification','03 / EVIDENCE &amp; CHECKS','A pass needs a scope.','The pinned application-source CI is green. Product qualification and website publication are separate.', '<div class="evidence-grid"><article class="evidence-panel"><h3>Application source</h3>'+sourceDetails+'</article>'+
