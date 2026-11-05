@@ -364,6 +364,27 @@ void TestGroundedRepliesStreamWithoutRetraction()
             "A grounded reply streamed differently than its repair allows: " + item.reply);
     }
 }
+
+// The repairs match whole words and phrases. A word that merely contains a listed claim,
+// such as "creating" containing "eating", must not cost the reply a sentence.
+void TestGroundedRepairsMatchWholeWords()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const std::string checkIn = "hey, what are you up to right now?";
+    for (const std::string reply : {"Creating a playlist for later.", "Repeating my favorite joke in my head.",
+             "Relying on you for entertainment.", "I've become overly attached to this chat.", "Defeating a bug, slowly.",
+             "Heating up an argument with a spreadsheet.", "Thinking about my roommate jokes.", "Babysitting a stubborn build."})
+        Check(policy.RefineReply(checkIn, {}, reply) == reply, "A check-in repair matched part of a word: " + reply);
+    Check(policy.RefineReply(checkIn, {}, "Just sitting here. Creating a playlist.") == "Creating a playlist.",
+        "A whole-word bodily claim stopped being removed.");
+
+    const std::string name = "By the way, my name is Jordan, not Jamie. Please call me Jordan from now on.";
+    for (const std::string reply : {"Jordan it is. Nothing will stop me from using it.", "Jordan it is. Still stop by anytime.",
+             "Jordan it is. That's my badge of honor now.", "Jordan it is. Nice typography on that name."})
+        Check(policy.RefineReply(name, {}, reply) == reply, "A name repair matched part of a word: " + reply);
+    Check(policy.RefineReply(name, {}, "Jordan it is. My apologies for the mix-up.") == "Jordan it is.",
+        "A whole-word name mix-up claim stopped being removed.");
+}
 }
 
 void RunConversationGuidanceTests()
@@ -382,6 +403,7 @@ void RunConversationGuidanceTests()
     TestActivityCheckInStaysGroundedAndBrief();
     TestStatedNameInventsNoEarlierMixUp();
     TestGroundedRepliesStreamWithoutRetraction();
+    TestGroundedRepairsMatchWholeWords();
     std::cout
         << "Direct correction guidance, evidence-based disagreement, non-correction mentions and configured answer freedom tests passed.\n";
 }
