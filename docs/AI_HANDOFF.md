@@ -19,9 +19,9 @@ applies to their own date.
 
 ## Verified Revia source
 
-[PR #37](https://github.com/MahouSenseii/R.E.V.I.A/pull/37) is merged at
-[4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e](https://github.com/MahouSenseii/R.E.V.I.A/commit/4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e).
-[CI 42062451066](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42062451066)
+[PR #39](https://github.com/MahouSenseii/R.E.V.I.A/pull/39) is merged at
+[c8f6362455bce01d1f6d666dbcc724e7747dc542](https://github.com/MahouSenseii/R.E.V.I.A/commit/c8f6362455bce01d1f6d666dbcc724e7747dc542).
+[CI 42077079104](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42077079104)
 passed six jobs: 155 tests passed, 0 failed, 2 optional video skips.
 That result is hosted application-source evidence, not a new local test run.
 
@@ -37,8 +37,8 @@ Qwen3.5-4B on three fixed prompts, four passes per round: 5/12 before the fix,
 repair still removes much of what the model invents, and the gates match phrases.
 A post-merge review found those phrase lists matched parts of words ("eating"
 inside "creating"), which could drop harmless sentences from these two turn
-types. [PR #39](https://github.com/MahouSenseii/R.E.V.I.A/pull/39) switches them
-to whole-word matching.
+types. PR39 fixed this by matching whole words and phrases, with a regression
+for each reported example.
 
 The installed app was not updated or freshly audited. Model-generated invented
 history remains open beyond those two cases. A real-model worker previously delegated and kept chat
