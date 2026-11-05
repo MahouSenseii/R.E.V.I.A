@@ -791,6 +791,9 @@ if(BUILD_TESTING)
     add_executable(ReviaStudioLive Tests/studioLive.cpp Tests/Fixture/studioLiveMain.cpp)
     add_executable(ReviaAnswerQualityLive Tools/Quality/answerQualityLive.cpp)
     revia_link_foundation(ReviaAnswerQualityLive)
+    # Opt-in multi-turn conversations through the production session; never run by CTest.
+    add_executable(ReviaConversationTrialLive Tools/Quality/conversationTrialLive.cpp)
+    revia_link_foundation(ReviaConversationTrialLive)
     # Opt-in, disposable-runtime qualification; never launches a model in CTest.
     add_executable(ReviaCompanionAwarenessLive Tools/Quality/companionAwarenessLive.cpp)
     revia_link_foundation(ReviaCompanionAwarenessLive)

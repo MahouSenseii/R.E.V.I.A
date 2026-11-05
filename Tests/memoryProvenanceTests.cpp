@@ -7,6 +7,7 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "Memory/memoryAttribution.h"
 
+#include <algorithm>
 #include <chrono>
 #include <httplib.h>
 #include <iostream>
@@ -199,6 +200,7 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
     } restore{previous};
     std::mutex mutex;
     std::vector<json> envelopes;
+    std::vector<std::string> instructions;
     std::string answer;
     httplib::Server server;
     server.Post("/v1/chat/completions", [&](const httplib::Request& request, httplib::Response& response)
@@ -208,6 +210,7 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
         {
             std::lock_guard lock(mutex);
             envelopes.push_back(json::parse(body["messages"].back()["content"].get<std::string>()));
+            instructions.push_back(body["messages"].front().value("content", std::string{}));
             content = answer;
         }
         response.set_content(json{{"choices", json::array({{{"message", {{"content", content}}}}})}}.dump(),
@@ -299,6 +302,20 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
     const auto attributed = service.EvaluateMemory("I prefer mint tea.", "Understood.", ResponseProvenance::NormalGeneration, {}, scope);
     Check(attributed.bShouldRemember && attributed.subject == revia::memory::ParticipantSubject(scope),
         "Classifier accepted a provider identity instead of the captured participant.");
+    // A trip the speaker is taking and the speaker's own dog are the speaker's: told only
+    // "identity, preferences, goals or relationships", a live 4B filed both as other every
+    // time, and a private chat never retrieves an unattributed memory.
+    {
+        std::lock_guard lock(mutex);
+        const bool told = std::any_of(instructions.begin(), instructions.end(),
+            [](const std::string& rule)
+            {
+                return rule.find("automatic long-term memory selector") != std::string::npos &&
+                       rule.find("projects and plans") != std::string::npos && rule.find("their own pets or belongings") != std::string::npos &&
+                       rule.find("Third-party facts (what someone else likes, does, plans or said)") != std::string::npos;
+            });
+        Check(told, "The memory selector is not told that the speaker's plans and pets are the speaker's, or that others' are not.");
+    }
     {
         std::lock_guard lock(mutex);
         answer = R"({"shouldRemember":true,"category":"relationship","subject":"other",)"

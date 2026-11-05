@@ -299,6 +299,51 @@ void TestNamesAreReadOnlyFromRealIntroductions()
         "\"call me\" matched inside another word.");
 }
 
+void TestSpeakerNameCorrectionsRejectTheNameInUse()
+{
+    using namespace revia::identity;
+
+    Check(ReadSpeakerNameCorrection("sorry, I meant Mari, not Jo. Jo is my cousin lol", "Jo") == "Mari",
+        "A self-correction away from the name in use was not read.");
+    Check(ReadSpeakerNameCorrection("no no, it's Mari not Jo", "jo") == "Mari", "\"it's X not Y\" was not read.");
+    Check(ReadSpeakerNameCorrection("I'm Mari, not Jo!", "Jo") == "Mari", "\"I'm X, not Y\" was not read.");
+    Check(ReadSpeakerNameCorrection("I\xE2\x80\x99m Mari, not Jo", "Jo") == "Mari", "A curly apostrophe hid the correction.");
+    Check(ReadSpeakerNameCorrection("I said Mari, not Jo", "Jo") == "Mari", "\"I said X, not Y\" was not read.");
+
+    // Only the name currently in use can be rejected.
+    Check(ReadSpeakerNameCorrection("I meant Mari, not Jo", "Sam").empty(), "A name not in use was treated as rejected.");
+    Check(ReadSpeakerNameCorrection("I meant Mari, not Jo", "").empty(), "An unnamed speaker was given a correction.");
+    // Contrasts about other people, quoted words and stray words are not self-corrections.
+    Check(ReadSpeakerNameCorrection("send the invite to Ana, not Jo", "Jo").empty(), "Naming a recipient renamed the speaker.");
+    Check(ReadSpeakerNameCorrection("I told Ana, not Jo", "Jo").empty(), "Telling someone renamed the speaker.");
+    Check(ReadSpeakerNameCorrection("Ana, not Jo, is coming", "Jo").empty(), "A third person renamed the speaker.");
+    Check(ReadSpeakerNameCorrection("She wrote: \"I meant Ana, not Jo\"", "Jo").empty(), "A quotation renamed the speaker.");
+    Check(ReadSpeakerNameCorrection("I meant later, not Jo", "Jo").empty(), "A stray word was read as a name.");
+    Check(
+        ReadSpeakerNameCorrection("I meant Mari. Not Jo though, he's fine", "Jo").empty(), "A correction was assembled across sentences.");
+}
+
+void TestReturningSpeakersAreOnlyKnownPeople()
+{
+    using namespace revia::identity;
+
+    const std::vector<std::string> known = {"Mari", "Jo"};
+    Check(ReadReturningSpeaker("hey, it's Mari", known) == "Mari", "A returning greeting was not read.");
+    Check(ReadReturningSpeaker("I'm mari again!", known) == "Mari", "\"I'm X again\" was not read.");
+    Check(ReadReturningSpeaker("Mari here", known) == "Mari", "\"X here\" was not read.");
+    Check(ReadReturningSpeaker("hi revia, it's me, Jo", known) == "Jo", "\"it's me, X\" was not read.");
+    Check(ReadReturningSpeaker("It\xE2\x80\x99s Mari", known) == "Mari", "A curly apostrophe hid a returning greeting.");
+
+    // Ordinary remarks, unknown names, possessives and later clauses name nobody.
+    Check(ReadReturningSpeaker("hey, it's late", known).empty(), "An ordinary remark named a person.");
+    Check(ReadReturningSpeaker("I'm tired", known).empty(), "A feeling named a person.");
+    Check(ReadReturningSpeaker("it's Zed", known).empty(), "An unknown name was adopted as a returning person.");
+    Check(ReadReturningSpeaker("I'm Mari's cousin", known).empty(), "Mentioning a known person named them.");
+    Check(ReadReturningSpeaker("the bug is fixed, it's Mari", known).empty(), "A later clause was read as an introduction.");
+    Check(ReadReturningSpeaker("She said \"it's Mari\"", known).empty(), "A quotation named a person.");
+    Check(ReadReturningSpeaker("hey, it's Mari", {}).empty(), "Nobody known still produced a returning person.");
+}
+
 void TestLearningANameKeepsEverythingEarned()
 {
     using namespace revia::identity;
@@ -411,6 +456,8 @@ void RunLoadAndNameTests()
     TestUnmeasurableLoadChangesNothing();
     TestBatchClipFramingRefusesAnythingAmbiguous();
     TestNamesAreReadOnlyFromRealIntroductions();
+    TestSpeakerNameCorrectionsRejectTheNameInUse();
+    TestReturningSpeakersAreOnlyKnownPeople();
     TestLearningANameKeepsEverythingEarned();
     TestSeveralPeopleAtOneKeyboard();
     TestExplicitIdentitySurvivesWithoutDefaultGuess();

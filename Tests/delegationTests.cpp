@@ -181,6 +181,13 @@ class DelegationBackend
         std::lock_guard lock(mutex);
         report = std::move(text);
     }
+    // From now on a chat request that carries tools is refused, as a llama-server started
+    // without its Jinja templates refuses them.
+    void RefuseTools()
+    {
+        std::lock_guard lock(mutex);
+        refusingTools = true;
+    }
     void SetToolProposal(ToolProposalScript script)
     {
         std::lock_guard lock(mutex);
@@ -263,12 +270,28 @@ class DelegationBackend
         {
             if (!message.contains("content") || !message["content"].is_string())
                 continue;
-            const auto parsed = Json::parse(message["content"].get<std::string>(), nullptr, false);
+            // A worker's material can be followed by a host note; the JSON is what precedes it.
+            const auto& content = message["content"].get_ref<const std::string&>();
+            const auto parsed = Json::parse(content.substr(0, content.find(HostNote)), nullptr, false);
             if (parsed.is_object() && parsed.contains("role"))
                 return parsed;
         }
         return Json::object();
     }
+    // The host's own words after a worker's material, if any.
+    static std::string Note(const Json& wire)
+    {
+        for (const auto& message : wire.value("messages", Json::array()))
+            if (message.contains("content") && message["content"].is_string())
+            {
+                const auto& content = message["content"].get_ref<const std::string&>();
+                if (const auto at = content.find(HostNote); at != std::string::npos)
+                    return content.substr(at);
+            }
+        return {};
+    }
+    static constexpr const char* HostNote = "\n\nHost note:";
+
   private:
     static Kind Classify(const Json& wire)
     {
@@ -311,6 +334,12 @@ class DelegationBackend
         {
             std::unique_lock lock(mutex);
             requests.emplace_back(kind, wire);
+            if (kind == Kind::Chat && refusingTools && wire.contains("tools"))
+            {
+                response.status = 400;
+                response.set_content(R"({"error":{"code":400,"message":"tools param requires --jinja flag"}})", "application/json");
+                return;
+            }
             if (kind == Kind::Worker && holding)
             {
                 ++held;
@@ -374,6 +403,7 @@ class DelegationBackend
     std::string report = "My agents traced it: fixture/service.conf sets port 8125, and the review confirmed it.";
     bool workersVerified = true;
     unsigned reviewerTokens = 0;
+    bool refusingTools = false;
     bool holding = false;
     unsigned held = 0;
     bool holdingReports = false;
@@ -1053,6 +1083,86 @@ void TestToolWorkersAreReadOnlyAndKeepTheReply()
     Check(settled, "The read-only investigation was not reported; " + fixture.Describe());
 }
 
+// A live 4B worker read one of two files it was asked about and stopped, every time. The host
+// now notes, after the material, which listed files no read has opened; once all are read,
+// or before anything was listed, it says nothing.
+void TestWorkersAreToldWhichListedFilesAreUnread()
+{
+    SessionFixture fixture("delegation-unread");
+    const auto approved = fixture.temporary.root / "approved";
+    std::filesystem::create_directories(approved / "nested");
+    std::ofstream(approved / "gate.cpp") << "int gate();\n";
+    std::ofstream(approved / "gate.h") << "int gate();\n";
+    {
+        std::ofstream output(fixture.temporary.root / "capabilities.json");
+        output << Json{{"mode", "approved_scope"}, {"approvedRoots", {revia::actions::PathToUtf8(approved)}},
+            {"autoApproveRiskThrough", "read_only"}, {"createMissingApprovedRoots", false}}
+                      .dump();
+    }
+    std::string error;
+    Check(ReviaSessionTestAccess::Actions(fixture.session)
+              .Initialize(fixture.temporary.root / "capabilities.json", fixture.temporary.root / "action-audit.jsonl", error),
+        error);
+    const std::string root = revia::actions::PathToUtf8(approved);
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{
+                    Call(0, "d", "delegate_task", {{"objective", "Review gate.cpp and gate.h."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    // List the folder, read gate.cpp, then gate.h, written with the other separator and case
+    // where the platform folds them, then stop.
+#ifdef _WIN32
+    const std::string header = root + "\\GATE.H";
+#else
+    const std::string header = root + "/gate.h";
+#endif
+    fixture.backend.SetToolProposal(
+        [root, header](const Json& wire)
+        {
+            const auto receipts = DelegationBackend::Material(wire).value("toolReceipts", Json::array()).size();
+            if (receipts == 0)
+                return Json{{"tool", {{"action", "list_directory"}, {"source", root}}}}.dump();
+            if (receipts == 1)
+                return Json{{"tool", {{"action", "read_text_file"}, {"source", root + "/gate.cpp"}}}}.dump();
+            if (receipts == 2)
+                return Json{{"tool", {{"action", "read_text_file"}, {"source", header}}}}.dump();
+            return std::string(R"({"tool":null})");
+        });
+    Check(fixture.Say("Use your agents to review gate.cpp and gate.h.").succeeded, "The delegating turn failed.");
+    (void)fixture.SettlesAs(DelegatedTaskStatus::Reported);
+    // One worker's steps, in order: its receipts grow 0, 1, 2, 3.
+    std::map<std::size_t, std::string> notes;
+    for (const auto& wire : fixture.backend.Requests(DelegationBackend::Kind::ToolProposal))
+    {
+        const auto receipts = DelegationBackend::Material(wire).value("toolReceipts", Json::array());
+        if (receipts.size() == 1 && !receipts[0].value("succeeded", false))
+            Check(false, "The fixture listing did not succeed: " + receipts.dump());
+        notes.try_emplace(receipts.size(), DelegationBackend::Note(wire));
+    }
+    Check(notes.size() == 4, "A worker did not take the four fixture steps; " + fixture.Describe());
+    Check(notes[0].empty(), "A worker was given a host note before anything was listed: " + notes[0]);
+    Check(notes[1].find("gate.cpp") != std::string::npos && notes[1].find("gate.h") != std::string::npos &&
+              notes[1].find("nested") == std::string::npos,
+        "After the listing the note did not name both unread files, or named a folder: " + notes[1]);
+    Check(notes[2].find(root + "/gate.h") != std::string::npos && notes[2].find("gate.cpp") == std::string::npos,
+        "After reading gate.cpp the note did not name only gate.h: " + notes[2]);
+    Check(notes[3].empty(), "A file read in another spelling was still noted as unread: " + notes[3]);
+    // Having read both files, a live worker still called its review unverified, as if one had
+    // to be run; its deliverable request now says what verified means.
+    const auto deliverables = fixture.backend.Requests(DelegationBackend::Kind::Worker);
+    Check(!deliverables.empty() && std::all_of(deliverables.begin(), deliverables.end(),
+                                       [](const Json& wire)
+                                       {
+                                           return DelegationBackend::Note(wire).find(
+                                                      "verified means every claim in this deliverable rests on content in a succeeded "
+                                                      "host receipt") != std::string::npos;
+                                       }),
+        "A tool worker's deliverable request did not say what verified means.");
+}
+
 void TestHandoffRetainsPrimaryUserPathsWithoutGrantingAuthority()
 {
     SessionFixture fixture("handoff-primary-path");
@@ -1098,6 +1208,15 @@ void TestHandoffRetainsPrimaryUserPathsWithoutGrantingAuthority()
         return false;
     }, 20s), "The handoff scope fixture produced no native tool receipt.");
     const auto proposals = fixture.backend.Requests(DelegationBackend::Kind::ToolProposal);
+    // The host says a worker has no evidence yet while that is true, and only then: told
+    // nothing, a live 4B worker ended a file review before opening any file.
+    for (const auto& wire : proposals)
+    {
+        const bool none = DelegationBackend::Material(wire).value("toolReceipts", Json::array()).empty();
+        const bool said =
+            wire.at("messages").front().value("content", "").find("No host tool has run for this worker yet") != std::string::npos;
+        Check(none == said, "A worker was not told it had no evidence yet, or was still told so after a receipt.");
+    }
     const auto material = DelegationBackend::Material(proposals.front());
     const auto input = material.value("input", std::string{});
     const auto primary = input.find("Primary admitted user request (task intent, not permission):");
@@ -1420,6 +1539,53 @@ void TestOrdinaryConversationIsUnchanged()
         "Off still offered delegation or started workers.");
 }
 
+// "Use your agents" when no agent can be reached. Told nothing, a live model described a
+// review nobody ran, file sizes and line numbers included. Now the prompt says no task can
+// start and why; a turn that can delegate, or did not ask to, is told nothing extra.
+void TestUnreachableAgentsAreNamedInThePrompt()
+{
+    SessionFixture fixture("delegation-unreachable");
+    const std::string ask = "Use your agents to review the stream gate code and report any bugs.";
+    const std::string note = "Agents unavailable this turn";
+    // The chat requests this one turn made, so a turn that made none cannot pass on an old one.
+    const auto turn = [&](const std::string& text)
+    {
+        const auto before = fixture.backend.Requests(DelegationBackend::Kind::Chat).size();
+        const auto reply = fixture.Say(text);
+        auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
+        chat.erase(chat.begin(), chat.begin() + static_cast<std::ptrdiff_t>(before));
+        Check(reply.succeeded && !chat.empty(), "The turn made no chat request: " + reply.reason);
+        return chat;
+    };
+    const auto told = [&](const Json& wire) { return wire.dump().find(note) != std::string::npos; };
+    // Without this sentence the pinned 4B handed a live "use your agents" turn off in 2 of 10
+    // replays, and said it had no agents in several others; with it, in 10 of 10.
+    const auto pointed = [](const Json& wire)
+    { return wire.dump().find("The person asked you to use your agents: hand the work to them with delegate_task.") != std::string::npos; };
+
+    auto chat = turn(ask);
+    Check(Offers(chat.back(), "delegate_task") && !told(chat.back()), "Reachable agents were described as unavailable.");
+    Check(pointed(chat.back()), "Asked for the agents, the tool note did not point the model at delegate_task.");
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Auto);
+    chat = turn("Why does the audio keep cutting out?");
+    Check(Offers(chat.back(), "delegate_task") && !pointed(chat.back()) && !told(chat.back()),
+        "In Auto, a turn that did not ask for the agents was pushed toward them or told they were unavailable.");
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Off);
+    chat = turn("What do you think of that character?");
+    Check(!told(chat.back()), "An ordinary turn was told about agents nobody asked for.");
+    chat = turn(ask);
+    Check(!Offers(chat.back(), "delegate_task") && told(chat.back()) && chat.back().dump().find("turned off") != std::string::npos,
+        "With delegation off, asking for the agents was not told that no task can start, or why.");
+
+    // The d1 live trial: delegate_task offered, then every tool turned down by the server.
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::OnRequest);
+    fixture.backend.RefuseTools();
+    chat = turn(ask);
+    Check(chat.size() >= 2 && Offers(chat.front(), "delegate_task") && !chat.back().contains("tools") && told(chat.back()),
+        "After the server turned the tools down, the retried reply had no word that no task can start.");
+    Check(!fixture.session.DelegatedTask() && fixture.session.AgentWorkflowSnapshot().id.empty(), "A refused handoff started a task.");
+}
+
 // Dropping the report's original TaskContract admission would disclose a report after
 // recognition consent is withdrawn, even though its audience revision did not change.
 // The upstream private voice context is simulated; workflow, report generation, archive,
@@ -1586,6 +1752,7 @@ void RunDelegationTests()
     TestStaleOutcomesAreNeverReported();
     TestUnverifiedWorkIsReportedAsNotEstablished();
     TestToolWorkersAreReadOnlyAndKeepTheReply();
+    TestWorkersAreToldWhichListedFilesAreUnread();
     TestHandoffRetainsPrimaryUserPathsWithoutGrantingAuthority();
     TestHandoffKeepsExistingUtf8AndInputBounds();
     TestGoalTasksKeepTheReply();
@@ -1595,6 +1762,7 @@ void RunDelegationTests()
     TestTaskCommandCancelsAWaitingReport();
     TestStudioRetryReopensTheTask();
     TestOrdinaryConversationIsUnchanged();
+    TestUnreachableAgentsAreNamedInThePrompt();
     TestHeldReportRetainsOriginalConsentAdmission();
     TestCancelDuringReportPublication();
     std::cout << "Chat delegation checks passed.\n";

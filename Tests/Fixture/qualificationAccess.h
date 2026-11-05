@@ -39,6 +39,12 @@ struct ReviaSessionTestAccess
 
     static nlohmann::json DisabledHosts(const ReviaSession& session) { return DisabledHosts(session.settings); }
     static std::size_t QualificationContextSize(const ReviaSession& session) { return session.context.GetRecentMessages().size(); }
+    // Interactive and learning memory work still queued; a running task is not counted.
+    static std::size_t QueuedMemoryWork(const ReviaSession& session)
+    {
+        const auto depths = session.turnCoordinator.Memory().Depths();
+        return depths.interactive + depths.learning;
+    }
     static bool QualificationMemoryEnabled(const ReviaSession& session) { return session.profile.bMemoryEnabled; }
 };
 }
