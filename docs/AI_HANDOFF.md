@@ -35,6 +35,10 @@ PR37 was measured through `ConversationRuntime::EvaluateTurn` with the SHA-pinne
 Qwen3.5-4B on three fixed prompts, four passes per round: 5/12 before the fix,
 12/12 after it on CPU, 11/12 on the RTX 5070 (the miss was reply length). Host
 repair still removes much of what the model invents, and the gates match phrases.
+A post-merge review found those phrase lists matched parts of words ("eating"
+inside "creating"), which could drop harmless sentences from these two turn
+types. [PR #39](https://github.com/MahouSenseii/R.E.V.I.A/pull/39) switches them
+to whole-word matching.
 
 The installed app was not updated or freshly audited. Model-generated invented
 history remains open beyond those two cases. A real-model worker previously delegated and kept chat

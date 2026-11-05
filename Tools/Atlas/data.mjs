@@ -45,8 +45,8 @@ export const current={
 export const changes=[
   {pr:37,title:'Keep casual check-ins and stated names grounded.',
     summary:'“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.',
-    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged.',
-    next:'Rebuild and requalify the installed app; widen the fixed-prompt check to more history-shaped turns.'},
+    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; the whole-word fix is PR #39.',
+    next:'Merge the PR #39 whole-word fix, then rebuild and requalify the installed app.'},
   {pr:34,title:'Keep corrections grounded in what was actually said.',
     summary:'Quoted corrections no longer create a messenger story in the host response rules.',
     detail:'The merged change adjusts conversationStylePolicy.cpp and speechAttributionTests.cpp. This host-code fix does not establish that a real model will never invent history.',
