@@ -19,18 +19,25 @@ applies to their own date.
 
 ## Verified Revia source
 
-[PR #34](https://github.com/MahouSenseii/R.E.V.I.A/pull/34) is merged at
-[d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a](https://github.com/MahouSenseii/R.E.V.I.A/commit/d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a).
-[CI 41947710858](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41947710858)
+[PR #37](https://github.com/MahouSenseii/R.E.V.I.A/pull/37) is merged at
+[4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e](https://github.com/MahouSenseii/R.E.V.I.A/commit/4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e).
+[CI 42062451066](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42062451066)
 passed six jobs: 155 tests passed, 0 failed, 2 optional video skips.
 That result is hosted application-source evidence, not a new local test run.
 
 PR28–34 correct user-owned server context, rejected nicknames, later valid name
 corrections, reassurance/hostility, recurrence friction, explicit self-correction
-and invented messenger history in the host policy.
+and invented messenger history in the host policy. PR37 grounds casual check-ins
+("what are you up to?") and first-time "X, not Y" name statements, and keeps
+those replies streaming.
+
+PR37 was measured through `ConversationRuntime::EvaluateTurn` with the SHA-pinned
+Qwen3.5-4B on three fixed prompts, four passes per round: 5/12 before the fix,
+12/12 after it on CPU, 11/12 on the RTX 5070 (the miss was reply length). Host
+repair still removes much of what the model invents, and the gates match phrases.
 
 The installed app was not updated or freshly audited. Model-generated invented
-history remains open. A real-model worker previously delegated and kept chat
+history remains open beyond those two cases. A real-model worker previously delegated and kept chat
 available, but listed files and stopped without an accepted reviewed report.
 The stopping cause and useful real-model completion remain unresolved.
 Restart recall, physical desktop, real voice/media and release qualification

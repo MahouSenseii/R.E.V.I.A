@@ -1,17 +1,17 @@
 {
   "schema_version": 3,
-  "milestone": "Revia source through PR34; RNL paused; direct comparison incomplete",
+  "milestone": "Revia source through PR37; RNL paused; direct comparison incomplete",
   "recorded_utc": "2026-11-05",
   "refresh_mode": "Manual, source-pinned snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "current": {
     "as_of": "2026-11-05",
-    "source_commit": "d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a",
-    "source_pr": 34,
+    "source_commit": "4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e",
+    "source_pr": 37,
     "state": "Paused at a safe stopping point",
     "refresh_mode": "Manual, source-pinned snapshot; no live monitoring",
     "ci": {
-      "run": 41947710858,
+      "run": 42062451066,
       "jobs_passed": 6,
       "passed": 155,
       "failed": 0,
@@ -51,13 +51,13 @@
     }
   },
   "source": {
-    "main_commit": "d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a",
+    "main_commit": "4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e",
     "installed_app_updated": false,
     "release_qualified": false
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "integration": {
-    "main_commit": "d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a",
+    "main_commit": "4a2cb2ba26d58eac6218d7778e2491a4e05b3b1e",
     "installed_app_updated": false,
     "runtime_release_qualified": false
   },
@@ -73,6 +73,13 @@
   },
   "counts_scope": "Historical 153-registration controlled checkpoint ONLY. Current source CI is current.ci; discovery is not a pass count.",
   "changes": [
+    {
+      "pr": 37,
+      "title": "Keep casual check-ins and stated names grounded.",
+      "summary": "“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.",
+      "detail": "Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged.",
+      "next": "Rebuild and requalify the installed app; widen the fixed-prompt check to more history-shaped turns."
+    },
     {
       "pr": 34,
       "title": "Keep corrections grounded in what was actually said.",
@@ -199,10 +206,10 @@
       "id": "history",
       "area": "Revia",
       "title": "Model-generated invented history remains open.",
-      "summary": "The latest host-code correction passed regression checks. The broader model behavior still needs a real check.",
-      "status": "Open · source fix has scoped evidence",
-      "detail": "PR34 fixes a host-policy path. It is not proof of general conversational grounding, truthfulness or improvement in the installed model.",
-      "next": "Separate host-policy evidence from a narrowly scoped real-model evaluation."
+      "summary": "A scoped real-model check now covers two common cases. General grounding is still not established.",
+      "status": "Open · narrowed by a scoped real-model check",
+      "detail": "PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. This is not proof of general truthfulness or of improvement in the installed app.",
+      "next": "Add more history-shaped turns to the fixed real-model check, then requalify the installed app."
     },
     {
       "id": "comparison",
