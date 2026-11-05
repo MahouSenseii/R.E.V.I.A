@@ -1,0 +1,35 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const base=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
+const git=process.env.ATLAS_GIT_BIN||'git';
+const old=name=>execFileSync(git,['show','d51a2b38:docs/atlas/'+name],{cwd:base,encoding:'utf8',maxBuffer:2e6});
+const read=name=>fs.readFileSync(path.join(base,'docs/atlas',name),'utf8');
+const normalize=s=>s.replaceAll('\r\n','\n');
+const sha=s=>crypto.createHash('sha256').update(s).digest('hex');
+const files=fs.readdirSync(path.join(base,'docs/atlas'));
+const result={checked_utc:new Date().toISOString(),source_pin:'d51a2b38fb87f3d0dd63a5e4fcf2796de219ef4a',preservation:{}};
+for(const name of ['index.html','research.html']){
+  const original=old(name);
+  const main=original.slice(original.indexOf('>',original.indexOf('<main'))+1,original.lastIndexOf('</main>')).replace(/<header>[\s\S]*?<\/header>/,'').replace(/<footer>[\s\S]*?<\/footer>/,'');
+  const retained=read(name).split('<!-- BEGIN RETAINED RECORD -->')[1].split('<!-- END RETAINED RECORD -->')[0];
+  assert.equal(normalize(retained),normalize(main),'historical record changed: '+name);
+  result.preservation[name]={historical_main_exact:true,normalized_sha256:sha(normalize(retained))};
+}
+assert.deepEqual(JSON.parse(read('milestone.json')).history,JSON.parse(old('milestone.json')));
+result.preservation.milestone_json={full_previous_snapshot_preserved:true};
+const before=Object.fromEntries(files.map(f=>[f,sha(read(f))]));
+execFileSync(process.execPath,['Tools/Atlas/build.mjs'],{cwd:base});
+const after=Object.fromEntries(files.map(f=>[f,sha(read(f))]));
+assert.deepEqual(after,before,'rebuild must be byte-stable');
+result.rebuild_byte_stable=true;
+result.files=files.map(f=>({name:f,bytes:Buffer.byteLength(read(f)),sha256:after[f]}));
+result.artifact_bytes=result.files.reduce((sum,f)=>sum+f.bytes,0);
+assert.ok(result.artifact_bytes<500000);
+result.original_500000_byte_limit_passed=true;
+assert.equal(execFileSync(git,['diff','--','.github/workflows/atlas-pages.yml'],{cwd:base,encoding:'utf8'}),'');
+result.pages_workflow_unchanged=true;
+console.log(JSON.stringify(result,null,2));
