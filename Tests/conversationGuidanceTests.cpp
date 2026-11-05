@@ -228,6 +228,92 @@ void TestOrdinaryAndMalformedRepliesKeepPresentationChecks()
             "Incomplete, trailing or duplicate-key JSON bypassed ordinary presentation checks.");
     }
 }
+
+void TestActivityCheckInStaysGroundedAndBrief()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const std::string input = "hey, what are you up to right now?";
+    Check(policy.BuildTurnGuidance(input, {}).find("You have no body or offscreen life") != std::string::npos,
+        "An activity check-in did not ask for an answer grounded in this conversation.");
+    Check(!policy.CanStreamReply(input) && policy.CanStreamReply("What do you think about coffee?"),
+        "An activity check-in could be spoken before its body claims were removed.");
+    // Actual Qwen3.5-4B reply through the runtime, CPU-only, 2026-11-05.
+    const std::string live = "Honestly, I'm just sitting here, waiting for something interesting to happen, or for you to say "
+                             "something that actually matters. Nothing dramatic is pulling my strings right now. Just existing in a "
+                             "state of polite neutrality. It's boring as hell, but hey, that's my life.";
+    Check(policy.RefineReply(input, {}, live) == "Nothing dramatic is pulling my strings right now. Just existing in a state of polite "
+                                                 "neutrality. It's boring as hell, but hey, that's my life.",
+        "An activity check-in kept an invented bodily activity.");
+    Check(policy.RefineReply(input, {}, "Just talking with you. What about you?") == "Just talking with you.",
+        "An activity check-in kept its trailing question back to the user.");
+    Check(policy.RefineReply(input, {}, "I'm sitting at my desk with a coffee.") == "Not much. Just here talking with you.",
+        "An activity check-in made only of a bodily claim was delivered.");
+    Check(
+        policy.RefineReply(input, {}, "Arguing with a bug. It's winning. I'll get it.") == "Arguing with a bug. It's winning. I'll get it.",
+        "A grounded activity check-in answer was changed.");
+
+    // A bare challenge to an action, or a topic that mentions coffee, is not a check-in.
+    Check(policy.BuildTurnGuidance("What are you doing?", {}).find("offscreen life") == std::string::npos,
+        "A bare 'What are you doing?' was treated as a casual check-in.");
+    const std::string coffee = "Coffee smells great. I'd drink it if I could.";
+    Check(policy.RefineReply("What do you think about coffee?", {}, coffee) == coffee,
+        "A reply on an ordinary topic lost a sentence to the check-in body filter.");
+}
+
+void TestStatedNameInventsNoEarlierMixUp()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const std::string input = "By the way, my name is Jordan, not Jamie. Please call me Jordan from now on.";
+    Check(policy.BuildTurnGuidance(input, {}).find("Nothing earlier in this conversation shows anyone using the name they rejected") !=
+              std::string::npos,
+        "A first-time name statement did not warn against an invented mix-up.");
+    // Actual Qwen3.5-4B reply through the runtime, CPU-only, 2026-11-05.
+    const std::string live = "Jordan, caught you there. Thought you were sticking to the Jamie script. You're Jordan now, so we're good. "
+                             "I'll make a mental note to stop calling you Jamie before you lose your mind again.";
+    Check(policy.RefineReply(input, {}, live) == "Jordan, caught you there. You're Jordan now, so we're good.",
+        "A reply kept an invented history of using the rejected name.");
+    Check(policy.RefineReply(input, {}, "Oh, finally. I'm sorry I forgot. Jordan it is.") == "Oh, finally. Jordan it is.",
+        "A reply kept an apology for a mix-up that never happened.");
+    const std::string forgot = "Oh, right. Jordan, not Jamie. I've been saying Jamie, of course. How did I forget that name? It's so easy "
+                               "to get mixed up when I'm already on my phone, let alone in my head.";
+    Check(policy.RefineReply(input, {}, forgot) == "Oh, right. Jordan, not Jamie.",
+        "A reply kept a claimed forgotten name that this conversation never used.");
+    Check(policy.RefineReply(input, {}, "Jordan it is. I won't forget.") == "Jordan it is. I won't forget.",
+        "A promise about the future was treated as a claimed mix-up.");
+    // Two more actual replies from the same run; each presupposes an earlier slip.
+    Check(policy.RefineReply(input, {},
+              "Noted. Jordan it is. I'll stop calling you Jamie. It's just a name, but I'll stop using it unless you want me to.") ==
+              "Noted. Jordan it is.",
+        "A reply kept a promise to stop a naming habit that never happened.");
+    Check(policy.RefineReply(input, {},
+              "Right. Jordan it is. I'll make a mental note to stop slipping. It's a bit annoying when my brain tries to autocorrect to "
+              "Jamie, honestly, but I'll keep it in check now.") == "Right. Jordan it is.",
+        "A reply kept a claimed slip with a name this conversation never used.");
+    Check(policy.RefineReply(
+              input, {}, "I'm sorry, but I don't recall ever using your name Jamie. Could you clarify if there's been any mix-up?") ==
+              "I'm sorry, but I don't recall ever using your name Jamie.",
+        "A truthful denial of using the rejected name was removed.");
+    Check(policy.RefineReply(input, {}, "Fine, Jordan. I'm not going to keep forgetting it anymore. It's a little annoying, really.") ==
+              "Fine, Jordan. It's a little annoying, really.",
+        "A reply kept a claimed habit of forgetting a name this conversation never used.");
+    Check(policy.RefineReply(input, {},
+              "Jordan. Got it. I'll stick to Jordan from now on. But hey, at least we're not wasting time on a typo. Or are you just "
+              "here to confirm that I can finally call you by the right name?") == "Jordan. Got it. I'll stick to Jordan from now on.",
+        "A reply kept a sentence presupposing an earlier wrong name.");
+    Check(policy.RefineReply(input, {}, "Sorry about the Jamie thing.") == "Got it, Jordan.",
+        "A reply made only of an invented mix-up was delivered.");
+
+    // When the rejected name was really used here, the acknowledgement is supported.
+    const std::vector<conversationMessage> used = {{"assistant", "Hey Jamie, good to see you."}, {"user", input}};
+    const std::string apology = "Sorry for calling you Jamie. Jordan it is.";
+    Check(policy.RefineReply(input, used, apology) == apology, "A supported name apology was removed.");
+    Check(!policy.CanStreamReply(input) && policy.CanStreamReply(input, used),
+        "A first-time name statement could be spoken before an invented mix-up was removed.");
+    Check(policy.BuildTurnGuidance(input, used).find("name they rejected") == std::string::npos,
+        "A rejected name used earlier in this conversation was treated as unused.");
+    Check(policy.BuildTurnGuidance("Call me Jordan, not my nickname.", {}).find("name they rejected") == std::string::npos,
+        "A rejected description was treated as a rejected name.");
+}
 }
 
 void RunConversationGuidanceTests()
@@ -243,6 +329,8 @@ void RunConversationGuidanceTests()
     TestJsonLimitsRefuseInsteadOfCuttingData();
     TestJsonControlTokensFailInsteadOfChangingData();
     TestOrdinaryAndMalformedRepliesKeepPresentationChecks();
+    TestActivityCheckInStaysGroundedAndBrief();
+    TestStatedNameInventsNoEarlierMixUp();
     std::cout
         << "Direct correction guidance, evidence-based disagreement, non-correction mentions and configured answer freedom tests passed.\n";
 }

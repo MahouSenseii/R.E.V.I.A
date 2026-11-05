@@ -278,6 +278,125 @@ namespace
         return words;
     }
 
+    bool HasWord(const std::string& text, const std::string& word)
+    {
+        const std::vector<std::string> words = Words(NormalizeSentence(text));
+        return std::find(words.begin(), words.end(), word) != words.end();
+    }
+
+    template <typename Predicate> std::string DropSentences(const std::string& value, Predicate&& unsupported)
+    {
+        std::string kept;
+        bool dropped = false;
+        for (const std::string& sentence : SplitSentences(value))
+        {
+            if (unsupported(sentence))
+            {
+                dropped = true;
+                continue;
+            }
+            if (!kept.empty())
+                kept += ' ';
+            kept += sentence;
+        }
+        return dropped ? kept : value;
+    }
+
+    // Body and offscreen-life claims a digital character cannot make truthfully. Operational
+    // claims are left to ContainsUnsupportedOperationalClaim; supplied state can make those true.
+    bool ClaimsBodilyActivity(const std::string& sentence)
+    {
+        const std::string normalized = NormalizeSentence(sentence);
+        constexpr std::string_view Claims[] = {"sitting", "standing here", "standing around", "lying in", "lying on", "laying in",
+            "laying on", "staring at", "my desk", "my chair", "my couch", "my bed", "my room", "my apartment", "my bedroom", "my kitchen",
+            "headache", "my head hurts", "my tongue", "my stomach", "coffee", "a cup of", "just ate", "eating", "drinking", "cooking",
+            "taking a walk", "going for a walk", "come over"};
+        return std::any_of(std::begin(Claims), std::end(Claims),
+            [&normalized](const std::string_view claim) { return normalized.find(claim) != std::string::npos; });
+    }
+
+    // "My name is Jordan, not Jamie": the name the same statement rejects, or empty.
+    std::string ReadRejectedName(const std::string& input, const std::string& stated)
+    {
+        const std::vector<std::string> statedWords = Words(NormalizeSentence(stated));
+        if (statedWords.empty())
+            return {};
+        const std::vector<std::string> words = Words(NormalizeSentence(conversation::ReadSpeechAttribution(input).userAuthoredText));
+        // "Call me Jordan, not my nickname" rejects a description, not a name anyone used.
+        constexpr std::string_view NotNames[] = {"my", "a", "an", "the", "your", "that", "this", "just", "really", "so", "even", "sure",
+            "yet", "now", "anymore", "any", "me", "him", "her", "them"};
+        for (std::size_t index = 0; index + 2 < words.size(); ++index)
+        {
+            if (words[index] != statedWords.back())
+                continue;
+            std::size_t next = index + 1;
+            if (words[next] == "and" && next + 2 < words.size())
+                ++next;
+            if (words[next] != "not")
+                continue;
+            const std::string& rejected = words[next + 1];
+            if (rejected != statedWords.back() && std::find(std::begin(NotNames), std::end(NotNames), rejected) == std::end(NotNames))
+                return rejected;
+        }
+        return {};
+    }
+
+    bool MentionedEarlier(const std::vector<conversationMessage>& context, const std::string& input, const std::string& word)
+    {
+        bool skippedCurrent = false;
+        for (auto message = context.rbegin(); message != context.rend(); ++message)
+        {
+            if (!skippedCurrent && message->role == "user" && message->content == input)
+            {
+                skippedCurrent = true;
+                continue;
+            }
+            if (HasWord(message->content, word))
+                return true;
+        }
+        return false;
+    }
+
+    struct NameStatement
+    {
+        std::string stated;
+        std::string rejected;
+    };
+
+    // The rejected name is kept only when nothing in this conversation used it, so no reply
+    // can truthfully own a mix-up with it.
+    NameStatement ReadUnusedNameRejection(const std::string& rawInput, const std::vector<conversationMessage>& context)
+    {
+        NameStatement statement{identity::ReadStatedName(rawInput), {}};
+        if (!statement.stated.empty())
+            statement.rejected = ReadRejectedName(rawInput, statement.stated);
+        if (!statement.rejected.empty() && MentionedEarlier(context, rawInput, statement.rejected))
+            statement.rejected.clear();
+        return statement;
+    }
+
+    bool ClaimsNameMixUp(const std::string& sentence)
+    {
+        const std::string normalized = NormalizeSentence(sentence);
+        // "I won't forget" is a promise about the future, not a claimed mix-up. Stopping or
+        // slipping both presuppose an earlier use the conversation does not contain.
+        constexpr std::string_view Claims[] = {"forgot", "did i forget", "forgetting your", "keep forgetting", "forgive me", "sorry",
+            "apologi", "my bad", "my mistake", "mixed up", "mix up", "mixup", "got your name wrong", "wrong name", "right name", "typo",
+            "ill stop", "i will stop", "slipping", "slipped", "slip up"};
+        return std::any_of(std::begin(Claims), std::end(Claims),
+            [&normalized](const std::string_view claim) { return normalized.find(claim) != std::string::npos; });
+    }
+
+    // "I don't recall ever calling you Jamie" is the true answer, so it stays.
+    bool DeniesUsingName(const std::string& sentence)
+    {
+        const std::string normalized = NormalizeSentence(sentence);
+        constexpr std::string_view Denials[] = {"dont recall", "do not recall", "never called you", "never used", "havent called you",
+            "have not called you", "didnt call you", "did not call you", "not that i was"};
+        return std::any_of(std::begin(Denials), std::end(Denials),
+            [&normalized](const std::string_view denial) { return normalized.find(denial) != std::string::npos; });
+    }
+
     bool SharesLongOpening(const std::string& left, const std::string& right)
     {
         const std::vector<std::string> leftWords = Words(left);
@@ -596,6 +715,21 @@ bool ConversationStylePolicy::LooksLikeSocialGreeting(const std::string& input)
         });
 }
 
+bool ConversationStylePolicy::LooksLikeActivityCheckIn(const std::string& input)
+{
+    std::string normalized = NormalizeSentence(input);
+    for (const std::string_view lead : {"hey ", "hi ", "hello ", "yo ", "revia "})
+        if (normalized.starts_with(lead))
+            normalized.erase(0, lead.size());
+    if (normalized.ends_with(" revia"))
+        normalized.resize(normalized.size() - 6);
+    // A bare "what are you doing?" can challenge an action she just took, so it is not a check-in.
+    constexpr std::string_view CheckIns[] = {"what are you up to", "what are you up to right now", "what are you up to now",
+        "what are you up to today", "what are you doing today", "what you up to", "whatcha up to", "whatcha doing",
+        "what have you been up to", "what have you been doing", "wyd"};
+    return std::find(std::begin(CheckIns), std::end(CheckIns), normalized) != std::end(CheckIns);
+}
+
 bool ConversationStylePolicy::LooksLikeEmotionQuestion(const std::string& input)
 {
     const std::string normalized = NormalizeSentence(input);
@@ -844,6 +978,19 @@ std::string ConversationStylePolicy::BuildTurnGuidance(const std::string& rawInp
         guidance << " This is a simple social greeting. Answer in one or two natural "
             "sentences. Do not invent something you were doing, report project or system "
             "work, or end by asking what the user wants.";
+    }
+    if (LooksLikeActivityCheckIn(input))
+    {
+        guidance << " This asks what you are doing right now. You have no body or offscreen life; you are here in this "
+                    "conversation. Answer in one to three short sentences from that or from supplied state. Do not say you are "
+                    "sitting, lying down, eating or drinking, do not invent an activity, place, posture or physical sensation, "
+                    "and do not end by asking what the user is doing.";
+    }
+    if (const auto name = ReadUnusedNameRejection(rawInput, context); !name.rejected.empty())
+    {
+        guidance << " The user is telling you their name is " << name.stated << ". Nothing earlier in this conversation "
+                 << "shows anyone using the name they rejected, so do not apologize for, joke about, or invent an "
+                 << "earlier mix-up. Just use " << name.stated << '.';
     }
     if (LooksLikeEmotionQuestion(input))
     {
@@ -1164,6 +1311,24 @@ std::string ConversationStylePolicy::RefineReply(
         }
         refined = RemoveTrailingQuestion(LimitSentences(refined, 2));
     }
+    if (LooksLikeActivityCheckIn(input))
+    {
+        refined = RemoveTrailingQuestion(LimitSentences(DropSentences(refined, ClaimsBodilyActivity), 3));
+        if (refined.empty())
+            return "Not much. Just here talking with you.";
+    }
+    if (const auto name = ReadUnusedNameRejection(rawInput, context); !name.rejected.empty())
+    {
+        const std::string statedWord = Words(NormalizeSentence(name.stated)).back();
+        refined = DropSentences(refined,
+            [&](const std::string& sentence)
+            {
+                return !DeniesUsingName(sentence) &&
+                       ((HasWord(sentence, name.rejected) && !HasWord(sentence, statedWord)) || ClaimsNameMixUp(sentence));
+            });
+        if (refined.empty())
+            return "Got it, " + name.stated + ".";
+    }
     if (LooksLikeEmotionQuestion(input))
     {
         refined = LimitSentences(refined, 4);
@@ -1243,6 +1408,8 @@ bool ConversationStylePolicy::CanStreamReply(const std::string& rawInput, const 
     return conversation::BuildSpeechAttributionGuidance(rawInput, context).empty() &&
         !LooksLikeWellbeingQuestion(input) &&
         !LooksLikeSocialGreeting(input) &&
+        !LooksLikeActivityCheckIn(input) &&
+        ReadUnusedNameRejection(rawInput, context).rejected.empty() &&
         !LooksLikeEmotionQuestion(input) &&
         !LooksLikeBriefAcknowledgement(input) &&
         !LooksLikePreferenceStatement(input) &&

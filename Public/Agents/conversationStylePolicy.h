@@ -43,6 +43,7 @@ private:
     [[nodiscard]] static bool LooksLikeMotiveQuestion(const std::string& input);
     [[nodiscard]] static bool LooksLikeWellbeingQuestion(const std::string& input);
     [[nodiscard]] static bool LooksLikeSocialGreeting(const std::string& input);
+    [[nodiscard]] static bool LooksLikeActivityCheckIn(const std::string& input);
     [[nodiscard]] static bool LooksLikeEmotionQuestion(const std::string& input);
     [[nodiscard]] static bool ContainsUnsupportedOperationalClaim(const std::string& reply);
     [[nodiscard]] static bool ContainsClaimedPreferenceAction(const std::string& reply);
