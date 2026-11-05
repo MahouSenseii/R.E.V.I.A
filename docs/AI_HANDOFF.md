@@ -1,10 +1,18 @@
 # Revia: start here
 
-Status checked 5 November 2026. This handoff describes a pinned source snapshot.
-Recheck GitHub before treating it as the latest head. The Atlas redesign and this
-handoff are local review changes; no upload, merge or deployment was performed.
+Status checked 5 November 2026. This handoff describes a pinned product-source
+snapshot. Recheck GitHub before treating it as the latest head.
 
-Read the [Atlas](atlas/index.html), [RNL research summary](atlas/research.html)
+The Atlas redesign was merged in
+[PR #35](https://github.com/MahouSenseii/R.E.V.I.A/pull/35) at
+[ac755b28](https://github.com/MahouSenseii/R.E.V.I.A/commit/ac755b28d635676e398623841b7c4c49eee5416c).
+The [live Atlas](https://mahousenseii.github.io/R.E.V.I.A/) was verified after
+[Pages run 41961109918](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41961109918)
+succeeded; all six served files matched the reviewed source. This publication
+checkpoint does not update or qualify the installed Revia app or local RNL studies.
+
+Read the [live Atlas](https://mahousenseii.github.io/R.E.V.I.A/),
+[RNL research summary](https://mahousenseii.github.io/R.E.V.I.A/research.html)
 and [structured snapshot](atlas/milestone.json) first. Closed dated records retain
 the full earlier findings and failures; their old "current/next/unrun" language
 applies to their own date.
@@ -80,8 +88,14 @@ The original Pages workflow still enforces exactly six files, a total below
 500000 bytes, privacy patterns, historical totals and installation qualifiers.
 No workflow permissions, timeouts or artifact checks were weakened.
 
-[Latest Pages run 41893563372](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41893563372):
+[Verified publication checkpoint: Pages run 41961109918](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41961109918)
+succeeded on 5 November 2026. The live homepage, research navigation and search
+were checked, and all six public files matched the reviewed Git bytes.
+
+Historical failure, 4 November 2026:
+[earlier Pages run 41893563372](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41893563372):
 artifact validated and uploaded; both deployment attempts stalled and cancelled at
 the ten-minute timeout. Underlying backend cause is unverified. The
 [preceding run 41880016023](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41880016023)
-succeeded. No rerun or settings change was performed.
+succeeded. That failure was not rerun and no settings were changed; the later
+deployment for merged PR #35 succeeded. The old backend cause remains unresolved.

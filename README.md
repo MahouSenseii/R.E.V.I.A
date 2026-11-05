@@ -1,7 +1,7 @@
 # R.E.V.I.A
 
 For the current source status, evidence limits and next steps, start with the
-[AI handoff](docs/AI_HANDOFF.md) and the [readable Atlas](docs/atlas/index.html).
+[AI handoff](docs/AI_HANDOFF.md) and the [live Atlas](https://mahousenseii.github.io/R.E.V.I.A/).
 The handoff distinguishes merged source, installed-app checks and local RNL research.
 
 R.E.V.I.A stands for **Reactive Emotional Virtual Interactive Assistant**. She is a local-first Windows desktop companion written in C++: one persistent character with conversation, memory, mood, voice, vision, curiosity, and carefully supervised computer actions. Everything that thinks, listens, or speaks runs on your own PC; an [optional cloud model](#optional-cloud-model) exists but is off unless you set it up.

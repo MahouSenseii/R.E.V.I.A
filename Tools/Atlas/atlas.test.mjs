@@ -51,3 +51,22 @@ test('dated evidence is retained without presenting it as the current snapshot',
     for(const m of read(name).matchAll(/href="#([^"]+)"/g)) assert.ok(ids.includes(m[1]),'broken fragment #'+m[1]+' in '+name);
   }
 });
+test('current website status identifies the verified live checkpoint and dates the earlier failure',()=>{
+  const pages=record().current.pages;
+  assert.equal(pages.state,'published');
+  assert.deepEqual(pages.verified_publication,{
+    run:41961109918,
+    source_commit:'ac755b28d635676e398623841b7c4c49eee5416c',
+    url:'https://mahousenseii.github.io/R.E.V.I.A/',
+    verified_utc:'2026-11-05T03:23:23.246Z'
+  });
+  assert.equal(pages.previous_failure.run,41893563372);
+  for(const name of ['index.html','research.html']){
+    const active=read(name).split('<!-- BEGIN RETAINED RECORD -->')[0];
+    assert.match(active,/Published Atlas snapshot/);
+    assert.doesNotMatch(active,/Local redesign preview|The deployment stalled\.|This redesign is a local review copy|This redesign is local only/);
+  }
+  const active=read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0];
+  assert.match(active,/Earlier deployment failure \(4 November 2026\)/);
+  assert.match(active,/actions\/runs\/41961109918/);
+});

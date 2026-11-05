@@ -1,5 +1,21 @@
 # Atlas redesign audit — 5 November 2026
 
+## Publication addendum
+
+This document preserves the original pre-publication audit below. Its statements
+about a local review copy and no upload/deployment describe that earlier stage,
+not the current website.
+
+[PR #35](https://github.com/MahouSenseii/R.E.V.I.A/pull/35) subsequently merged at
+ac755b28d635676e398623841b7c4c49eee5416c. The
+[Pages deployment](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/41961109918)
+succeeded and the [live site](https://mahousenseii.github.io/R.E.V.I.A/) was checked
+on 5 November 2026. All six served files matched the reviewed Git bytes.
+Publication wording is now corrected while the dated evidence remains intact.
+This website publication does not resume or qualify Revia/RNL application work.
+
+## Original pre-publication audit (historical)
+
 This is an isolated, local review change. No push, PR, merge, upload, publication,
 model run, training, product build, installation or runtime-data modification was
 performed. Revia and RNL remain paused. The existing Pages workflow is unchanged.

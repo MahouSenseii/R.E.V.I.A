@@ -31,12 +31,23 @@
       "state": "Paused; no continuation or upload active"
     },
     "pages": {
-      "run": 41893563372,
+      "state": "published",
       "artifact": "Validated and uploaded",
-      "deployment": "Both attempts stalled and were cancelled at the ten-minute timeout",
-      "cause": "Underlying Pages backend cause unverified",
-      "previous_successful_run": 41880016023,
-      "redesign": "Local review copy; not uploaded or deployed"
+      "deployment": "Verified live on GitHub Pages",
+      "verified_publication": {
+        "run": 41961109918,
+        "source_commit": "ac755b28d635676e398623841b7c4c49eee5416c",
+        "url": "https://mahousenseii.github.io/R.E.V.I.A/",
+        "verified_utc": "2026-11-05T03:23:23.246Z"
+      },
+      "previous_failure": {
+        "run": 41893563372,
+        "recorded_date": "2026-11-04",
+        "deployment": "Both attempts stalled and were cancelled at the ten-minute timeout",
+        "cause": "Underlying historical Pages backend cause unverified",
+        "preceding_successful_run": 41880016023
+      },
+      "redesign": "Published from reviewed PR35; installed Revia app unchanged"
     }
   },
   "source": {
