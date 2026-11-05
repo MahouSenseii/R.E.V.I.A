@@ -302,17 +302,34 @@ namespace
         return dropped ? kept : value;
     }
 
+    // Whole words only: "eating" is not "creating", and "lying on" is not "relying on".
+    bool ContainsPhrase(const std::string& normalized, const std::string_view phrase)
+    {
+        for (std::size_t at = normalized.find(phrase); at != std::string::npos; at = normalized.find(phrase, at + 1))
+        {
+            const std::size_t end = at + phrase.size();
+            if ((at == 0 || normalized[at - 1] == ' ') && (end == normalized.size() || normalized[end] == ' '))
+                return true;
+        }
+        return false;
+    }
+
+    template <std::size_t Count> bool ContainsAnyPhrase(const std::string& sentence, const std::string_view (&phrases)[Count])
+    {
+        const std::string normalized = NormalizeSentence(sentence);
+        return std::any_of(std::begin(phrases), std::end(phrases),
+            [&normalized](const std::string_view phrase) { return ContainsPhrase(normalized, phrase); });
+    }
+
     // Body and offscreen-life claims a digital character cannot make truthfully. Operational
     // claims are left to ContainsUnsupportedOperationalClaim; supplied state can make those true.
     bool ClaimsBodilyActivity(const std::string& sentence)
     {
-        const std::string normalized = NormalizeSentence(sentence);
         constexpr std::string_view Claims[] = {"sitting", "standing here", "standing around", "lying in", "lying on", "laying in",
             "laying on", "staring at", "my desk", "my chair", "my couch", "my bed", "my room", "my apartment", "my bedroom", "my kitchen",
             "headache", "my head hurts", "my tongue", "my stomach", "coffee", "a cup of", "just ate", "eating", "drinking", "cooking",
             "taking a walk", "going for a walk", "come over"};
-        return std::any_of(std::begin(Claims), std::end(Claims),
-            [&normalized](const std::string_view claim) { return normalized.find(claim) != std::string::npos; });
+        return ContainsAnyPhrase(sentence, Claims);
     }
 
     // "My name is Jordan, not Jamie": the name the same statement rejects, or empty.
@@ -381,24 +398,21 @@ namespace
 
     bool ClaimsNameMixUp(const std::string& sentence)
     {
-        const std::string normalized = NormalizeSentence(sentence);
         // "I won't forget" is a promise about the future, not a claimed mix-up. Stopping or
         // slipping both presuppose an earlier use the conversation does not contain.
-        constexpr std::string_view Claims[] = {"forgot", "did i forget", "forgetting your", "keep forgetting", "forgive me", "sorry",
-            "apologi", "my bad", "my mistake", "mixed up", "mix up", "mixup", "got your name wrong", "wrong name", "right name", "typo",
-            "ill stop", "i will stop", "slipping", "slipped", "slip up"};
-        return std::any_of(std::begin(Claims), std::end(Claims),
-            [&normalized](const std::string_view claim) { return normalized.find(claim) != std::string::npos; });
+        constexpr std::string_view Claims[] = {"forgot", "forgotten", "did i forget", "forgetting your", "keep forgetting", "forgive me",
+            "sorry", "apologize", "apologise", "apologies", "apology", "my bad", "my mistake", "mixed up", "mix up", "mixup",
+            "got your name wrong", "wrong name", "right name", "typo", "typos", "ill stop", "i will stop", "slipping", "slipped",
+            "slip up"};
+        return ContainsAnyPhrase(sentence, Claims);
     }
 
     // "I don't recall ever calling you Jamie" is the true answer, so it stays.
     bool DeniesUsingName(const std::string& sentence)
     {
-        const std::string normalized = NormalizeSentence(sentence);
         constexpr std::string_view Denials[] = {"dont recall", "do not recall", "never called you", "never used", "havent called you",
             "have not called you", "didnt call you", "did not call you", "not that i was"};
-        return std::any_of(std::begin(Denials), std::end(Denials),
-            [&normalized](const std::string_view denial) { return normalized.find(denial) != std::string::npos; });
+        return ContainsAnyPhrase(sentence, Denials);
     }
 
     bool SharesLongOpening(const std::string& left, const std::string& right)
