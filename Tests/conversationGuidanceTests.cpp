@@ -1,9 +1,11 @@
 #include "testSupport.h"
 #include "Agents/conversationStylePolicy.h"
+#include "Agents/replyStreamGate.h"
 #include "Agents/responseFilter.h"
 #include "Identity/promptMarkers.h"
 
 #include <iostream>
+#include <optional>
 #include <string>
 
 namespace
@@ -235,8 +237,6 @@ void TestActivityCheckInStaysGroundedAndBrief()
     const std::string input = "hey, what are you up to right now?";
     Check(policy.BuildTurnGuidance(input, {}).find("You have no body or offscreen life") != std::string::npos,
         "An activity check-in did not ask for an answer grounded in this conversation.");
-    Check(!policy.CanStreamReply(input) && policy.CanStreamReply("What do you think about coffee?"),
-        "An activity check-in could be spoken before its body claims were removed.");
     // Actual Qwen3.5-4B reply through the runtime, CPU-only, 2026-11-05.
     const std::string live = "Honestly, I'm just sitting here, waiting for something interesting to happen, or for you to say "
                              "something that actually matters. Nothing dramatic is pulling my strings right now. Just existing in a "
@@ -307,12 +307,62 @@ void TestStatedNameInventsNoEarlierMixUp()
     const std::vector<conversationMessage> used = {{"assistant", "Hey Jamie, good to see you."}, {"user", input}};
     const std::string apology = "Sorry for calling you Jamie. Jordan it is.";
     Check(policy.RefineReply(input, used, apology) == apology, "A supported name apology was removed.");
-    Check(!policy.CanStreamReply(input) && policy.CanStreamReply(input, used),
-        "A first-time name statement could be spoken before an invented mix-up was removed.");
     Check(policy.BuildTurnGuidance(input, used).find("name they rejected") == std::string::npos,
         "A rejected name used earlier in this conversation was treated as unused.");
     Check(policy.BuildTurnGuidance("Call me Jordan, not my nickname.", {}).find("name they rejected") == std::string::npos,
         "A rejected description was treated as a rejected name.");
+}
+
+// Both repairs remove whole sentences or trim the tail, so a streamed sentence is never
+// withdrawn and these turns can speak while generating. Each reply is fed word by word
+// through the same filter ConversationAgent gives its stream gate.
+void TestGroundedRepliesStreamWithoutRetraction()
+{
+    const revia::agents::ConversationStylePolicy policy;
+    const revia::agents::ResponseFilter filter;
+    const std::string checkIn = "hey, what are you up to right now?";
+    const std::string name = "By the way, my name is Jordan, not Jamie. Please call me Jordan from now on.";
+    Check(policy.CanStreamReply(checkIn) && policy.CanStreamReply(name), "A grounded turn stopped streaming its reply.");
+    struct StreamCase
+    {
+        std::string input;
+        std::string reply;
+        bool releasesWhileGenerating;
+    };
+    const StreamCase cases[] = {
+        {checkIn,
+            "Just sitting here, waiting for something interesting to happen. Nothing much, but I'm curious enough to wonder what "
+            "you're doing.",
+            false},
+        {checkIn, "Arguing with a bug. It's winning. I'll get it. What about you? Anything good?", true},
+        {name,
+            "Jordan, caught you there. Thought you were sticking to the Jamie script. You're Jordan now, so we're good. I'll make a "
+            "mental note to stop calling you Jamie before you lose your mind again.",
+            true},
+        {name, "Sorry about the Jamie thing.", false}};
+    for (const StreamCase& item : cases)
+    {
+        const auto deliver = [&](const std::string& reply) -> std::optional<std::string>
+        {
+            const auto hard = filter.ApplyHard(item.input, policy.RefineReply(item.input, {}, reply), {}, 12000);
+            if (hard.blocked)
+                return std::nullopt;
+            return hard.text;
+        };
+        revia::agents::ReplyStreamGate gate(deliver);
+        for (std::size_t at = 0; at < item.reply.size();)
+        {
+            const std::size_t next = item.reply.find(' ', at + 1);
+            const std::size_t end = next == std::string::npos ? item.reply.size() : next;
+            static_cast<void>(gate.Consume(item.reply.substr(at, end - at)));
+            at = end;
+        }
+        const auto delivered = deliver(item.reply);
+        Check(delivered && delivered->compare(0, gate.Released().size(), gate.Released()) == 0,
+            "The final repair withdrew a streamed sentence: " + item.reply);
+        Check(gate.Released().empty() != item.releasesWhileGenerating,
+            "A grounded reply streamed differently than its repair allows: " + item.reply);
+    }
 }
 }
 
@@ -331,6 +381,7 @@ void RunConversationGuidanceTests()
     TestOrdinaryAndMalformedRepliesKeepPresentationChecks();
     TestActivityCheckInStaysGroundedAndBrief();
     TestStatedNameInventsNoEarlierMixUp();
+    TestGroundedRepliesStreamWithoutRetraction();
     std::cout
         << "Direct correction guidance, evidence-based disagreement, non-correction mentions and configured answer freedom tests passed.\n";
 }

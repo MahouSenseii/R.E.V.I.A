@@ -351,7 +351,11 @@ namespace
                 skippedCurrent = true;
                 continue;
             }
-            if (HasWord(message->content, word))
+            // Most messages never contain the name, so only those that do are normalized.
+            const std::string& content = message->content;
+            const auto found = std::search(content.begin(), content.end(), word.begin(), word.end(),
+                [](const unsigned char left, const unsigned char right) { return std::tolower(left) == right; });
+            if (found != content.end() && HasWord(content, word))
                 return true;
         }
         return false;
@@ -1408,8 +1412,6 @@ bool ConversationStylePolicy::CanStreamReply(const std::string& rawInput, const 
     return conversation::BuildSpeechAttributionGuidance(rawInput, context).empty() &&
         !LooksLikeWellbeingQuestion(input) &&
         !LooksLikeSocialGreeting(input) &&
-        !LooksLikeActivityCheckIn(input) &&
-        ReadUnusedNameRejection(rawInput, context).rejected.empty() &&
         !LooksLikeEmotionQuestion(input) &&
         !LooksLikeBriefAcknowledgement(input) &&
         !LooksLikePreferenceStatement(input) &&
