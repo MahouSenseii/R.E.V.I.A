@@ -43,7 +43,9 @@ test('native-only settings do not require a bridge file', async t => {
   await rm(join(dir, '.env.bridge'));
   assert.equal((await loadSettings(dir, false)).port, 17864);
 });
-test('Windows entry point validates files with spaces without exposing credentials', { skip: process.platform !== 'win32', timeout: 10000 }, async t => {
+// Copies the package with node_modules and starts PowerShell: 5.3 s on a typical hosted
+// runner, over 10 s on a slow one (PR42's push run). Still bounded, so a hang fails.
+test('Windows entry point validates files with spaces without exposing credentials', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
   const dir = await settings(t);
   const source = fileURLToPath(new URL('..', import.meta.url));
   const fixture = await mkdtemp(join(tmpdir(), 'revia operator source '));
