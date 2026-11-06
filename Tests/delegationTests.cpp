@@ -1540,7 +1540,7 @@ void TestWorkersYieldToTheConversation()
 void TestSpentBudgetIsReportedAsNotEstablished()
 {
     SessionFixture fixture("delegation-budget");
-    fixture.backend.SetReviewerTokens(30000);
+    fixture.backend.SetReviewerTokens(70000);
     fixture.backend.SetReport("My agents ran out of budget before anything could be verified.");
     fixture.backend.SetChat(
         [](const Json& wire)
