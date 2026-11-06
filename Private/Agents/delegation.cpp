@@ -29,9 +29,13 @@ std::string Normalized(const std::string& input)
     return lowered;
 }
 
-bool ContainsAny(const std::string& text, const std::initializer_list<const char*> phrases)
+// Where the earliest of these phrases starts, or npos.
+std::size_t FirstOf(const std::string& text, const std::initializer_list<const char*> phrases)
 {
-    return std::any_of(phrases.begin(), phrases.end(), [&text](const char* phrase) { return text.find(phrase) != std::string::npos; });
+    std::size_t first = std::string::npos;
+    for (const char* phrase : phrases)
+        first = std::min(first, text.find(phrase));
+    return first;
 }
 }
 
@@ -66,25 +70,28 @@ DelegationCue ReadDelegationCue(const std::string& input)
     // check whether ..." is the subject of the question, not an instruction. Read whole, the
     // quote won, delegate_task was never offered, and a live request went undelegated.
     const std::string text = Normalized(conversation::ReadSpeechAttribution(input).userAuthoredText);
-    // Asked first: "don't use your agents" contains "use your agents".
-    if (ContainsAny(text, {"answer this directly", "answer that directly", "answer it directly", "answer directly", "just answer",
+    // The instruction stated first decides. Checked as "any refusal anywhere wins", a live
+    // "use your agents to check ... whether X counts as asking you to answer directly" was
+    // read as a refusal. A refusal starting where a request does ("don't use your agents"
+    // contains "use your agents") starts earlier, so it still wins.
+    const std::size_t refusal = FirstOf(text, {"answer this directly", "answer that directly", "answer it directly", "answer directly", "just answer",
                               "don't delegate", "do not delegate", "dont delegate", "without your agents", "without the agents",
                               "without agents", "don't use your agents", "do not use your agents", "dont use your agents",
                               "don't use the agents", "do not use the agents", "don't use agents", "do not use agents", "no agents",
-                              "don't use your workers", "do not use your workers", "without your workers"}))
-        return DelegationCue::AnswerDirectly;
+                              "don't use your workers", "do not use your workers", "without your workers"});
     // Phrases that name her workers or the act of handing work to them. Deliberately not
     // "in the background" on its own, which is as often about a picture or a sound.
-    if (ContainsAny(text, {"use your agents", "use the agents", "use agents", "use your workers", "use the workers", "use your agent",
+    const std::size_t request = FirstOf(text, {"use your agents", "use the agents", "use agents", "use your workers", "use the workers", "use your agent",
                               "with your agents", "with your workers", "have your agents", "have your workers", "have the agents",
                               "get your agents", "send your agents", "ask your agents", "ask your workers", "let your agents",
                               "let your workers", "your agents to ", "your workers to ", "agent studio", "delegate this",
                               "delegate it", "delegate that", "delegate the ", "delegate to ", "hand this off", "hand it off",
                               "hand that off", "work on it in the background", "work on this in the background",
                               "look into it in the background", "investigate it in the background",
-                              "investigate this in the background"}))
-        return DelegationCue::UseAgents;
-    return DelegationCue::None;
+                              "investigate this in the background"});
+    if (refusal == std::string::npos && request == std::string::npos)
+        return DelegationCue::None;
+    return refusal <= request ? DelegationCue::AnswerDirectly : DelegationCue::UseAgents;
 }
 
 bool OffersDelegation(const DelegationMode mode, const DelegationCue cue)
