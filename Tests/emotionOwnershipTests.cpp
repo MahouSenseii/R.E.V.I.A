@@ -219,8 +219,8 @@ void TestRuntimeStatusGroundingTracksServerSubject()
         const std::string question = item.question;
         Check(session.Submit(question).succeeded, "Runtime subject turn failed: " + question);
         const auto request = backend.Request();
-        Check(tests::WithoutRuntimeBlock(request.at("messages").back().value("content", "")) == question,
-            "Runtime subject handling changed the user's words: " + question);
+        const std::string sent = request.at("messages").back().value("content", "");
+        Check(tests::UserWordsOf(sent) == question, "Runtime subject handling changed the user's words: " + question);
         const bool hasRuntimeStatus = backend.Prompt().find(
             std::string(identity::markers::RuntimeStatusGroundTruth)) != std::string::npos;
         Check(hasRuntimeStatus == item.expectsRuntimeStatus,
@@ -286,7 +286,7 @@ void TestPerTurnStateLeavesTheSystemMessageStable()
         "Per-turn state was still written into the system message.");
     const std::string latest = secondMessages.back().value("content", "");
     Check(tests::RuntimeBlockOf(latest) == "Current state: excited." &&
-        tests::WithoutRuntimeBlock(latest) == "How are you?",
+        tests::UserWordsOf(latest) == "How are you?",
         "The newest user message did not carry this turn's state ahead of the user's words.");
     Check(secondMessages[1].value("content", "") == "Hello there.",
         "An earlier user message kept a runtime block from a previous turn.");
@@ -303,8 +303,8 @@ void TestPerTurnStateLeavesTheSystemMessageStable()
     const std::string newest = compacted.at("messages").back().value("content", "");
     Check(newest.rfind(std::string(identity::markers::RuntimeTurnContext), 0) == 0 &&
         newest.find(std::string(identity::markers::RuntimeTurnContextEnd)) != std::string::npos &&
-        tests::WithoutRuntimeBlock(newest).starts_with("LONG ") &&
-        tests::WithoutRuntimeBlock(newest).ends_with(" END"),
+        tests::UserWordsOf(newest).starts_with("LONG ") &&
+        tests::UserWordsOf(newest).ends_with(" END"),
         "Compacting the newest message cut the boundary between runtime text and the user's.");
     history.resize(3);
     settings.contextSize = 8192;
@@ -356,7 +356,7 @@ void TestContextCompactionKeepsCurrentState()
         Check(messages[index].value("role", "") != "system",
             "The request contains a late system message rejected by Qwen's template.");
     Check(messages.back().value("role", "") == "user" &&
-        tests::WithoutRuntimeBlock(latest).starts_with("LATEST ") &&
+        tests::UserWordsOf(latest).starts_with("LATEST ") &&
         latest.ends_with("END OF CURRENT TURN"),
         "Context compaction lost the latest user's message boundaries.");
     // Deliberately changed rather than merely satisfied.
@@ -386,7 +386,7 @@ void TestContextCompactionKeepsCurrentState()
     Check(service.GenerateResponse(history).bSuccess, "Brief social generation failed.");
     const auto brief = backend.Request();
     Check(brief.at("max_tokens") == 128 && brief.at("messages").size() <= 5 &&
-        tests::WithoutRuntimeBlock(brief.at("messages").back().value("content", "")) ==
+        tests::UserWordsOf(brief.at("messages").back().value("content", "")) ==
             "You need therapy.",
         "A brief reaction kept the monologue budget or lost the latest user turn.");
     Check(brief.dump().size() < 4000,
@@ -396,7 +396,7 @@ void TestContextCompactionKeepsCurrentState()
     Check(service.GenerateResponse(history).bSuccess, "Wellbeing greeting generation failed.");
     const auto greeting = backend.Request();
     Check(greeting.at("max_tokens") == 128 && greeting.at("messages").size() <= 5 &&
-        tests::WithoutRuntimeBlock(greeting.at("messages").back().value("content", "")) ==
+        tests::UserWordsOf(greeting.at("messages").back().value("content", "")) ==
             "How are you today?",
         "A wellbeing greeting retained the long-turn context and response budget.");
     Check(!agents::ConversationStylePolicy::IsBriefSocialTurn("You need therapy. Explain your reasoning in detail.") &&
