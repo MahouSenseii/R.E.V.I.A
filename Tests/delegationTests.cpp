@@ -564,6 +564,16 @@ void TestTheCueComesFromThePersonsOwnWords()
               ReadDelegationCue("Answer this directly please") == DelegationCue::AnswerDirectly &&
               ReadDelegationCue("don’t delegate it") == DelegationCue::AnswerDirectly,
         "Asking for a direct answer did not win over the words it contains.");
+    // The live sentence, exactly: quoted words aside, the request comes first and decides.
+    Check(ReadDelegationCue("use your agents to check D:\RT\tasks\delegationcue\delegation.cpp and tell me whether \"don't use "
+                            "your agents\" counts as asking you to delegate or as asking you to answer directly") == DelegationCue::UseAgents &&
+              ReadDelegationCue("answer this directly: should you use your agents for it?") == DelegationCue::AnswerDirectly &&
+              ReadDelegationCue("use your agents to check delegation.cpp and tell me whether \"don't use your agents\" counts as "
+                            "asking you to delegate") == DelegationCue::UseAgents &&
+              ReadDelegationCue("my boss said \"use your agents for this\" but just answer directly") == DelegationCue::AnswerDirectly &&
+              ReadDelegationCue("is “don’t delegate” stronger than “answer directly”? use your agents to compare them") ==
+                  DelegationCue::UseAgents,
+        "Quoted words decided the cue instead of the person's own words.");
     Check(ReadDelegationCue("What do you think of that character?") == DelegationCue::None &&
               ReadDelegationCue("What's in the background of this picture?") == DelegationCue::None &&
               ReadDelegationCue("Who directed this movie?") == DelegationCue::None,
@@ -1534,7 +1544,7 @@ void TestWorkersYieldToTheConversation()
 void TestSpentBudgetIsReportedAsNotEstablished()
 {
     SessionFixture fixture("delegation-budget");
-    fixture.backend.SetReviewerTokens(30000);
+    fixture.backend.SetReviewerTokens(70000);
     fixture.backend.SetReport("My agents ran out of budget before anything could be verified.");
     fixture.backend.SetChat(
         [](const Json& wire)
@@ -1716,6 +1726,51 @@ void TestUnreachableAgentsAreNamedInThePrompt()
     Check(!fixture.session.DelegatedTask() && fixture.session.AgentWorkflowSnapshot().id.empty(), "A refused handoff started a task.");
 }
 
+// Live, "use your agents..." once got "I'm going to delegate..." with no delegate_task call.
+// Her next turn now says no task started, until one does; a real hand-off clears it.
+void TestAMissedHandoffIsNotTreatedAsStarted()
+{
+    SessionFixture fixture("missed-handoff");
+    const std::string note = "Your last request to use your agents did not start a task";
+    const auto lastChat = [&] { return fixture.backend.Requests(DelegationBackend::Kind::Chat).back().dump(); };
+    fixture.backend.SetChat([](const Json&) { return std::vector<Json>{Text("I'm going to delegate this to my agents.")}; });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    Check(!fixture.session.DelegatedTask() && lastChat().find(note) == std::string::npos,
+        "A task started without a call, or the request turn itself was told it had failed.");
+    Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) != std::string::npos,
+        "The turn after a missed hand-off was not told that no task started.");
+    Check(fixture.Say("ok, anything else new?").succeeded && lastChat().find(note) != std::string::npos,
+        "The missed hand-off was forgotten while still true.");
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded && fixture.session.DelegatedTask(),
+        "The real hand-off did not start a task.");
+    Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) == std::string::npos,
+        "After a real hand-off she was still told no task had started.");
+}
+
+// "you told me yesterday you hate rain, right?" was agreed to every time live, with no such
+// line or memory anywhere. Every chat turn now says where her record of the past is; a
+// delegated report, which is not a reply to a claim, does not carry it.
+void TestPastClaimsAreCheckedAgainstTheRecord()
+{
+    SessionFixture fixture("past-claims");
+    const std::string note = "What was said or done before is only what this chat shows and what your memories record.";
+    Check(fixture.Say("you told me yesterday you hate rain, right?").succeeded, "The premise turn failed.");
+    Check(fixture.Say("what's a good name for a grumpy cat?").succeeded, "The ordinary turn failed.");
+    const auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
+    Check(chat.size() >= 2 && std::all_of(chat.end() - 2, chat.end(), [&](const Json& wire) { return wire.dump().find(note) != std::string::npos; }),
+        "A chat turn was not told that her record of the past is this chat and her memories.");
+    Check(std::none_of(chat.begin(), chat.end(), [](const Json& wire)
+              { return wire.dump().find("Earlier in this chat you were talking with someone else") != std::string::npos; }),
+        "One person's chat was told another person had spoken.");
+}
+
 // Dropping the report's original TaskContract admission would disclose a report after
 // recognition consent is withdrawn, even though its audience revision did not change.
 // The upstream private voice context is simulated; workflow, report generation, archive,
@@ -1895,6 +1950,8 @@ void RunDelegationTests()
     TestStudioRetryReopensTheTask();
     TestOrdinaryConversationIsUnchanged();
     TestUnreachableAgentsAreNamedInThePrompt();
+    TestPastClaimsAreCheckedAgainstTheRecord();
+    TestAMissedHandoffIsNotTreatedAsStarted();
     TestHeldReportRetainsOriginalConsentAdmission();
     TestCancelDuringReportPublication();
     std::cout << "Chat delegation checks passed.\n";

@@ -30,6 +30,12 @@ agents::WorkflowBudget DelegationBudget()
 {
     agents::WorkflowBudget budget;
     budget.maximumActiveMilliseconds = 300000;
+    // Each worker step resends the files it has read. Live, an investigation and a
+    // verification that each read a 7.7 KB and a 1.9 KB file spent about 24,500 reported
+    // tokens before the verification could write its deliverable, so the default 20,000
+    // refused it ("Provider execution did not complete"). The run accepted live used about
+    // 23,000 on smaller files. Acceptance and the time limit are unchanged.
+    budget.maximumReportedTokens = 60000;
     return budget;
 }
 

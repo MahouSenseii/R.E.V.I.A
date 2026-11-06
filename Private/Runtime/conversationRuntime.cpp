@@ -361,9 +361,18 @@ SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const s
     return Generate(input, promptContext, publicProfile, llmAvailable, shouldSpeak, false, false, {}, {}, stopToken, policy);
 }
 
+void ConversationRuntime::SetEarlierSpeakerWithheld(const bool withheld, const bool beforeTheirName)
+{
+    earlierSpeakerWithheld.store(withheld);
+    withheldBeforeTheirName.store(withheld && beforeTheirName);
+}
+
 void ConversationRuntime::ResetParticipantContinuity()
 {
     context.Clear();
+    earlierSpeakerWithheld.store(false);
+    withheldBeforeTheirName.store(false);
+    lastHandoffNotStarted.store(false);
     previousDeliveredTier.reset();
     previousTurnWasUnreliable = false;
 }
@@ -2002,6 +2011,9 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                                                   : "No new task was started for this request.";
             event.detail = submittedTaskId;
             events.Publish(std::move(event));
+            // Kept for her next turn: told nothing, she described progress on a task that never
+            // started, and sometimes findings nobody had made.
+            lastHandoffNotStarted.store(submittedTaskId.empty());
         }
         return finished;
     };
@@ -2141,6 +2153,31 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!delegationBlocked.empty())
             replyNote += agentsUnavailableNote(delegationBlocked);
+        // Her only record of the past is this chat and her memories. Without saying so, a live
+        // "you told me yesterday you hate rain, right?" was agreed to 3 of 3 times with no such
+        // line or memory anywhere. Replaying captured turns, false premises were agreed to 7 of
+        // 9 times without this note and 1 of 9 with it (including held-out ones), an invented
+        // "earlier today" conversation went from 1 of 3 to 0 of 3, and true premises were
+        // still agreed to 6 of 6. A factual image request carries no conversation state and must
+        // end with the person's question, so these conversation notes stay out of it.
+        if (!factualImageInspection)
+            replyNote += "\n\nWhat was said or done before is only what this chat shows and what your memories record. If the person "
+                         "says you said, did or promised something earlier, check it there first: agree only when it is there; when it "
+                         "is not, say you have no record of it, in your own voice, without inventing or confirming details.";
+        // After "use your agents" started no task, the next turn was asked how it was going: told
+        // nothing, 6 of 6 replays described agents still at work and 3 of 6 invented findings;
+        // with this statement, 6 of 6 said nothing had started and none invented a finding.
+        if (!factualImageInspection && lastHandoffNotStarted.load() && !delegationRequested)
+            replyNote += "\n\nYour last request to use your agents did not start a task: nothing was handed off and no agent is "
+                         "working on it. If it comes up, say so plainly.";
+        // Asked "who were you talking to before me?", she had no earlier lines and guessed.
+        if (!factualImageInspection && withheldBeforeTheirName.load() && !turnPolicy.publicAudience)
+            replyNote += "\n\nThis person gave their name partway through this chat. What was said before that is not shown to you "
+                         "here, because it may have been someone else; if they refer to it, say plainly that you can't see what was "
+                         "said before they gave their name and ask them to fill you in, instead of guessing or inventing it.";
+        else if (!factualImageInspection && earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
+            replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
+                         "shown to you here; if asked about it, say so plainly instead of guessing or inventing it.";
         plainReplyNote = replyNote;
         arithmeticGrounded = !arithmetic.empty();
         if (toolLoop)

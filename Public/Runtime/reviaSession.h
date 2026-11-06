@@ -830,6 +830,8 @@ class ReviaSession
     mutable std::mutex memoryCorrectionMutex;
     std::vector<PendingMemoryCorrection> memoryCorrections;
     std::string privateContextParticipant;
+    // The latest speaker change came from the speaker naming themselves (see NamesThemselves).
+    bool speakerNamedThemselves = false;
     std::string privateContextAudience;
     // The newest typed or merged exchange as each store holds it, kept so a regenerate
     // or edit retracts exactly that exchange and nothing older. Cleared at the start of

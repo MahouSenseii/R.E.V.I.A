@@ -341,7 +341,10 @@ namespace
     }
 }
 
-std::string ReadStatedName(const std::string& userInput)
+namespace
+{
+// includeArrival: also "this is X", which announces someone arriving rather than naming oneself.
+std::string ReadStatedNameFrom(const std::string& userInput, const bool includeArrival)
 {
     struct Opener
     {
@@ -356,6 +359,8 @@ std::string ReadStatedName(const std::string& userInput)
     const std::string lowered = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
     for (const Opener& opener : openers)
     {
+        if (!includeArrival && opener.text == "this is ")
+            continue;
         std::string stated;
         // A rejected match must not hide a later introduction using the same phrase.
         // Keep opener priority and the first valid match unless explicitly corrected.
@@ -405,6 +410,17 @@ std::string ReadStatedName(const std::string& userInput)
         if (!stated.empty()) return stated;
     }
     return {};
+}
+}
+
+std::string ReadStatedName(const std::string& userInput)
+{
+    return ReadStatedNameFrom(userInput, true);
+}
+
+bool NamesThemselves(const std::string& userInput)
+{
+    return !ReadStatedNameFrom(userInput, false).empty();
 }
 
 std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::string& currentName)

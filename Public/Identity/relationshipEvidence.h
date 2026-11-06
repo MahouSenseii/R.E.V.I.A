@@ -37,6 +37,11 @@ struct ConversationSignals
 // Returns a name only from an explicit self-introduction; otherwise empty.
 [[nodiscard]] std::string ReadStatedName(const std::string& userInput);
 
+// True when the speaker names themselves ("my name is", "call me", "I'm called", "name's"), not
+// when someone announces an arrival ("this is Sam"): only the first is surely the same person
+// who was typing before.
+[[nodiscard]] bool NamesThemselves(const std::string& userInput);
+
 // "I meant Mari, not Jo" while the speaker is called Jo: the corrected name, else empty.
 // Only the name currently in use can be rejected, and only in the speaker's own words.
 [[nodiscard]] std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::string& currentName);

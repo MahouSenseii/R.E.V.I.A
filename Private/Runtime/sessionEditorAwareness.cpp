@@ -231,12 +231,30 @@ bool ReviaSession::PreparePrivateContext(const memory::MemoryScope& scope, const
         return false;
     if (privateContextParticipant != scope.participantId || privateContextAudience != scope.audience.audienceId)
     {
+        // Words alone cannot tell the unnamed speaker naming themselves ("btw call me Mari")
+        // from someone else sitting down and introducing themselves, so the unnamed lines stay
+        // withheld either way (the owner's choice, keeping the privacy rule). What changes is
+        // that she is told: live, "btw call me Mari" left her with that one line and no word that
+        // anything came before it, and "hi, this is Sam!" after Noor's lines left her guessing.
+        bool selfNamed = false;
+        {
+            std::lock_guard lock(speakerMutex);
+            selfNamed = speakerNamedThemselves;
+        }
+        const bool namedThemselves = selfNamed && privateContextParticipant == identity::LocalUserEntityId() &&
+                                     privateContextAudience == scope.audience.audienceId && scope.participantId.starts_with("local:");
+        const auto before = context.GetRecentMessages();
+        // Only when someone's words are actually being withheld; a greeting of her own is not.
+        const bool othersWithheld = std::any_of(before.begin(), before.end(),
+            [&](const auto& message) { return message.role == "user" && message.participantId.value_or("") != scope.participantId; });
+        const bool withheld = othersWithheld && !privateContextParticipant.empty() && privateContextAudience == scope.audience.audienceId;
         conversationRuntime.ResetParticipantContinuity();
         privateContextParticipant = scope.participantId;
         privateContextAudience = scope.audience.audienceId;
         // Transient local:user continuity is valid; durable restoration retains its
         // stricter attributed-private check inside RestoreConversationContext.
         RestoreConversationContext(scope, admission);
+        conversationRuntime.SetEarlierSpeakerWithheld(withheld, namedThemselves);
     }
     return admitted();
 }

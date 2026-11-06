@@ -682,7 +682,16 @@ namespace
         "Use subject speaker for a durable fact about the speaker's own life in their own words: their identity, preferences, "
         "goals, projects and plans, constraints, relationships, and their own pets or belongings. Third-party facts (what someone "
         "else likes, does, plans or said), quoted claims and ambiguous ownership use other; never turn them into the speaker's "
-        "preference. Examples: "
+        "preference. "
+        // Given only the message, "wait I misspoke, she's four, not three" was skipped as a
+        // duplicate of the stored "three", or filed as a cousin's age. With the previous turn
+        // and this rule: saved as the dog's age 4 of 4, and three held-out corrections
+        // (an appointment, a city, a job) saved as corrected 12 of 12; nothing from the
+        // previous turn alone, and a brother's corrected age never filed as the user's.
+        "previous_turn, when present, is the exchange just before this message. Use it only to understand what this message "
+        "refers to, such as who 'she' or 'it' is; never remember a fact that appears only in previous_turn. When this message "
+        "corrects or updates something the user said or something stored, remember the corrected fact in full as it now stands, "
+        "with the corrected value: that is a new fact, not a duplicate. Examples: "
         "'How are you?' => false. 'I prefer concise answers' => true, preference, 'The user prefers concise "
         "answers.' 'I am building Revia in C++ as a long-term project' => true, project. 'When I ask for "
         "feedback, don't sugarcoat it' => true, preference, 'The user wants feedback given plainly, without "
@@ -2908,7 +2917,8 @@ responseOutput llamaCppService::AnalyzeImage(const std::filesystem::path& imageP
 }
 
 memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope,
+    const previousExchange& previous) const
 {
     const auto evaluationStarted = std::chrono::steady_clock::now();
     memoryDecision decision;
@@ -3187,9 +3197,12 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
     bool completed = true;
     if (askAboutUser)
     {
-        completed = ask(UserMemoryPrompt,
-            json{{"user_message", userMessage}, {"captured_speaker_known", revia::memory::IsAttributedPrivateScope(scope)}}, false,
-            verdict);
+        json envelope{{"user_message", userMessage}, {"captured_speaker_known", revia::memory::IsAttributedPrivateScope(scope)}};
+        // Bounded and sanitised like the message itself; context only, never a source.
+        if (!previous.user.empty())
+            envelope["previous_turn"] = {{"user", revia::utf8::Prefix(revia::utf8::Sanitize(previous.user), 600)},
+                {"revia", revia::utf8::Prefix(revia::utf8::Sanitize(previous.reply), 600)}};
+        completed = ask(UserMemoryPrompt, envelope, false, verdict);
     }
     if (completed && askAboutRevia && !verdict.bShouldRemember)
     {

@@ -1,4 +1,5 @@
 #include "testSupport.h"
+#include "reviaSessionTestAccess.h"
 #include "Runtime/reviaSession.h"
 
 #include <algorithm>
@@ -44,7 +45,7 @@ void Write(const std::filesystem::path& path, const json& document)
     Check(!output.fail(), "Could not write a speaker fixture.");
 }
 
-void Configure(const std::filesystem::path& root)
+void Configure(const std::filesystem::path& root, const bool archive = false)
 {
     Write(root / "Config/settings.json", {
         {"activeProfile", "fixture"},
@@ -65,7 +66,7 @@ void Configure(const std::filesystem::path& root)
             {"speakStreamReplies", false}}},
         {"vision", {{"enabled", false}}}, {"perception", {{"enabled", false}}},
         {"initiative", {{"enabled", false}}}, {"bargeIn", {{"enabled", false}}},
-        {"conversation", {{"archiveEnabled", false}}}, {"image", {{"enabled", false}}}
+        {"conversation", {{"archiveEnabled", archive}}}, {"image", {{"enabled", false}}}
     });
     Write(root / "Config/Profiles/fixture.json", {
         {"id", "fixture"}, {"displayName", "Fixture"}, {"systemPrompt", "Speaker fixture."},
@@ -298,6 +299,75 @@ void TestReturningPersonIsRecognisedByName()
     Check(speakerAfter("hey, it's Mari") == mari, "A returning known person was not recognised.");
     restarted.Stop();
 }
+
+// Who said each line, kept through naming, a different person and a restart. Live, "btw call
+// me Mari" left the model with only that one line, and Marco taking over left it no word
+// that anyone had spoken before him, so asked who that was it guessed.
+void TestWhoSaidEachLineSurvivesNamingAndHandover()
+{
+    ScopedTestDirectory directory;
+    Configure(directory.root, true);
+    WorkingDirectory cwd(directory.root);
+    const auto mari = RelationshipRegistry::NamedLocalEntityId("Mari");
+    const auto jo = RelationshipRegistry::NamedLocalEntityId("Jo");
+    const auto lines = [](ReviaSession& session)
+    {
+        std::vector<std::pair<std::string, std::string>> found;
+        for (const auto& message : ReviaSessionTestAccess::WorkingContext(session))
+            if (message.role == "user")
+                found.emplace_back(message.content, message.participantId.value_or(""));
+        return found;
+    };
+    const auto has = [](const auto& found, const std::string& text, const std::string& who)
+    { return std::any_of(found.begin(), found.end(), [&](const auto& line) { return line.first == text && line.second == who; }); };
+    const auto mentions = [](const auto& found, const std::string& text)
+    { return std::any_of(found.begin(), found.end(), [&](const auto& line) { return line.first == text; }); };
+    {
+        ReviaSession session;
+        Check(session.Start(), "The who-said-what fixture did not start.");
+        Check(session.Submit("the vet appointment is on Friday").succeeded, "The anonymous turn failed.");
+        Check(session.Submit("btw call me Mari").succeeded && session.CurrentRelationship().entityId == mari, "Mari was not named.");
+        // Words cannot tell the same person naming themselves from someone new introducing
+        // themselves, so the unnamed line stays withheld, and she is told it came before the name.
+        auto found = lines(session);
+        Check(!mentions(found, "the vet appointment is on Friday") && has(found, "btw call me Mari", mari),
+            "A named speaker saw the unnamed speaker's line, or her own line was not attributed to her.");
+        Check(ReviaSessionTestAccess::EarlierSpeakerWithheld(session) && ReviaSessionTestAccess::WithheldBeforeTheirName(session),
+            "She was not told that what came before the name is withheld.");
+        Check(session.Submit("my favorite color is teal").succeeded, "Mari's turn failed.");
+        Check(session.Submit("hey, this is Jo now").succeeded && session.CurrentRelationship().entityId == jo, "Jo did not take over.");
+        found = lines(session);
+        Check(!mentions(found, "my favorite color is teal") && !mentions(found, "the vet appointment is on Friday") &&
+                  has(found, "hey, this is Jo now", jo) && ReviaSessionTestAccess::EarlierSpeakerWithheld(session) &&
+                  !ReviaSessionTestAccess::WithheldBeforeTheirName(session),
+            "A different person saw the previous person's lines, or was not told they were withheld.");
+        Check(session.Submit("sorry, I meant Mari, not Jo").succeeded && session.CurrentRelationship().entityId == mari,
+            "The correction did not return to Mari.");
+        Check(!mentions(lines(session), "hey, this is Jo now"), "Jo's line was shown to Mari.");
+        session.Stop();
+    }
+    ReviaSession restarted;
+    Check(restarted.Start(), "The who-said-what fixture did not restart.");
+    Check(restarted.Submit("hey, it's Mari").succeeded && restarted.CurrentRelationship().entityId == mari, "Mari was not recognised.");
+    const auto found = lines(restarted);
+    Check(has(found, "my favorite color is teal", mari) && !mentions(found, "the vet appointment is on Friday") &&
+              !mentions(found, "hey, this is Jo now"),
+        "After a restart Mari's own lines were not restored, or anonymous or another person's lines were attributed to her.");
+    restarted.Stop();
+
+    // Live: Noor's unnamed lines, then "hi, this is Sam!". Someone arriving is not someone naming
+    // themselves; kept, those lines reached Sam ("you said you're planning a garden").
+    ReviaSession arrival;
+    Check(arrival.Start(), "The arrival fixture did not start.");
+    Check(arrival.Submit("the plumber comes at noon").succeeded, "The anonymous turn failed.");
+    Check(arrival.Submit("hi, this is Sam!").succeeded &&
+              arrival.CurrentRelationship().entityId == RelationshipRegistry::NamedLocalEntityId("Sam"),
+        "Sam's arrival was not recognised.");
+    Check(!mentions(lines(arrival), "the plumber comes at noon") && ReviaSessionTestAccess::EarlierSpeakerWithheld(arrival) &&
+              !ReviaSessionTestAccess::WithheldBeforeTheirName(arrival),
+        "An arriving person saw the unnamed speaker's lines, or was not told they were withheld.");
+    arrival.Stop();
+}
 }
 
 void RunSpeakerContinuityTests()
@@ -305,5 +375,6 @@ void RunSpeakerContinuityTests()
     TestSessionPeopleAndAdapterIsolation();
     TestNameCorrectionReturnsToTheStatedPerson();
     TestReturningPersonIsRecognisedByName();
+    TestWhoSaidEachLineSurvivesNamingAndHandover();
     std::cout << "Local speaker continuity and public adapter isolation owner tests passed.\n";
 }

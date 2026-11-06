@@ -443,6 +443,16 @@ void MemoryAgent::Submit(const messageRouter& router, std::string input, std::st
     task.provenance = provenance;
     task.scope = scope;
     task.turnId = turnId;
+    if (!scope.participantId.empty())
+    {
+        const std::string key = scope.companionId + '\n' + scope.audience.audienceId + '\n' + scope.participantId;
+        std::lock_guard lock(mutex);
+        if (const auto found = lastExchangeByParticipant.find(key); found != lastExchangeByParticipant.end())
+            task.previous = found->second;
+        lastExchangeByParticipant[key] = {task.input, task.assistantResponse};
+        if (lastExchangeByParticipant.size() > 64)
+            lastExchangeByParticipant.erase(lastExchangeByParticipant.begin());
+    }
     (void)Enqueue(MemoryTaskClass::InteractiveTurn, std::move(task));
     Report("[MemoryAgent] queued | type=turn | depth=" +
         std::to_string(Depths().interactive));
@@ -1134,7 +1144,7 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             }
             event.decision = evaluator
                                  ? evaluator(task.input, task.assistantResponse)
-                                 : task.router->EvaluateMemory(task.input, task.assistantResponse, task.provenance, stopToken, task.scope);
+                                 : task.router->EvaluateMemory(task.input, task.assistantResponse, task.provenance, stopToken, task.scope, task.previous);
         }
         if (stopToken.stop_requested() || !Admitted(task.admission))
         {

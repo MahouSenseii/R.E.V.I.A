@@ -569,7 +569,8 @@ responseOutput messageRouter::AnalyzeImage(const std::filesystem::path& imagePat
 }
 
 memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope,
+    const previousExchange& previous) const
 {
     // Main first, like every other judgement that outlives the turn. The CPU-resident
     // 0.8B model took ~10 s of nearly every core per exchange, and what it decided was
@@ -581,7 +582,7 @@ memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, con
     if (llm.IsBackendAvailable())
     {
         residency.BeginInference(revia::intelligence::IntelligenceTier::Main, "background");
-        memoryDecision decision = llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
+        memoryDecision decision = llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope, previous);
         residency.EndInference(revia::intelligence::IntelligenceTier::Main);
         return decision;
     }
@@ -589,11 +590,11 @@ memoryDecision messageRouter::EvaluateMemory(const std::string& userMessage, con
     {
         residency.BeginInference(
             revia::intelligence::IntelligenceTier::Fast, "background");
-        memoryDecision decision = fastLlm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
+        memoryDecision decision = fastLlm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope, previous);
         residency.EndInference(revia::intelligence::IntelligenceTier::Fast);
         return decision;
     }
-    return llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
+    return llm.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope, previous);
 }
 
 bool messageRouter::IsLLMAvailable() const
