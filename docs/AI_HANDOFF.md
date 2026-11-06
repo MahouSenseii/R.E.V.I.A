@@ -1,6 +1,6 @@
 # Revia: start here
 
-Status checked 5 November 2026. This handoff describes a pinned product-source
+Status checked 6 November 2026. This handoff describes a pinned product-source
 snapshot. Recheck GitHub before treating it as the latest head.
 
 The Atlas redesign was merged in
@@ -19,9 +19,10 @@ applies to their own date.
 
 ## Verified Revia source
 
-[PR #43](https://github.com/MahouSenseii/R.E.V.I.A/pull/43) is merged at
-[e70677b23bc867da414da34afc6c40bbb91eaeb6](https://github.com/MahouSenseii/R.E.V.I.A/commit/e70677b23bc867da414da34afc6c40bbb91eaeb6).
-[CI 42150040299](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42150040299)
+[PR #45](https://github.com/MahouSenseii/R.E.V.I.A/pull/45) is merged at
+[375ea55fcb4d64bcd6a9c90c851f29cf50ae2c53](https://github.com/MahouSenseii/R.E.V.I.A/commit/375ea55fcb4d64bcd6a9c90c851f29cf50ae2c53),
+after [PR #44](https://github.com/MahouSenseii/R.E.V.I.A/pull/44).
+[CI 42216017963](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42216017963)
 passed six jobs: 155 tests passed, 0 failed, 2 optional video skips.
 That result is hosted application-source evidence, not a new local test run.
 
@@ -59,11 +60,28 @@ judgement. Before PR43 such a run discarded what its workers had found, and the
 report either said nothing or invented a bug. PR43 keeps that deliverable
 (never accepted or reviewed) and relays it as the worker's own unconfirmed claims.
 It keeps one only when it meets the node's deliverable contract, not merely a
-valid hash. PR42's push run timed out in the Windows WebDemo entry-point test at
+valid hash.
+
+PR44 came from the same kind of live trials, each fix measured by replaying the
+captured request with held-out cases (small samples). Unnamed lines stay
+withheld when someone gives a name (words cannot tell the same person from a
+new one; owner's choice), and she is told why. The memory selector sees the
+same person's previous exchange as context only, so "she's four, not three" is
+saved for the speaker (4/4, was 0/4). A note that her past is only this chat
+and her memories cut false-premise agreement from 7/9 to 1/9 (true premises
+6/6). "Use your agents" is read from the person's own words, a hand-off that
+started nothing is carried to the next turn, and the delegated token ceiling
+fits reading real files; acceptance is unchanged and nothing retries. Live, 1
+of 9 delegated runs was accepted (0 of 6 before). After a restart, an
+uncorrected old row can still be recalled beside its correction, because a
+revision waits for owner review. PR45 treats an explicit handover ("Noor left.
+My name is Sam") as another person even when it says "my name is"; the
+detection is phrase-based, and a miss only changes what she is told.
+
+PR42's push run timed out in the Windows WebDemo entry-point test at
 10 s while the PR run of the same commit passed (passes take 2.5-7.5 s); the
-limit is now 60 s, and whether that run was slow or stuck is unknown. A skipped
-correction ("four, not three"), one misfiled correction, and unrelated memories
-passing the 0.35 similarity floor still mislead recall. Restart and exit pause
+limit is now 60 s, and whether that run was slow or stuck is unknown. Unrelated
+memories passing the 0.35 similarity floor still mislead recall. Restart and exit pause
 40–70 s after "Shutdown complete" (pre-existing, not investigated).
 Physical desktop, real voice/media and release qualification remain separately
 scoped. Historical setup/timing failures and long-path save

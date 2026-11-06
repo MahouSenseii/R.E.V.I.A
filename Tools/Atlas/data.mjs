@@ -1,13 +1,13 @@
 export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
-export const pin='e70677b23bc867da414da34afc6c40bbb91eaeb6';
+export const pin='375ea55fcb4d64bcd6a9c90c851f29cf50ae2c53';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
-  as_of:'2026-11-05',
+  as_of:'2026-11-06',
   source_commit:pin,
-  source_pr:43,
+  source_pr:45,
   state:'Paused at a safe stopping point',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
-  ci:{run:42150040299,jobs_passed:6,passed:155,failed:0,optional_skips:2},
+  ci:{run:42216017963,jobs_passed:6,passed:155,failed:0,optional_skips:2},
   installed_app:'Not updated or freshly audited by this work',
   research:{
     public_source_commit:researchPin,
@@ -43,6 +43,14 @@ export const current={
 };
 
 export const changes=[
+  {pr:45,title:'Treat an explicit handover as another person.',
+    summary:'“Noor left. My name is Sam” and “I’m a different person. Call me Sam.” are now a privacy boundary with the right explanation, even though they say “my name is” or “call me”.',
+    detail:'After PR44 those turns already withheld the unnamed speaker’s lines, but because they also name the speaker, she was told the lines came before the person gave a name, as if it might be the same person. The speaker’s own words (quotes excluded) are now read for a departure (“Noor left”, “she’s gone now”, “had to go”) or a different speaker (“a different person”, “someone else”, “not the same person”, “my turn”), and such a turn is told someone else spoke before. Full-session regressions start with an unnamed speaker’s private lines and check the real chat requests: the lines never reach the newcomer, the note gives the right reason, and the session records it. “ok she’s gone now…” failed on the first run and shaped the fix; two phrasings written afterwards passed unchanged. The detection is phrase-based and will miss some wordings; a miss only changes the note, because the lines are withheld either way.',
+    next:'Watch for missed handover phrasings in live trials.'},
+  {pr:44,title:'Track who said what, land corrections, keep hand-offs honest.',
+    summary:'Withheld lines are now explained instead of guessed at, “she’s four, not three” is saved for the right person, false claims about the past are mostly declined, and “use your agents” is read from the person’s own words.',
+    detail:'Each fix came from a real prompt captured in a live run with the SHA-pinned Qwen3.5-4B through ReviaSession at 32K context, and was measured by replaying that request, including held-out cases written after the fix; samples are small. Identity: words cannot tell someone naming themselves from a new person introducing themselves, so unnamed lines stay withheld (the owner’s choice, keeping the existing privacy rule), and she is told why: asked about what came before, 12/12 replays gave that reason with the note, 0/12 without. A first version that kept those lines leaked Noor’s garden to Sam in a held-out live run and broke a privacy test in CI; both were fixed before merge. Corrections: the memory selector now sees the same person’s previous exchange as context only, so the dog’s corrected age is saved under the speaker 4/4 (0/4 before) and three held-out corrections 12/12. Premises: a note that her past is only this chat and her memories cut false-premise agreement from 7/9 to 1/9, with true premises still 6/6. Delegation: quoted words and “answer directly” inside a question no longer cancel “use your agents”; a hand-off that started nothing is carried to the next turn (invented progress 6/6 → 0/6); the token ceiling now fits reading real files. Acceptance checks are unchanged and nothing retries automatically. Live delegated tasks: 1 of 9 runs produced an accepted report (0 of 6 before).',
+    next:'Decide how a correction should reach the revision path after a restart; repeat delegated runs on more tasks.'},
   {pr:43,title:'Report what unverified workers found, labelled unconfirmed.',
     summary:'A delegated task that ends unverified now tells you what the workers read and found, instead of “nothing established” or an invented bug.',
     detail:'A worker that calls its own work unverified ends the run, and its deliverable used to be discarded. Revia’s report then got only a stage list: replaying the live report turn, 6 of 8 replies said “nothing established” and 2 invented bugs nobody had found. The workflow now keeps that deliverable beside the attempt, never as an accepted or reviewed result, and only when it meets the node’s deliverable contract; a review found the first version checked only the hash, and a valid hash over missing or broken sections is now dropped (regression failed before, passes after). The report relays it as the worker’s own unconfirmed claims, with the host receipts as the only facts: 8 of 8 replays relayed what the workers found, and none invented a finding. Verification, review and acceptance are unchanged.',
@@ -91,20 +99,20 @@ export const changes=[
 
 export const issues=[
   {id:'report',area:'Revia',title:'Delegated reports are not yet reliable.',
-    summary:'One live run produced a fully accepted report; unverified runs now report what the workers found, marked unconfirmed.',
-    status:'Open · first accepted live report',
-    detail:'Six live runs after PR41. Five handed off; one did not, though her reply said it would (the host receipt still said no task started). The workers read the files, and chat answered in 1.4–3.9 s while they worked. One run passed investigation, verification, independent review and acceptance, and she reported the accepted review 55 s after the hand-off. The others ended unverified: the verification worker declines a finding about code outside the approved folder, and the 4B often calls its own reading unverified. Since PR43 those reports relay what the workers found, marked unconfirmed, instead of saying nothing or inventing a bug.',
+    summary:'Hand-offs now start when asked and files are read, but most runs still end unverified by the model’s own judgement.',
+    status:'Open · staged per task',
+    detail:'Six live runs after PR41. Five handed off; one did not, though her reply said it would (the host receipt still said no task started). The workers read the files, and chat answered in 1.4–3.9 s while they worked. One run passed investigation, verification, independent review and acceptance, and she reported the accepted review 55 s after the hand-off. The others ended unverified: the verification worker declines a finding about code outside the approved folder, and the 4B often calls its own reading unverified. Since PR43 those reports relay what the workers found, marked unconfirmed, instead of saying nothing or inventing a bug. PR44 staged each task separately on three real Revia files. Before (6 runs): handed off 3/6, a file read in 2/3 of those, verification verified 0/2 (one refused by the 20K token ceiling), accepted 0, shown in chat 3/3. After (9 runs): handed off 7/9 (both misses were the cue bug, in sets before its final fix), read 7/7, verified 2/4, accepted 1 (correct answer), shown 7/7. Rare model misses remain, where she says she is delegating without calling the tool (about 2 in 15 runs); the next turn now says no task started.',
     next:'Measure completion over more tasks; decide on one bounded retry for an unverified worker, or requalify with a larger model.'},
   {id:'history',area:'Revia',title:'Model-generated invented history remains open.',
-    summary:'A scoped real-model check now covers two common cases. General grounding is still not established.',
-    status:'Open · narrowed by a scoped real-model check',
-    detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. Live multi-turn trials at the shipped 32K context gave mostly truthful “what have you been up to” replies. The model still accepted a false premise (“you said Biscuit was a cat”) in 3 of 3 runs, and slipped perspective (“I’m Mari”, “my sister”). This is not proof of general truthfulness or of improvement in the installed app.',
-    next:'Check false-premise acceptance with a real-model check, without adding phrase repairs; then requalify the installed app.'},
+    summary:'False claims about the past are now mostly declined in replays. General grounding is still not established.',
+    status:'Open · narrowed by replay checks',
+    detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. Live multi-turn trials at the shipped 32K context gave mostly truthful “what have you been up to” replies. The model still accepted a false premise (“you said Biscuit was a cat”) in 3 of 3 runs, and slipped perspective (“I’m Mari”, “my sister”). PR44 tells her that her past is only this chat and her memories: replaying captured turns, false premises were agreed 1/9 (7/9 before, including held-out ones), an invented “earlier today” went 1/3 → 0/3, and true premises stayed 6/6. Live held-out claims (“you said you love jazz”, “you promised to name my car”) were agreed before and declined after. She still volunteers invented activity unprompted, and perspective slips remain. This is not proof of general truthfulness or of improvement in the installed app.',
+    next:'Widen the premise checks to more conversations; then requalify the installed app.'},
   {id:'memory',area:'Revia',title:'Corrections and relevance still mislead recall.',
-    summary:'A corrected fact was not saved, one correction was filed under the wrong person, and unrelated memories reach some turns.',
-    status:'Open · reproduced live',
-    detail:'“She’s four, not three” was skipped because a memory already existed (ISSUE-REVIA-0080), so restart recall said three. One run saved the dog’s corrected age as “The user’s cousin Jo is four years old”. A 0.35 similarity floor with the nomic embeddings lets unrelated memories in; one run answered “Lisbon … your cousin Jo”. Restart and exit also pause for 40–70 s after “Shutdown complete”; that delay predates PR41 and has not been investigated.',
-    next:'Route explicit corrections through the revision path, and measure a relevance floor on the retrieval benchmark.'},
+    summary:'Corrections are now saved for the right person, but after a restart the old and new versions can both be recalled.',
+    status:'Open · saving fixed, restart recall open',
+    detail:'“She’s four, not three” was skipped because a memory already existed (ISSUE-REVIA-0080), so restart recall said three. One run saved the dog’s corrected age as “The user’s cousin Jo is four years old”. The memory selector saw only the current message, so “she” had no referent. PR44 gives it the same person’s previous exchange as context only: the dog’s age is saved under the speaker 4/4 (0/4 before), three held-out corrections 12/12, and nothing is saved from the previous turn alone. Still open: the old row stays active until the owner reviews a revision, and a revision is proposed only for narrow first-person phrasings, so after a restart “owns a blue Civic” and “owns a green Civic” were recalled as two cars (the dog case recalled “four” 3/3). Asking the selector to name the replaced value helped 2/12 and hurt a control, so it was not adopted. A 0.35 similarity floor with the nomic embeddings lets unrelated memories in; one run answered “Lisbon … your cousin Jo”. Restart and exit also pause for 40–70 s after “Shutdown complete”; that delay predates PR41 and has not been investigated.',
+    next:'Decide, as a design choice, how an in-chat correction should retire the old row; measure a relevance floor on the retrieval benchmark.'},
   {id:'comparison',area:'RNL',title:'The direct comparison stopped before RNL ran.',
     summary:'32 Qwen 0.8B replies were saved. Supervision cleanup failed; RNL and exact lookup did not run.',
     status:'Incomplete · no grade or ranking',
