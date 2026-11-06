@@ -235,16 +235,26 @@ bool ReviaSession::PreparePrivateContext(const memory::MemoryScope& scope, const
         // new one: what they said before giving a name stays in view, still attributed to
         // the anonymous speaker. Reset here, it vanished, and "btw call me Mari" left her
         // with only that one line of the conversation.
-        const bool namedThemselves = privateContextParticipant == identity::LocalUserEntityId() &&
+        bool selfNamed = false;
+        {
+            std::lock_guard lock(speakerMutex);
+            selfNamed = speakerNamedThemselves;
+        }
+        // Only when they named themselves: live, "hi, this is Sam!" after Noor's unnamed lines
+        // kept those lines, and asked who she had been talking to, she told Sam about Noor's garden.
+        const bool namedThemselves = selfNamed && privateContextParticipant == identity::LocalUserEntityId() &&
                                      privateContextAudience == scope.audience.audienceId && scope.participantId.starts_with("local:");
         // A different named person: their predecessor's private lines are withheld, and she
         // is told so instead of being left to guess who said what.
-        const bool anotherPerson = !namedThemselves && !privateContextParticipant.empty() &&
-                                   privateContextParticipant != identity::LocalUserEntityId() &&
+        const auto before = context.GetRecentMessages();
+        // Only when someone's words are actually being withheld; a greeting of her own is not.
+        const bool othersWithheld = std::any_of(before.begin(), before.end(),
+            [&](const auto& message) { return message.role == "user" && message.participantId.value_or("") != scope.participantId; });
+        const bool anotherPerson = !namedThemselves && othersWithheld && !privateContextParticipant.empty() &&
                                    privateContextAudience == scope.audience.audienceId;
         std::vector<conversationMessage> carried;
         if (namedThemselves)
-            carried = context.GetRecentMessages();
+            carried = before;
         conversationRuntime.ResetParticipantContinuity();
         privateContextParticipant = scope.participantId;
         privateContextAudience = scope.audience.audienceId;

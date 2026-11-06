@@ -6858,6 +6858,9 @@ std::string ReviaSession::ResolveLocalSpeaker(const std::string& input, agents::
 {
     const std::string previous = captured.participantId;
     std::string stated = identity::ReadStatedName(input);
+    // Only naming oneself is surely the person who was typing before; "this is Sam" or "it's
+    // Mari" may be someone else arriving, so the anonymous lines before it stay withheld.
+    const bool selfNamed = !stated.empty() && identity::NamesThemselves(input);
     // Without a correction the session stays on a person the speaker has just disowned,
     // and every later fact is filed under them.
     if (const auto current = stated.empty() ? relationships.Find(previous) : std::nullopt; current)
@@ -6897,6 +6900,7 @@ std::string ReviaSession::ResolveLocalSpeaker(const std::string& input, agents::
             captured.audience.kind != lastInputAudience || captured.participantId != lastInputParticipant)
             return {};
         currentSpeakerId = resolved;
+        speakerNamedThemselves = selfNamed;
         if (resolved != previous)
         {
             ++configuredAudience.revision;

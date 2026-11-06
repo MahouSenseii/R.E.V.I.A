@@ -299,6 +299,19 @@ void TestNamesAreReadOnlyFromRealIntroductions()
         "\"call me\" matched inside another word.");
 }
 
+// Naming oneself versus someone arriving: only the first keeps what an unnamed speaker said.
+void TestNamingOneselfIsNotAnArrival()
+{
+    using revia::identity::NamesThemselves;
+    using revia::tests::Check;
+    Check(NamesThemselves("btw call me Mari") && NamesThemselves("my name is Noor") && NamesThemselves("name's Theo btw") &&
+              NamesThemselves("you can call me Lee"),
+        "Naming oneself was not recognised.");
+    Check(!NamesThemselves("hi, this is Sam!") && !NamesThemselves("hey, it's Mari") && !NamesThemselves("Sam here") &&
+              !NamesThemselves("call me later"),
+        "An arrival or an ordinary remark was read as someone naming themselves.");
+}
+
 void TestSpeakerNameCorrectionsRejectTheNameInUse()
 {
     using namespace revia::identity;
@@ -456,6 +469,7 @@ void RunLoadAndNameTests()
     TestUnmeasurableLoadChangesNothing();
     TestBatchClipFramingRefusesAnythingAmbiguous();
     TestNamesAreReadOnlyFromRealIntroductions();
+    TestNamingOneselfIsNotAnArrival();
     TestSpeakerNameCorrectionsRejectTheNameInUse();
     TestReturningSpeakersAreOnlyKnownPeople();
     TestLearningANameKeepsEverythingEarned();

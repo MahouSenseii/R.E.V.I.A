@@ -350,6 +350,18 @@ void TestWhoSaidEachLineSurvivesNamingAndHandover()
               !mentions(found, "hey, this is Jo now"),
         "After a restart Mari's own lines were not restored, or anonymous or another person's lines were attributed to her.");
     restarted.Stop();
+
+    // Live: Noor's unnamed lines, then "hi, this is Sam!". Someone arriving is not someone naming
+    // themselves; kept, those lines reached Sam ("you said you're planning a garden").
+    ReviaSession arrival;
+    Check(arrival.Start(), "The arrival fixture did not start.");
+    Check(arrival.Submit("the plumber comes at noon").succeeded, "The anonymous turn failed.");
+    Check(arrival.Submit("hi, this is Sam!").succeeded &&
+              arrival.CurrentRelationship().entityId == RelationshipRegistry::NamedLocalEntityId("Sam"),
+        "Sam's arrival was not recognised.");
+    Check(!mentions(lines(arrival), "the plumber comes at noon") && ReviaSessionTestAccess::EarlierSpeakerWithheld(arrival),
+        "An arriving person saw the unnamed speaker's lines, or was not told they were withheld.");
+    arrival.Stop();
 }
 }
 
