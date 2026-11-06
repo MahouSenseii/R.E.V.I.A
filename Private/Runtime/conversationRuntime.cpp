@@ -361,15 +361,17 @@ SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const s
     return Generate(input, promptContext, publicProfile, llmAvailable, shouldSpeak, false, false, {}, {}, stopToken, policy);
 }
 
-void ConversationRuntime::SetEarlierSpeakerWithheld(const bool withheld)
+void ConversationRuntime::SetEarlierSpeakerWithheld(const bool withheld, const bool beforeTheirName)
 {
     earlierSpeakerWithheld.store(withheld);
+    withheldBeforeTheirName.store(withheld && beforeTheirName);
 }
 
 void ConversationRuntime::ResetParticipantContinuity()
 {
     context.Clear();
     earlierSpeakerWithheld.store(false);
+    withheldBeforeTheirName.store(false);
     lastHandoffNotStarted.store(false);
     previousDeliveredTier.reset();
     previousTurnWasUnreliable = false;
@@ -2169,7 +2171,11 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             replyNote += "\n\nYour last request to use your agents did not start a task: nothing was handed off and no agent is "
                          "working on it. If it comes up, say so plainly.";
         // Asked "who were you talking to before me?", she had no earlier lines and guessed.
-        if (!factualImageInspection && earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
+        if (!factualImageInspection && withheldBeforeTheirName.load() && !turnPolicy.publicAudience)
+            replyNote += "\n\nThis person gave their name partway through this chat. What was said before that is not shown to you "
+                         "here, because it may have been someone else; if they refer to it, say plainly that you can't see what was "
+                         "said before they gave their name and ask them to fill you in, instead of guessing or inventing it.";
+        else if (!factualImageInspection && earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
             replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
                          "shown to you here; if asked about it, say so plainly instead of guessing or inventing it.";
         plainReplyNote = replyNote;

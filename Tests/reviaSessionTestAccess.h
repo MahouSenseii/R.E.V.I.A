@@ -347,6 +347,7 @@ struct ReviaSessionTestAccess
         return session.RecallConversation(request, currentInput, scope);
     }
     static bool EarlierSpeakerWithheld(ReviaSession& session) { return session.conversationRuntime.EarlierSpeakerWithheld(); }
+    static bool WithheldBeforeTheirName(ReviaSession& session) { return session.conversationRuntime.WithheldBeforeTheirName(); }
     static std::vector<conversationMessage> WorkingContext(ReviaSession& session)
     {
         std::lock_guard lock(session.operationMutex);

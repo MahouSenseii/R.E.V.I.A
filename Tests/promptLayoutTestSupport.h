@@ -40,6 +40,7 @@ inline std::string UserWordsOf(const std::string& content)
     std::size_t cut = std::string::npos;
     for (const char* note : {"\n\nWhat was said or done before is only what this chat shows",
              "\n\nYour last request to use your agents did not start a task", "\n\nEarlier in this chat you were talking with someone else",
+             "\n\nThis person gave their name partway through this chat",
              "\n\nAgents unavailable this turn", "\nTools are offered with this request."})
         cut = std::min(cut, words.find(note));
     if (cut == std::string::npos)

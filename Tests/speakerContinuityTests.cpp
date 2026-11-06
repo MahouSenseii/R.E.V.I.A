@@ -327,15 +327,19 @@ void TestWhoSaidEachLineSurvivesNamingAndHandover()
         Check(session.Start(), "The who-said-what fixture did not start.");
         Check(session.Submit("the vet appointment is on Friday").succeeded, "The anonymous turn failed.");
         Check(session.Submit("btw call me Mari").succeeded && session.CurrentRelationship().entityId == mari, "Mari was not named.");
+        // Words cannot tell the same person naming themselves from someone new introducing
+        // themselves, so the unnamed line stays withheld, and she is told it came before the name.
         auto found = lines(session);
-        Check(has(found, "the vet appointment is on Friday", LocalUserEntityId()) && has(found, "btw call me Mari", mari),
-            "Naming themselves wiped what the same person said before, or re-attributed it.");
-        Check(!ReviaSessionTestAccess::EarlierSpeakerWithheld(session), "Naming themselves was treated as a different person.");
+        Check(!mentions(found, "the vet appointment is on Friday") && has(found, "btw call me Mari", mari),
+            "A named speaker saw the unnamed speaker's line, or her own line was not attributed to her.");
+        Check(ReviaSessionTestAccess::EarlierSpeakerWithheld(session) && ReviaSessionTestAccess::WithheldBeforeTheirName(session),
+            "She was not told that what came before the name is withheld.");
         Check(session.Submit("my favorite color is teal").succeeded, "Mari's turn failed.");
         Check(session.Submit("hey, this is Jo now").succeeded && session.CurrentRelationship().entityId == jo, "Jo did not take over.");
         found = lines(session);
         Check(!mentions(found, "my favorite color is teal") && !mentions(found, "the vet appointment is on Friday") &&
-                  has(found, "hey, this is Jo now", jo) && ReviaSessionTestAccess::EarlierSpeakerWithheld(session),
+                  has(found, "hey, this is Jo now", jo) && ReviaSessionTestAccess::EarlierSpeakerWithheld(session) &&
+                  !ReviaSessionTestAccess::WithheldBeforeTheirName(session),
             "A different person saw the previous person's lines, or was not told they were withheld.");
         Check(session.Submit("sorry, I meant Mari, not Jo").succeeded && session.CurrentRelationship().entityId == mari,
             "The correction did not return to Mari.");
@@ -359,7 +363,8 @@ void TestWhoSaidEachLineSurvivesNamingAndHandover()
     Check(arrival.Submit("hi, this is Sam!").succeeded &&
               arrival.CurrentRelationship().entityId == RelationshipRegistry::NamedLocalEntityId("Sam"),
         "Sam's arrival was not recognised.");
-    Check(!mentions(lines(arrival), "the plumber comes at noon") && ReviaSessionTestAccess::EarlierSpeakerWithheld(arrival),
+    Check(!mentions(lines(arrival), "the plumber comes at noon") && ReviaSessionTestAccess::EarlierSpeakerWithheld(arrival) &&
+              !ReviaSessionTestAccess::WithheldBeforeTheirName(arrival),
         "An arriving person saw the unnamed speaker's lines, or was not told they were withheld.");
     arrival.Stop();
 }
