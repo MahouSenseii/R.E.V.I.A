@@ -144,9 +144,10 @@ std::vector<MemoryCorrectionProposal> ProposeFactCorrections(const longTermMemor
         const auto original = rows.find(view.replaced.front().memoryId);
         if (current == rows.end() || original == rows.end()) continue;
         const auto& old = original->second;
-        // Only a value the owner has not already retired, in the same category, as review requires.
-        if ((!old.currentRevisionId.empty() && old.currentRevisionId != old.id) || old.category != current->second.category ||
-            old.subject != subject || current->second.subject != subject)
+        // Only a value the owner has not already retired. Category labels may differ between versions
+        // of one slot (live: "identity" for the original, "other" for its correction).
+        if ((!old.currentRevisionId.empty() && old.currentRevisionId != old.id) || old.subject != subject ||
+            current->second.subject != subject)
             continue;
         MemoryCorrectionProposal proposal;
         proposal.id = revia::audit::ContentDigest(nlohmann::json::array({"fact-slot", old.id, current->second.id,
@@ -162,6 +163,7 @@ std::vector<MemoryCorrectionProposal> ProposeFactCorrections(const longTermMemor
                                                            : view.current->evidence.substr(0, 2048);
         proposal.scope = scope;
         proposal.turnId = static_cast<std::uint64_t>(view.current->sequence);
+        proposal.sameFactSlot = true;
         result.push_back(std::move(proposal));
         if (result.size() == 32) break;
     }

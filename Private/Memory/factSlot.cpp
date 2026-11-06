@@ -112,6 +112,25 @@ bool FactValueInOwnWords(const std::string_view value, const std::string& userIn
     return Contains(OwnWords(userInput), wanted);
 }
 
+std::string CorrectedAwayValue(const std::string& userInput)
+{
+    const std::string text = OwnWords(userInput);
+    for (const std::string_view negation : {" not ", " isn't ", " wasn't ", " instead of "})
+    {
+        const auto at = text.find(negation);
+        if (at == std::string::npos) continue;
+        // The next word, up to punctuation: "not blue." -> "blue". One word keeps this conservative.
+        std::size_t start = at + negation.size();
+        while (start < text.size() && text[start] == ' ') ++start;
+        std::size_t end = start;
+        while (end < text.size() && Word(text[end])) ++end;
+        std::string value = text.substr(start, end - start);
+        if (value.size() >= 2 && value != "a" && value != "the" && value != "my" && value != "sure" && value != "really")
+            return value;
+    }
+    return {};
+}
+
 FactChange ClassifyFactChange(const std::string& userInput, const std::string_view newValue, const std::string_view priorValue)
 {
     const std::string text = OwnWords(userInput);

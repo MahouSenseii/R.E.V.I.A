@@ -26,6 +26,12 @@ std::string memoryManager::PriorFactValue(const revia::memory::MemorySubject& su
     return store.PriorFactValue(subject, attribute, object);
 }
 
+std::string memoryManager::LinkCorrectedAwayFact(const revia::memory::MemorySubject& subject, const std::string& attribute,
+    const std::string& object, const std::string& oldValue) const
+{
+    return store.LinkCorrectedAwayFact(subject, attribute, object, oldValue);
+}
+
 std::vector<revia::memory::MemoryCorrectionProposal> memoryManager::ProposeFactCorrections(const revia::memory::MemoryScope& scope) const
 {
     return revia::memory::ProposeFactCorrections(store, scope);

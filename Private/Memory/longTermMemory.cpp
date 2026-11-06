@@ -1493,6 +1493,45 @@ std::string longTermMemory::PriorFactValue(const revia::memory::MemorySubject& s
     return {};
 }
 
+std::string longTermMemory::LinkCorrectedAwayFact(const revia::memory::MemorySubject& subject, const std::string& attribute,
+    const std::string& object, const std::string& oldValue) const
+{
+    const std::lock_guard operationLock(databaseMutex);
+    sqlite3* const database = Acquire();
+    if (!database || subject.kind != revia::memory::MemorySubjectKind::Participant || oldValue.size() < 2 ||
+        !PriorFactValue(subject, attribute, object).empty())
+        return {};
+    auto query = Prepare(database,
+        "SELECT m.id, m.summary FROM memories m WHERE m.active = 1 AND m.subject_kind = ?1 AND m.subject_id = ?2 "
+        "AND m.id NOT IN (SELECT memory_id FROM memory_fact_slots) ORDER BY m.rowid DESC LIMIT 500;");
+    if (!query) return {};
+    sqlite3_bind_int(query.get(), 1, static_cast<int>(subject.kind));
+    BindText(query.get(), 2, subject.entityId);
+    const auto lower = [](std::string text) { for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return " " + text + " "; };
+    const auto mentions = [](const std::string& text, const std::string& word)
+    {
+        for (std::size_t at = text.find(word); at != std::string::npos; at = text.find(word, at + 1))
+            if (!std::isalnum(static_cast<unsigned char>(text[at - 1])) && !std::isalnum(static_cast<unsigned char>(text[at + word.size()])))
+                return true;
+        return false;
+    };
+    const std::string value = lower(oldValue).substr(1, oldValue.size());
+    std::vector<std::string> candidates;
+    while (sqlite3_step(query.get()) == SQLITE_ROW)
+    {
+        const std::string summary = lower(ColumnText(query.get(), 1));
+        if (mentions(summary, value) && (object.empty() || mentions(summary, object)))
+            candidates.push_back(ColumnText(query.get(), 0));
+    }
+    if (candidates.size() != 1) return {};
+    memoryDecision linked;
+    linked.subject = subject;
+    linked.fact = revia::memory::FactSlot{attribute, object, value};
+    linked.factChange = revia::memory::FactChange::Statement;
+    linked.factEvidence = "Linked as the earlier value named by a later correction.";
+    return InsertFactSlot(database, candidates.front(), linked) ? value : std::string();
+}
+
 bool longTermMemory::DeleteOldFactVersions(const std::string& currentMemoryId, const revia::memory::MemorySubject& expectedSubject,
     std::size_t& outDeleted, std::string& outError) const
 {

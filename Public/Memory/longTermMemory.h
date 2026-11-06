@@ -65,6 +65,12 @@ public:
     // The slot's current value, or its newest disagreeing value when unresolved; empty when the slot is new.
     [[nodiscard]] std::string PriorFactValue(const revia::memory::MemorySubject& subject, const std::string& attribute,
         const std::string& object) const;
+    // When a clear correction names the old value but the slot has no earlier version (the original
+    // statement got no slot), links exactly one earlier memory of the same person that mentions that
+    // value (and the object, when named) as the slot's earlier version. Zero or several candidates
+    // link nothing. Returns the linked value, or empty.
+    std::string LinkCorrectedAwayFact(const revia::memory::MemorySubject& subject, const std::string& attribute,
+        const std::string& object, const std::string& oldValue) const;
     // Owner-requested only. Deletes every other version of the slot that `currentMemoryId` is the
     // current value of (a newer planned change is kept), with their revision receipts, vectors and
     // marks. Refused when that row is not the slot's established current value, e.g. while unresolved.

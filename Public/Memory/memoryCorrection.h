@@ -23,6 +23,9 @@ struct MemoryCorrectionProposal
     std::string evidence;
     MemoryScope scope;
     std::uint64_t turnId = 0;
+    // Both rows are versions of the same fact slot (same person, attribute and object), so the model's
+    // category labels for them may differ ("identity" for the original, "other" for the correction).
+    bool sameFactSlot = false;
 };
 
 // At most three current same-subject/category candidates from the existing

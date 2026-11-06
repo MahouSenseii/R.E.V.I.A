@@ -162,6 +162,50 @@ void TestPromptLookupAndReviewFirstThroughRestart()
         "After approval the fact is reviewed and no longer pending.");
 }
 
+// Live, the original "my car is a blue Civic" got no slot; only the correction did. The correction
+// names the old value, which links the one earlier memory carrying it as the previous version.
+void TestACorrectionLinksAnUnslottedOriginal()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    longTermMemory store((fixture.root / "memory.db").string());
+    const auto me = ParticipantSubject(Scope());
+    const auto plain = [&](const std::string& summary)
+    {
+        memoryDecision d; d.bSuccess = d.bShouldRemember = true; d.summary = summary; d.category = "identity"; d.subject = me;
+        bool added; std::string id; Check(store.Save(d, added, &id), "Plain save failed."); return id;
+    };
+    const auto blue = plain("The user's car is a blue Civic.");
+    plain("The user's bike is blue.");  // also blue, but not the Civic: must not be linked
+    const std::string input = "sorry, it's green, not blue. been staring at it for years lol";
+    Check(CorrectedAwayValue(input) == "blue", "The corrected-away value was not read from the person's words.");
+    Check(store.LinkCorrectedAwayFact(me, "car colour", "civic", "blue") == "blue", "The one matching earlier memory was not linked.");
+    memoryDecision green; green.bSuccess = green.bShouldRemember = true; green.summary = "The user's car is green."; green.category = "other";
+    green.subject = me; green.fact = FactSlot{"car colour", "civic", "green"};
+    green.factChange = ClassifyFactChange(input, "green", store.PriorFactValue(me, "car colour", "civic"));
+    green.factEvidence = input;
+    bool added; std::string greenId; Check(store.Save(green, added, &greenId), "Correction save failed.");
+    const auto view = *Find(store.FactViews(me), "car colour", "civic");
+    Check(view.state == FactState::UnreviewedCorrection && view.current->value == "green" && view.replaced.front().memoryId == blue,
+        "The linked original was not treated as the corrected-away value.");
+    const auto scope = Scope();
+    const auto block = store.BuildPromptBlock("", 6, {}, "", 0, &scope);
+    Check(block.find("] The user's car is a blue Civic.") == std::string::npos && block.find("The user's bike is blue.") != std::string::npos,
+        "The old car row still appears as an equal fact, or the unrelated bike was hidden: " + block);
+    const auto proposals = ProposeFactCorrections(store, scope);
+    Check(proposals.size() == 1 && proposals[0].original.id == blue && proposals[0].sameFactSlot &&
+              proposals[0].original.category != proposals[0].corrected.category,
+        "A correction across category labels of one slot was not offered for review.");
+    // Ambiguous: two earlier rows carry the old value and no object narrows them, so nothing links.
+    revia::tests::ScopedTestDirectory second;
+    longTermMemory other((second.root / "memory.db").string());
+    const auto plainOther = [&](const std::string& summary)
+    { memoryDecision d; d.bSuccess = d.bShouldRemember = true; d.summary = summary; d.category = "identity"; d.subject = me;
+      bool a; std::string id; Check(other.Save(d, a, &id), "Plain save failed."); };
+    plainOther("The user works as a nurse three days a week.");
+    plainOther("The user volunteers as a nurse at weekends.");
+    Check(other.LinkCorrectedAwayFact(me, "job", "", "nurse").empty(), "An ambiguous earlier value must not be linked.");
+}
+
 void TestOwnerDeletesOldVersions()
 {
     revia::tests::ScopedTestDirectory fixture;
@@ -194,6 +238,7 @@ void RunFactVersioningTests()
     TestWhoTheFactIsAboutAndSeparateThings();
     TestFutureChangeVersusCorrection();
     TestPromptLookupAndReviewFirstThroughRestart();
+    TestACorrectionLinksAnUnslottedOriginal();
     TestOwnerDeletesOldVersions();
     std::cout << "Fact versioning checks passed: own words, who, separate things, plans, review-first, restart and owner delete.\n";
 }

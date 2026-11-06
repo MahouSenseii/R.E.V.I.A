@@ -1198,7 +1198,14 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                 }
                 else
                 {
-                    const auto prior = memory.PriorFactValue(event.decision.subject, event.decision.fact->attribute, event.decision.fact->object);
+                    auto prior = memory.PriorFactValue(event.decision.subject, event.decision.fact->attribute, event.decision.fact->object);
+                    // Live, "my car is a blue Civic" got no slot and only the correction did, so the
+                    // old row stayed as an equal fact. A correction that names the old value links
+                    // exactly one earlier memory carrying it as the slot's previous version.
+                    if (prior.empty())
+                        if (const auto old = memory::CorrectedAwayValue(task.input); !old.empty())
+                            prior = memory.LinkCorrectedAwayFact(event.decision.subject, event.decision.fact->attribute,
+                                event.decision.fact->object, old);
                     event.decision.factChange = memory::ClassifyFactChange(task.input, event.decision.fact->value, prior);
                     event.decision.factEvidence = task.input.substr(0, 2048);
                 }

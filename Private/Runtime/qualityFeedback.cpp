@@ -53,7 +53,8 @@ bool BoundedCorrection(const memory::MemoryCorrectionProposal& proposal)
         proposal.corrected.bShouldRemember && !proposal.corrected.bPreempted &&
         !proposal.corrected.summary.empty() && proposal.corrected.summary.size() <= 4096 &&
         proposal.corrected.summary != proposal.original.summary && !proposal.corrected.category.empty() &&
-        proposal.corrected.category.size() <= 128 && proposal.corrected.category == proposal.original.category &&
+        proposal.corrected.category.size() <= 128 &&
+        (proposal.corrected.category == proposal.original.category || proposal.sameFactSlot) &&
         !proposal.evidence.empty() && proposal.evidence.size() <= 2048;
 }
 

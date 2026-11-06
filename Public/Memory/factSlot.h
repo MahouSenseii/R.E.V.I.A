@@ -44,6 +44,11 @@ enum class FactChange
 // model invented, or one taken from somebody else's quoted words, is dropped.
 [[nodiscard]] bool FactValueInOwnWords(std::string_view value, const std::string& userInput);
 
+// The value the person explicitly corrected away from in their own words ("green, not blue" ->
+// "blue"; "four, not three" -> "three"), or empty. Used to link an earlier, unslotted memory as the
+// slot's previous version when the original statement never got a slot.
+[[nodiscard]] std::string CorrectedAwayValue(const std::string& userInput);
+
 // Host-side reading of the person's own words. `priorValue` is the slot's current or latest value
 // before this message, empty when the slot is new.
 [[nodiscard]] FactChange ClassifyFactChange(const std::string& userInput, std::string_view newValue, std::string_view priorValue);
