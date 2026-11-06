@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "milestone": "Revia source through PR45; RNL paused; direct comparison incomplete",
+  "milestone": "Revia source through PR45; RNL closed out after STATE-017; direct comparison complete",
   "recorded_utc": "2026-11-05",
   "refresh_mode": "Manual, source-pinned snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
@@ -21,14 +21,14 @@
     "research": {
       "public_source_commit": "aac6f161fd080db400317670e4b3a78973dbb105",
       "public_source_through": "STATE-010",
-      "local_studies": "STATE-011–016",
-      "proposed_study": "STATE-017",
-      "comparison_complete": false,
-      "graded": false,
+      "local_studies": "STATE-011–017",
+      "proposed_study": "None",
+      "comparison_complete": true,
+      "graded": true,
       "saved_responses": 32,
       "integration": "None",
       "candidate": "None",
-      "state": "Paused; no continuation or upload active"
+      "state": "Closed out after STATE-017 and a hybrid pre-check; no training or upload active"
     },
     "pages": {
       "state": "published",
@@ -167,6 +167,26 @@
   ],
   "research_findings": [
     {
+      "id": "hybrid-check",
+      "tag": "Stopping estimate",
+      "tone": "neutral",
+      "name": "A learned name matcher had little room over a good store.",
+      "summary": "With a fairly tuned fuzzy store, a perfect name matcher would add only about 2.5 points on harder misspellings, and no memory or speed saving was available.",
+      "detail": "Pre-check before any training: a learned name-matching part in front of an explicit replace-on-write store. On 400 new development histories with three-letter typos, truncations, dropped vowels, sound-alikes and swapped halves (tuned on half, scored on the other half), the strong fuzzy store scored 97.5% with unlimited memory and 76.0% / 91.2% / 97.5% at 128 / 256 / 512 floats. A perfect matcher using the same stored names would score 100% / 78.7% / 93.6% / 100%, so the most any matcher could add was +2.3 to +2.8 points (paired 95% intervals within +1.6 to +3.6). A first baseline skipped character similarity under a budget although it already stored the names, which wrongly suggested 17–21 points of room; the corrected baseline is the one reported. Most remaining errors are typos equally close to another real name, or an artificial swapped-halves pattern a simple rule would fix. Stored names cost about 2 floats each, so a learned key cannot save memory here.",
+      "limit": "Local estimate · development data only · no training · not proof that every hybrid is useless",
+      "next": "Stopped for this design. Other stores, noise types or tasks could leave more room."
+    },
+    {
+      "id": "state-017",
+      "tag": "Negative result",
+      "tone": "negative",
+      "name": "Two trained RNL designs fell short of a simple store.",
+      "summary": "On development data, RNL stayed 7–32 points below a compact keyed store at every memory size tested; a diagnosed layout fix closed only part of the gap.",
+      "detail": "STATE-017: a synthetic memory task with people’s facts, updates, corrections, misspellings, aliases and overload, every system reading the same text through one extractor. Budgets of 64 / 128 / 256 / 512 floats per conversation, three seeds each, CPU only. Run 1 (36 models) was 17–32 points below the matched store; ideal storage with its own learned addresses reached only 44–73%, so its layout, not its training, was the limit, and most errors were another person’s value. Run 2 (27 models, rules frozen in advance) gave each attribute its own name-addressed block: +7–11 points over run 1 and +10–14 over a random-address control, but still 7–24 points below the store on every seed, with every paired interval below zero. Twice the training added under 1 point. Remaining failures: aliases (about 50% against 84% for exact names), many facts, and older facts fading under later writes. The confirmatory sealed test was never opened.",
+      "limit": "Local study · development data only · detailed source, checkpoints and traces unpublished",
+      "next": "Closed under its stop rule. It does not show that RNL cannot work; other layouts, alias mechanisms, tasks and budgets are untested."
+    },
+    {
       "id": "state-016",
       "tag": "Positive synthetic result",
       "tone": "positive",
@@ -174,7 +194,7 @@
       "summary": "Fixed separate slots answered all 1,008 questions correctly, while the original and sham controls each answered 970.",
       "detail": "STATE-016: 1,008/1,008 versus 970/1,008; 38 rescues and no new errors. Three frozen seeds, four supplied keys, eight values. No training updates. This isolates a useful memory-address intervention on this task; it does not establish general routing, language understanding or equal-capacity training.",
       "limit": "Local study · detailed source and traces unpublished",
-      "next": "A larger scaling study, STATE-017, is proposed only."
+      "next": "STATE-017 then tested trained RNL against a simple store; see above."
     },
     {
       "id": "state-015",
@@ -258,11 +278,11 @@
     {
       "id": "comparison",
       "area": "RNL",
-      "title": "The direct comparison stopped before RNL ran.",
-      "summary": "32 Qwen 0.8B replies were saved. Supervision cleanup failed; RNL and exact lookup did not run.",
-      "status": "Incomplete · no grade or ranking",
-      "detail": "COMPARE-001 stopped at “Owned monitor did not join”. The native processes exited. The 34 preserved files are not the planned 46-file protocol seal. The 0.8B pilot cannot rank the usual 4B model.",
-      "next": "Review preservation and cleanup first. A separately reviewed continuation could reuse the saved replies and run only the remaining cells."
+      "title": "The direct comparison finished: RNL tied exact lookup.",
+      "summary": "RNL (each of three seeds) and exact lookup answered 32/32; Qwen3.5-0.8B answered 17/32, and every miss was an earlier, overwritten value.",
+      "status": "Complete · small fixed-format task",
+      "detail": "COMPARE-001 first stopped at “Owned monitor did not join”. Without a model, the cause was traced to a full disk census run for every chunk of server log on the monitor thread: one census took 2.6–2.8 s, so a 2 s join failed 3/3, and with a byte counter instead it joined 3/3 (the fix is a proposal; the frozen files are unchanged). A later continuation reused the 34 preserved LLM files after checking their hashes and ran the four missing cells; all 46 outputs were sealed before the answers were read. The tie only shows RNL loses nothing against a table on four supplied names; it cannot rank RNL above a good memory or rank Revia’s usual 4B model.",
+      "next": "None planned. The LLM’s failure mode, answering with a superseded value, matches the correction problem tracked for Revia."
     },
     {
       "id": "runtime",
