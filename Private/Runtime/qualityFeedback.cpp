@@ -1,6 +1,7 @@
 #include "Runtime/reviaSession.h"
 
 #include "Audit/contentDigest.h"
+#include "Memory/longTermMemory.h"
 #include "Memory/sensitiveContent.h"
 
 #include <algorithm>
@@ -52,7 +53,8 @@ bool BoundedCorrection(const memory::MemoryCorrectionProposal& proposal)
         proposal.corrected.bShouldRemember && !proposal.corrected.bPreempted &&
         !proposal.corrected.summary.empty() && proposal.corrected.summary.size() <= 4096 &&
         proposal.corrected.summary != proposal.original.summary && !proposal.corrected.category.empty() &&
-        proposal.corrected.category.size() <= 128 && proposal.corrected.category == proposal.original.category &&
+        proposal.corrected.category.size() <= 128 &&
+        (proposal.corrected.category == proposal.original.category || proposal.sameFactSlot) &&
         !proposal.evidence.empty() && proposal.evidence.size() <= 2048;
 }
 
@@ -462,8 +464,37 @@ void ReviaSession::QueueMemoryCorrectionProposals(
 
 std::vector<memory::MemoryCorrectionProposal> ReviaSession::PendingMemoryCorrections()
 {
+    // Fact-slot corrections are rebuilt from the store each time, so a restart cannot lose a pending
+    // review. The store is read outside the session locks; the queue then admits only proposals for
+    // the scope that is still current.
+    memory::MemoryScope scope;
+    {
+        const std::scoped_lock lock(speakerMutex, audienceMutex);
+        scope = CapturePrivateMemoryScopeLocked();
+    }
+    std::vector<memory::MemoryCorrectionProposal> stored;
+    if (memory::IsAttributedPrivateScope(scope))
+    {
+        const longTermMemory store(companionPaths.Resolve("Memory/revia_memory.db").string());
+        stored = memory::ProposeFactCorrections(store, scope);
+    }
     const std::scoped_lock lock(speakerMutex, audienceMutex, memoryCorrectionMutex);
-    PruneMemoryCorrectionsLocked(CapturePrivateMemoryScopeLocked(), Stamp());
+    const auto current = CapturePrivateMemoryScopeLocked();
+    PruneMemoryCorrectionsLocked(current, Stamp());
+    for (auto& proposal : stored)
+    {
+        if (!SameCorrectionScope(proposal.scope, current) || !BoundedCorrection(proposal)) continue;
+        const bool known = std::any_of(memoryCorrections.begin(), memoryCorrections.end(), [&](const auto& pending)
+        {
+            return pending.proposal.id == proposal.id || (pending.proposal.original.id == proposal.original.id &&
+                pending.proposal.proposedMemoryId == proposal.proposedMemoryId);
+        });
+        if (known || memoryCorrections.size() >= 32) continue;
+        proposal.original.source.clear();
+        proposal.original.createdAt.clear();
+        proposal.original.revisesMemoryId.clear();
+        memoryCorrections.push_back({std::move(proposal), Stamp()});
+    }
     std::vector<memory::MemoryCorrectionProposal> result;
     result.reserve(memoryCorrections.size());
     for (const auto& pending : memoryCorrections) result.push_back(pending.proposal);
@@ -528,6 +559,35 @@ bool ReviaSession::RejectMemoryCorrectionProposal(const std::string& proposalId,
         error = "This correction proposal is no longer available in the current private session.";
         return false;
     }
+    return true;
+}
+
+bool ReviaSession::DeleteOldFactVersionsOwnerRequested(const std::string& currentMemoryId, std::size_t& deleted, std::string& error,
+    const std::stop_token stopToken)
+{
+    deleted = 0;
+    if (OwnerMutationCanceled(stopToken, error)) return false;
+    const std::scoped_lock lock(operationMutex, learningStudioMutex);
+    if (OwnerMutationCanceled(stopToken, error)) return false;
+    memory::MemoryScope scope;
+    {
+        const std::scoped_lock scopeLock(speakerMutex, audienceMutex);
+        scope = CapturePrivateMemoryScopeLocked();
+    }
+    if (!memory::IsAttributedPrivateScope(scope))
+    {
+        error = "Old versions can be deleted only for the person in the current private conversation.";
+        return false;
+    }
+    const longTermMemory store(companionPaths.Resolve("Memory/revia_memory.db").string());
+    if (!store.DeleteOldFactVersions(currentMemoryId, memory::ParticipantSubject(scope), deleted, error)) return false;
+    {
+        // Reviews of this fact pointed from a now-deleted older version to the current one; they are
+        // gone with it. Reviews of other facts are untouched.
+        const std::lock_guard queueLock(memoryCorrectionMutex);
+        std::erase_if(memoryCorrections, [&](const auto& pending) { return pending.proposal.proposedMemoryId == currentMemoryId; });
+    }
+    PublishComponent("Memory", "Old versions deleted", "Older versions of a fact were deleted at the owner's request.");
     return true;
 }
 } // namespace revia::runtime

@@ -691,7 +691,14 @@ namespace
         "previous_turn, when present, is the exchange just before this message. Use it only to understand what this message "
         "refers to, such as who 'she' or 'it' is; never remember a fact that appears only in previous_turn. When this message "
         "corrects or updates something the user said or something stored, remember the corrected fact in full as it now stands, "
-        "with the corrected value: that is a new fact, not a duplicate. Examples: "
+        "with the corrected value: that is a new fact, not a duplicate. "
+        "When the fact gives the current value of one of these single-value attributes of the speaker or of one specific "
+        "thing of theirs, also return fact: {attribute, object, value}: attribute is one of home city, job, employer, school, "
+        "car colour, car model, phone model, pet name, pet age, age, birthday, partner name, favourite colour, favourite food, "
+        "favourite drink; object names which thing when there could be more than one (such as 'Civic' or 'dog'), else empty; "
+        "value is the new value exactly as the user wrote it. Omit fact for anything else, for other people's facts, and when "
+        "the value is not stated. Example: 'My Civic is green, not blue' => true, other, 'The user's Civic is green.', fact "
+        "{attribute: car colour, object: Civic, value: green}. Examples: "
         "'How are you?' => false. 'I prefer concise answers' => true, preference, 'The user prefers concise "
         "answers.' 'I am building Revia in C++ as a long-term project' => true, project. 'When I ask for "
         "feedback, don't sugarcoat it' => true, preference, 'The user wants feedback given plainly, without "
@@ -3182,6 +3189,19 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
                                             : revia::memory::MemorySubject{})
                               : memoryJson.value("subject", "other") == "speaker" ? revia::memory::ParticipantSubject(scope)
                                                                                   : revia::memory::MemorySubject{};
+            // Optional slot for the speaker's own single-value fact. Only the closed attribute list is
+            // kept; the host later checks the value against the user's own words and classifies the
+            // change itself, so nothing here decides what supersedes what.
+            if (!aboutRevia && verdict.subject.kind == revia::memory::MemorySubjectKind::Participant && memoryJson.contains("fact") &&
+                memoryJson["fact"].is_object())
+            {
+                const auto& fact = memoryJson["fact"];
+                const auto text = [&](const char* key) { return fact.contains(key) && fact[key].is_string() ? fact[key].get<std::string>() : std::string(); };
+                const auto attribute = revia::memory::CanonicalFactAttribute(text("attribute"));
+                const std::string value = SanitizeMemorySummary(text("value"));
+                if (attribute && !value.empty() && value.size() <= 60 && text("object").size() <= 60)
+                    verdict.fact = revia::memory::FactSlot{*attribute, revia::memory::NormalizeFactObject(text("object")), value};
+            }
             verdict.bShouldRemember = true;
             return true;
         }
@@ -3233,6 +3253,7 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
     decision.category = std::move(verdict.category);
     decision.summary = std::move(verdict.summary);
     decision.subject = std::move(verdict.subject);
+    decision.fact = std::move(verdict.fact);
     if (decision.bShouldRemember)
     {
         const embeddingOutput memoryEmbedding =
