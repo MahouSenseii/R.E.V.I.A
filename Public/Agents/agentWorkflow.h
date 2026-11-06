@@ -98,6 +98,15 @@ struct WorkflowArtifact
     std::string content;
 };
 
+// What one worker last handed in, whether or not it verified it. Read only to tell the person
+// what was found; an unverified one is never a prerequisite, a candidate or an accepted result.
+struct WorkerDeliverable
+{
+    std::string nodeId;
+    bool verified = false;
+    WorkflowArtifact artifact;
+};
+
 struct ArtifactReference
 {
     std::string nodeId;
@@ -203,6 +212,9 @@ class AgentWorkflow
     // The parent's evaluated, verified deliverable while it still awaits a decision; nothing
     // before parent evaluation has finished or once cancellation was requested.
     [[nodiscard]] std::optional<WorkflowArtifact> CandidateArtifact() const;
+    // Each worker's latest completed deliverable in node order, verified or not. A cancelled
+    // or malformed attempt contributes nothing, and nothing survives a reload.
+    [[nodiscard]] std::vector<WorkerDeliverable> WorkerDeliverables() const;
     // Accept only the deliverable that was actually examined: refused when the parent's
     // current verified artifact is not `expected` by id, version and hash.
     bool AcceptCandidate(const ArtifactReference& expected, std::string& error);

@@ -1022,6 +1022,84 @@ void TestUnverifiedWorkIsReportedAsNotEstablished()
     Check(fixture.Reports().size() == 1 && report.size() == 1 && report[0].dump().find("did NOT verify") != std::string::npos &&
               fixture.session.AgentWorkflowSnapshot().state != revia::agents::WorkflowState::Accepted,
         "Unverified work was presented as verified, or accepted.");
+    // What the workers handed in still reaches her, labelled as theirs and unconfirmed. Given
+    // only the stage list, a live report said nothing, or invented bugs nobody had found.
+    const std::string sent = report.empty() ? std::string{} : report[0].dump();
+    Check(sent.find("The port is set in fixture/service.conf (port=8125).") != std::string::npos &&
+              sent.find("NOT verified, even by its worker") != std::string::npos &&
+              sent.find("Relay it as that worker's own unconfirmed claims") != std::string::npos &&
+              sent.find("No finding from this run is established") != std::string::npos,
+        "The unverified report did not carry what the workers found, or did not label it as unconfirmed.");
+    const auto workers = fixture.session.AgentWorkflowSnapshot().nodes;
+    Check(std::none_of(workers.begin(), workers.end(),
+              [](const auto& node) { return node.role == revia::agents::WorkflowRole::Reviewer && !node.attempts.empty(); }),
+        "An unverified worker deliverable was passed on to the reviewer.");
+}
+
+// A worker's unverified deliverable can be read to tell the person what was found, and is
+// never admitted: not a node artifact, not a prerequisite, not a candidate.
+void TestUnverifiedDeliverablesAreReadableButNeverAdmitted()
+{
+    using namespace revia::agents;
+    if (AgentWorkflow::ArtifactHash("probe").empty())
+    {
+        std::cout << "Unverified deliverable checks skipped: this platform build has no artifact hash.\n";
+        return;
+    }
+    WorkflowSpec spec;
+    spec.id = "unverified-fixture";
+    const DeliverableRequirement steps{DeliverableSection::Steps, "List what was found.", false};
+    spec.nodes = {{"parent", "", WorkflowRole::Parent, 3, "Acceptance", "Accept", "objective", "e1", {"review"}, true, {{steps}, true}},
+        {"first", "parent", WorkflowRole::Worker, 1, "First", "Investigate", "objective", "e1", {}, true, {{steps}, false}},
+        {"second", "parent", WorkflowRole::Worker, 1, "Second", "Check", "objective", "e1", {}, true, {{steps}, false}},
+        {"review", "parent", WorkflowRole::Reviewer, 1, "Reviewer", "Review", "objective", "e1", {"first", "second"}, true,
+            {{steps}, true}}};
+    RuntimeStamp stamp;
+    stamp.companionId = "fixture";
+    stamp.sessionId = "session";
+    stamp.generation = 1;
+    stamp.taskId = spec.id;
+    enum class Kind { Unverified, Verified, Malformed };
+    // Each run: what the first and the second worker hand in.
+    for (const auto [firstKind, secondKind] : {std::pair{Kind::Unverified, Kind::Verified}, std::pair{Kind::Malformed, Kind::Unverified}})
+    {
+        std::atomic<bool> reviewerRan{false};
+        const auto provider = [&reviewerRan, firstKind, secondKind](const NodeRequest& request, std::stop_token)
+        {
+            if (request.node.role == WorkflowRole::Reviewer)
+                reviewerRan = true;
+            const Kind kind = request.node.id == "first" ? firstKind : secondKind;
+            NodeResult result;
+            const Json payload = {{"summary", request.node.id + " found it."}, {"evidence", "Fixture."},
+                {"steps", {{"items", {"Found it."}}, {"noneReason", ""}}}, {"prerequisiteEvidence", Json::array()}};
+            result.succeeded = true;
+            result.verified = kind == Kind::Verified;
+            result.artifact.content = payload.dump();
+            result.artifact.id = request.node.id + "-artifact";
+            result.artifact.version = request.attempt;
+            result.artifact.hash = kind == Kind::Malformed ? std::string(64, '0') : AgentWorkflow::ArtifactHash(result.artifact.content);
+            return result;
+        };
+        AgentWorkflow workflow;
+        std::string error;
+        Check(workflow.Start(spec, stamp, provider, error), error);
+        workflow.Join();
+        const auto deliverables = workflow.WorkerDeliverables();
+        if (firstKind == Kind::Unverified)
+            Check(deliverables.size() == 2 && deliverables[0].nodeId == "first" && !deliverables[0].verified &&
+                      deliverables[0].artifact.content.find("first found it.") != std::string::npos &&
+                      deliverables[1].nodeId == "second" && deliverables[1].verified,
+                "Worker deliverables were lost or mislabelled.");
+        else
+            Check(deliverables.size() == 1 && deliverables[0].nodeId == "second" && !deliverables[0].verified,
+                "A malformed deliverable was kept, or an unverified one was lost.");
+        const auto snapshot = workflow.Snapshot();
+        const auto unverified = std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(),
+            [&](const auto& node) { return node.id == (firstKind == Kind::Unverified ? "first" : "second"); });
+        Check(unverified != snapshot.nodes.end() && unverified->state == WorkflowState::Failed && !unverified->attempts.back().artifact &&
+                  !reviewerRan.load() && !workflow.CandidateArtifact() && snapshot.state != WorkflowState::Accepted,
+            "An unverified deliverable was admitted as an artifact, reached the reviewer, or became a candidate.");
+    }
 }
 
 // With approved folders the workers get tools, but only to read; and starting them from chat
@@ -1751,6 +1829,7 @@ void RunDelegationTests()
     TestCancelReachesOnlyTheNamedTask();
     TestStaleOutcomesAreNeverReported();
     TestUnverifiedWorkIsReportedAsNotEstablished();
+    TestUnverifiedDeliverablesAreReadableButNeverAdmitted();
     TestToolWorkersAreReadOnlyAndKeepTheReply();
     TestWorkersAreToldWhichListedFilesAreUnread();
     TestHandoffRetainsPrimaryUserPathsWithoutGrantingAuthority();
