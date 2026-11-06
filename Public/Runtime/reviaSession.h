@@ -330,6 +330,10 @@ class ReviaSession
     bool AcceptMemoryCorrectionProposal(const std::string& proposalId, memory::MemoryRevisionReceipt& outReceipt,
         std::string& outError, std::stop_token stopToken = {});
     bool RejectMemoryCorrectionProposal(const std::string& proposalId, std::string& outError, std::stop_token stopToken = {});
+    // Owner-requested only (never reachable from model output): deletes the older versions behind a
+    // fact's current value for the current private speaker. Refused while the fact is unresolved.
+    bool DeleteOldFactVersionsOwnerRequested(const std::string& currentMemoryId, std::size_t& outDeleted, std::string& outError,
+        std::stop_token stopToken = {});
     bool ProposePresentationChange(std::string& outId, std::string& outError, std::stop_token stopToken = {});
     bool ReviewPresentationChange(bool validate, std::string& outError, std::stop_token stopToken = {});
     [[nodiscard]] std::optional<improvement::DevelopmentSnapshot> DevelopmentStudio() const;

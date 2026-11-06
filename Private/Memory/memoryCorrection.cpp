@@ -7,6 +7,7 @@
 #include <cctype>
 #include <set>
 #include <string_view>
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 
 namespace revia::memory
@@ -125,5 +126,45 @@ std::vector<MemoryCorrectionProposal> ProposeMemoryCorrections(const longTermMem
         if (result.size() == 3) break;
     }
     return admitted() ? result : std::vector<MemoryCorrectionProposal>{};
+}
+
+std::vector<MemoryCorrectionProposal> ProposeFactCorrections(const longTermMemory& store, const MemoryScope& scope)
+{
+    if (!IsAttributedPrivateScope(scope) || scope.audience.revision == 0) return {};
+    const auto subject = ParticipantSubject(scope);
+    std::unordered_map<std::string, memoryEntry> rows;
+    for (auto& row : store.LoadScoped(scope, 500)) rows.emplace(row.id, std::move(row));
+    std::vector<MemoryCorrectionProposal> result;
+    for (const auto& view : store.FactViews(subject, 500))
+    {
+        if ((view.state != FactState::UnreviewedCorrection && view.state != FactState::UnreviewedChange) || !view.current ||
+            view.replaced.empty())
+            continue;
+        const auto current = rows.find(view.current->memoryId);
+        const auto original = rows.find(view.replaced.front().memoryId);
+        if (current == rows.end() || original == rows.end()) continue;
+        const auto& old = original->second;
+        // Only a value the owner has not already retired, in the same category, as review requires.
+        if ((!old.currentRevisionId.empty() && old.currentRevisionId != old.id) || old.category != current->second.category ||
+            old.subject != subject || current->second.subject != subject)
+            continue;
+        MemoryCorrectionProposal proposal;
+        proposal.id = revia::audit::ContentDigest(nlohmann::json::array({"fact-slot", old.id, current->second.id,
+            scope.companionId, scope.audience.audienceId, scope.audience.revision}).dump());
+        proposal.original = old;
+        proposal.expectedSummaryDigest = revia::audit::ContentDigest(old.summary);
+        proposal.proposedMemoryId = current->second.id;
+        proposal.corrected.bSuccess = proposal.corrected.bShouldRemember = true;
+        proposal.corrected.summary = current->second.summary;
+        proposal.corrected.category = current->second.category;
+        proposal.corrected.subject = current->second.subject;
+        proposal.evidence = view.current->evidence.empty() ? std::string("The user corrected this fact.")
+                                                           : view.current->evidence.substr(0, 2048);
+        proposal.scope = scope;
+        proposal.turnId = static_cast<std::uint64_t>(view.current->sequence);
+        result.push_back(std::move(proposal));
+        if (result.size() == 32) break;
+    }
+    return result;
 }
 } // namespace revia::memory

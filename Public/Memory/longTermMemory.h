@@ -60,6 +60,16 @@ public:
     std::string BuildPromptBlock(const std::string& query = "", std::size_t maxEntries = 6, const std::vector<float>& queryEmbedding = {},
         const std::string& embeddingModel = "", std::int64_t nowEpoch = 0, const revia::memory::MemoryScope* scope = nullptr,
         revia::memory::MemoryReranker* reranker = nullptr, std::stop_token stopToken = {}) const;
+    // Every fact slot of one subject, resolved (newest slot first, at most maxSlots). Read-only.
+    [[nodiscard]] std::vector<revia::memory::FactView> FactViews(const revia::memory::MemorySubject& subject, std::size_t maxSlots = 12) const;
+    // The slot's current value, or its newest disagreeing value when unresolved; empty when the slot is new.
+    [[nodiscard]] std::string PriorFactValue(const revia::memory::MemorySubject& subject, const std::string& attribute,
+        const std::string& object) const;
+    // Owner-requested only. Deletes every other version of the slot that `currentMemoryId` is the
+    // current value of (a newer planned change is kept), with their revision receipts, vectors and
+    // marks. Refused when that row is not the slot's established current value, e.g. while unresolved.
+    bool DeleteOldFactVersions(const std::string& currentMemoryId, const revia::memory::MemorySubject& expectedSubject,
+        std::size_t& outDeleted, std::string& outError) const;
     std::vector<memoryEntry> LoadMissingEmbeddings(const std::string& embeddingModel, std::size_t maxEntries = 25) const;
     // Row-id traversal moves past failed rows without an offset into a shrinking
     // result set. Restarting a scan at zero rediscovers failures and newly added rows.

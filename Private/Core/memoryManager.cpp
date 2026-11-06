@@ -20,6 +20,17 @@ std::vector<memoryEntry> memoryManager::LoadMemories() const
     return store.Load();
 }
 
+std::string memoryManager::PriorFactValue(const revia::memory::MemorySubject& subject, const std::string& attribute,
+    const std::string& object) const
+{
+    return store.PriorFactValue(subject, attribute, object);
+}
+
+std::vector<revia::memory::MemoryCorrectionProposal> memoryManager::ProposeFactCorrections(const revia::memory::MemoryScope& scope) const
+{
+    return revia::memory::ProposeFactCorrections(store, scope);
+}
+
 bool memoryManager::SaveOwnerRevision(const revia::memory::MemoryRevisionRequest& request, revia::memory::MemoryRevisionReceipt& receipt,
     std::string& error, std::function<bool()> admission, revia::memory::MemoryRevisionScopeAdmission acquireReviewScope) const
 {

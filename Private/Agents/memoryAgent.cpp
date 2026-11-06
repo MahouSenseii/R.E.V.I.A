@@ -1187,6 +1187,22 @@ void MemoryAgent::Run(const std::stop_token stopToken)
                                                  memory::IsAttributedPrivateScope(task.scope)
                                              ? memory::MemorySubject{memory::MemorySubjectKind::Companion, task.scope.companionId}
                                              : memory::MemorySubject{};
+            // A slot is kept only for the speaker's own fact whose value is in their own words; the
+            // host, not the model, reads those words for a correction, a change over time or a plan.
+            if (event.decision.fact)
+            {
+                if (event.decision.subject.kind != memory::MemorySubjectKind::Participant ||
+                    !memory::FactValueInOwnWords(event.decision.fact->value, task.input))
+                {
+                    event.decision.fact.reset();
+                }
+                else
+                {
+                    const auto prior = memory.PriorFactValue(event.decision.subject, event.decision.fact->attribute, event.decision.fact->object);
+                    event.decision.factChange = memory::ClassifyFactChange(task.input, event.decision.fact->value, prior);
+                    event.decision.factEvidence = task.input.substr(0, 2048);
+                }
+            }
             const auto saveStarted = std::chrono::steady_clock::now();
             if (!Admitted(task.admission)) continue;
             std::string savedId;
@@ -1198,8 +1214,17 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             if (event.saveSucceeded && event.wasAdded)
                 event.semanticDuplicateMarks = MarkSemanticDuplicates(savedId, event.decision.embeddingModel, task, requestToken);
             if (event.saveSucceeded && task.provenance == ResponseProvenance::NormalGeneration)
+            {
                 event.correctionProposals = memory.ProposeCorrections(savedId, event.decision, task.input,
                     task.scope, task.turnId, task.admission, requestToken);
+                // A clear correction or change of a fact slot is always offered for review, not only
+                // after the narrow first-person cues above. Review still decides; nothing is revised here.
+                if (event.decision.fact && Admitted(task.admission))
+                    for (auto& proposal : memory.ProposeFactCorrections(task.scope))
+                        if (std::none_of(event.correctionProposals.begin(), event.correctionProposals.end(), [&](const auto& existing)
+                                { return existing.original.id == proposal.original.id && existing.proposedMemoryId == proposal.proposedMemoryId; }))
+                            event.correctionProposals.push_back(std::move(proposal));
+            }
         }
 
         if (!Admitted(task.admission)) continue;

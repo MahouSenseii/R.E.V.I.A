@@ -27,6 +27,8 @@ public:
         const memoryDecision& decision, const std::string& input, const revia::memory::MemoryScope& scope,
         std::uint64_t turnId, std::function<bool()> admission = {}, std::stop_token stopToken = {}) const;
     std::vector<memoryEntry> LoadMemories() const;
+    std::string PriorFactValue(const revia::memory::MemorySubject& subject, const std::string& attribute, const std::string& object) const;
+    std::vector<revia::memory::MemoryCorrectionProposal> ProposeFactCorrections(const revia::memory::MemoryScope& scope) const;
     std::vector<memoryEntry> LoadMissingEmbeddings(const std::string& embeddingModel, std::size_t maxEntries = 25) const;
     EmbeddingBackfillPage ScanMissingEmbeddings(const std::string& embeddingModel,
         std::int64_t afterRowId, std::size_t maxEntries = 25) const;

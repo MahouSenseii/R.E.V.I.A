@@ -1,7 +1,9 @@
 #pragma once
 
 #include "LLM/responseTypes.h"
+#include "Memory/factSlot.h"
 #include "Memory/memoryScope.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -54,4 +56,9 @@ struct memoryDecision
     std::string embeddingModel;
     std::vector<latencySample> timings;
     revia::memory::MemorySubject subject{};
+    // Set only for the speaker's own single-value facts whose value appears in their own words.
+    // The change kind is the host's reading of those words, never the model's.
+    std::optional<revia::memory::FactSlot> fact;
+    revia::memory::FactChange factChange = revia::memory::FactChange::Statement;
+    std::string factEvidence;
 };
