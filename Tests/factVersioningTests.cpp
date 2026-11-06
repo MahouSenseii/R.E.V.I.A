@@ -206,6 +206,119 @@ void TestACorrectionLinksAnUnslottedOriginal()
     Check(other.LinkCorrectedAwayFact(me, "job", "", "nurse").empty(), "An ambiguous earlier value must not be linked.");
 }
 
+MemoryRevisionRequest Approve(const MemoryCorrectionProposal& proposal, const std::string& requestId)
+{
+    MemoryRevisionRequest request;
+    request.ownerRequestId = requestId;
+    request.originalId = proposal.original.id;
+    request.expectedSummaryDigest = proposal.expectedSummaryDigest;
+    request.priorReceiptId = proposal.original.revisionReceiptId;
+    request.expectedReplacementId = proposal.proposedMemoryId;
+    request.expectedSubject = proposal.original.subject;
+    request.corrected = proposal.corrected;
+    request.origin = {Scope().companionId, "fact-session", 1, {}, {}, 1};
+    request.audienceRevision = 1;
+    request.reason = "Owner approved.";
+    request.evidence = proposal.evidence;
+    return request;
+}
+
+// "Blue after all": the return saves the same text as the original, which the store deduplicates
+// onto the original row. That must count as the newest version, even after the owner had approved
+// blue -> green and blue was historical.
+void TestReturningToAnEarlierValue()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    longTermMemory store((fixture.root / "memory.db").string());
+    const auto me = ParticipantSubject(Scope());
+    const auto scope = Scope();
+    const auto blue = Say(store, "My Civic is blue", "The user's Civic is blue.", "car colour", "Civic", "blue");
+    const auto green = Say(store, "Actually my Civic is green, not blue", "The user's Civic is green.", "car colour", "Civic", "green");
+    auto proposals = ProposeFactCorrections(store, scope);
+    MemoryRevisionReceipt receipt; std::string error;
+    Check(proposals.size() == 1 && store.SaveOwnerRevision(Approve(proposals[0], "approve-green"), receipt, error),
+        "The first correction could not be approved: " + error);
+    const auto back = Say(store, "Sorry, my Civic is blue after all, not green", "The user's Civic is blue.", "car colour", "Civic", "blue");
+    Check(back == blue, "The fixture expected the store to deduplicate onto the original blue row.");
+    auto view = *Find(store.FactViews(me), "car colour", "civic");
+    Check(view.current && view.current->value == "blue" && view.state == FactState::UnreviewedCorrection &&
+              view.replaced.front().memoryId == green,
+        "Returning to an earlier value was ignored: green is still current.");
+    proposals = ProposeFactCorrections(store, scope);
+    Check(proposals.size() == 1 && proposals[0].original.id == green && proposals[0].proposedMemoryId == blue,
+        "The return to blue was not offered for review.");
+    Check(store.SaveOwnerRevision(Approve(proposals[0], "approve-blue"), receipt, error), "Approving the return failed: " + error);
+    view = *Find(store.FactViews(me), "car colour", "civic");
+    Check(view.state == FactState::Reviewed && view.current->value == "blue", "After approval blue must be the reviewed value.");
+}
+
+// "Four, not three" must not adopt an unrelated earlier memory that happens to say "three".
+void TestUnrelatedOldFactsAreNotLinked()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    longTermMemory store((fixture.root / "memory.db").string());
+    const auto me = ParticipantSubject(Scope());
+    const auto plain = [&](const std::string& summary)
+    { memoryDecision d; d.bSuccess = d.bShouldRemember = true; d.summary = summary; d.category = "identity"; d.subject = me;
+      bool added; std::string id; Check(store.Save(d, added, &id), "Plain save failed."); return id; };
+    const auto kids = plain("The user has three kids.");
+    Check(store.LinkCorrectedAwayFact(me, "pet age", "", "three").empty(), "An unrelated fact was linked as the pet's earlier age.");
+    const auto dog = plain("The user's dog Biscuit is three years old.");
+    Check(store.LinkCorrectedAwayFact(me, "pet age", "", "three") == "three", "The dog's earlier age was not linked.");
+    const auto view = *Find(store.FactViews(me), "pet age");
+    Check(view.versions.size() == 1 && view.versions[0].memoryId == dog && view.versions[0].memoryId != kids,
+        "The wrong earlier memory became the slot's previous version.");
+    const auto scope = Scope();
+    Check(store.BuildPromptBlock("", 6, {}, "", 0, &scope).find("The user has three kids.") != std::string::npos,
+        "The unrelated fact disappeared from the prompt.");
+}
+
+// A rejected slot review is rebuilt from the store unless the rejection is stored too.
+void TestARejectedReviewStaysRejected()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    const auto path = (fixture.root / "memory.db").string();
+    const auto me = ParticipantSubject(Scope());
+    const auto scope = Scope();
+    std::string blue, green;
+    {
+        longTermMemory store(path);
+        blue = Say(store, "My Civic is blue", "The user's Civic is blue.", "car colour", "Civic", "blue");
+        green = Say(store, "Actually my Civic is green, not blue", "The user's Civic is green.", "car colour", "Civic", "green");
+        Check(ProposeFactCorrections(store, scope).size() == 1, "The correction was not offered for review.");
+        Check(!store.RecordFactCorrectionRejection(blue, "not-a-version", me), "A rejection outside the slot was recorded.");
+        Check(store.RecordFactCorrectionRejection(blue, green, me), "The rejection was not recorded.");
+    }
+    longTermMemory reopened(path);  // a restart
+    Check(ProposeFactCorrections(reopened, scope).empty(), "A rejected review came back after it was rebuilt from the store.");
+    auto view = *Find(reopened.FactViews(me), "car colour", "civic");
+    Check(view.state == FactState::Unresolved && !view.current, "After rejection the newer value must not be shown as the correction.");
+    Say(reopened, "No, it's red now, not green", "The user's Civic is red.", "car colour", "Civic", "red");
+    const auto later = ProposeFactCorrections(reopened, scope);
+    Check(later.size() == 1 && later[0].original.id == green, "A later, different correction must still be offered for review.");
+}
+
+struct TestLease final : MemoryRevisionScopeLease {};
+
+// The owner's deletion must not complete for a conversation that changed while it ran.
+void TestDeletionStopsWhenTheConversationChanges()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    longTermMemory store((fixture.root / "memory.db").string());
+    const auto me = ParticipantSubject(Scope());
+    const auto blue = Say(store, "My Civic is blue", "The user's Civic is blue.", "car colour", "Civic", "blue");
+    const auto green = Say(store, "Actually my Civic is green, not blue", "The user's Civic is green.", "car colour", "Civic", "green");
+    std::size_t deleted = 0; std::string error; int asked = 0;
+    const MemoryRevisionScopeAdmission changed = [&]() -> std::unique_ptr<MemoryRevisionScopeLease> { ++asked; return {}; };
+    Check(!store.DeleteOldFactVersions(green, me, deleted, error, changed) && deleted == 0 && asked == 1,
+        "A deletion went ahead after the conversation changed.");
+    const auto rows = store.Load();
+    Check(std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.id == blue; }), "A refused deletion still removed the old version.");
+    const MemoryRevisionScopeAdmission same = [&]() -> std::unique_ptr<MemoryRevisionScopeLease> { ++asked; return std::make_unique<TestLease>(); };
+    Check(store.DeleteOldFactVersions(green, me, deleted, error, same) && deleted == 1 && asked == 2,
+        "With the conversation unchanged the deletion should complete: " + error);
+}
+
 void TestOwnerDeletesOldVersions()
 {
     revia::tests::ScopedTestDirectory fixture;
@@ -239,6 +352,10 @@ void RunFactVersioningTests()
     TestFutureChangeVersusCorrection();
     TestPromptLookupAndReviewFirstThroughRestart();
     TestACorrectionLinksAnUnslottedOriginal();
+    TestReturningToAnEarlierValue();
+    TestUnrelatedOldFactsAreNotLinked();
+    TestARejectedReviewStaysRejected();
+    TestDeletionStopsWhenTheConversationChanges();
     TestOwnerDeletesOldVersions();
     std::cout << "Fact versioning checks passed: own words, who, separate things, plans, review-first, restart and owner delete.\n";
 }

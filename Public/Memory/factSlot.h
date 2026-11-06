@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace revia::memory
@@ -88,7 +89,14 @@ struct FactView
 };
 
 // Pure resolution of one slot's versions (oldest first). See factSlot.cpp for the rules.
-[[nodiscard]] FactView ResolveFactSlot(std::vector<FactVersion> versions);
+// `rejectedPairs` holds (replaced memory id, replacing memory id) pairs the owner rejected in review;
+// such a correction no longer counts as clear, so the slot is shown as unresolved instead.
+[[nodiscard]] FactView ResolveFactSlot(std::vector<FactVersion> versions,
+    const std::vector<std::pair<std::string, std::string>>& rejectedPairs = {});
+
+// True when a stored summary is about this attribute at all ("The user has three kids." is not a
+// pet's age even though it says "three"). Used before linking an earlier memory to a slot.
+[[nodiscard]] bool FactSummaryFitsAttribute(const std::string& summary, const std::string& attribute);
 
 // One prompt line describing the slot in plain words for the model.
 [[nodiscard]] std::string DescribeFactForPrompt(const FactView& view);

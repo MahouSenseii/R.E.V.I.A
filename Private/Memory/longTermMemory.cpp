@@ -499,7 +499,15 @@ Database OpenDatabase(const std::string& memoryPath)
                                    "  change_kind TEXT NOT NULL, evidence TEXT NOT NULL"
                                    ");"
                                    "CREATE INDEX IF NOT EXISTS memory_fact_slots_key "
-                                   "ON memory_fact_slots(subject_kind, subject_id, attribute, object);";
+                                   "ON memory_fact_slots(subject_kind, subject_id, attribute, object);"
+                                   // Owner rejections of an old-to-new slot correction, so a rejected
+                                   // review is not rebuilt from the slots after it was dismissed.
+                                   "CREATE TABLE IF NOT EXISTS memory_fact_rejections ("
+                                   "  original_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,"
+                                   "  proposed_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,"
+                                   "  created_at TEXT NOT NULL,"
+                                   "  PRIMARY KEY(original_id, proposed_id)"
+                                   ");";
     if (!Execute(database.get(), Schema) || !MigrateSubjects(database.get()) || !ImportLegacyJsonl(database.get(), path))
     {
         return {};
@@ -658,12 +666,27 @@ std::string FindRevisionChain(sqlite3* database, const std::string& id)
     return ColumnText(query.get(), 0);
 }
 
-// Records one slot version for a saved row. A row that already has a slot keeps it (a restated
-// duplicate does not become a second version).
+// Records one slot version for a saved row. Returning to an earlier value ("blue after all") saves
+// the same text as the original, so the store deduplicates onto that original row; its version then
+// moves to the newest position with the new change kind instead of being ignored. A restatement of
+// the newest value, or a row filed under another slot, is left as it is.
 bool InsertFactSlot(sqlite3* database, const std::string& memoryId, const memoryDecision& decision)
 {
     if (!decision.fact || memoryId.empty() || decision.subject.kind != revia::memory::MemorySubjectKind::Participant)
         return true;
+    auto move = Prepare(database,
+        "UPDATE memory_fact_slots SET sequence = (SELECT MAX(sequence) + 1 FROM memory_fact_slots), change_kind = ?2, evidence = ?3 "
+        "WHERE memory_id = ?1 AND attribute = ?4 AND object = ?5 AND sequence < (SELECT MAX(sequence) FROM memory_fact_slots s "
+        "WHERE s.subject_kind = memory_fact_slots.subject_kind AND s.subject_id = memory_fact_slots.subject_id "
+        "AND s.attribute = memory_fact_slots.attribute AND s.object = memory_fact_slots.object);");
+    if (!move) return false;
+    BindText(move.get(), 1, memoryId);
+    BindText(move.get(), 2, std::string(revia::memory::FactChangeName(decision.factChange)));
+    BindText(move.get(), 3, decision.factEvidence.substr(0, 2048));
+    BindText(move.get(), 4, decision.fact->attribute);
+    BindText(move.get(), 5, decision.fact->object);
+    if (sqlite3_step(move.get()) != SQLITE_DONE) return false;
+    if (sqlite3_changes(database) > 0) return true;
     auto insert = Prepare(database,
         "INSERT OR IGNORE INTO memory_fact_slots(memory_id, subject_kind, subject_id, attribute, object, value, change_kind, evidence) "
         "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);");
@@ -1450,6 +1473,10 @@ std::vector<revia::memory::FactView> longTermMemory::FactViews(const revia::memo
         rows.push_back(std::move(row));
     }
     if (!ProjectRevisions(database, projected)) return {};
+    std::vector<std::pair<std::string, std::string>> rejected;
+    if (auto rejections = Prepare(database, "SELECT original_id, proposed_id FROM memory_fact_rejections;"))
+        while (sqlite3_step(rejections.get()) == SQLITE_ROW)
+            rejected.emplace_back(ColumnText(rejections.get(), 0), ColumnText(rejections.get(), 1));
     for (std::size_t i = 0; i < rows.size(); ++i)
     {
         const auto& current = projected[i].currentRevisionId;
@@ -1467,7 +1494,7 @@ std::vector<revia::memory::FactView> longTermMemory::FactViews(const revia::memo
     std::vector<revia::memory::FactView> views;
     for (const auto& key : order)
     {
-        auto view = revia::memory::ResolveFactSlot(slots[key]);
+        auto view = revia::memory::ResolveFactSlot(slots[key], rejected);
         view.subjectKey = revia::memory::SubjectKey(subject);
         view.attribute = key.first;
         view.object = key.second;
@@ -1520,7 +1547,10 @@ std::string longTermMemory::LinkCorrectedAwayFact(const revia::memory::MemorySub
     while (sqlite3_step(query.get()) == SQLITE_ROW)
     {
         const std::string summary = lower(ColumnText(query.get(), 1));
-        if (mentions(summary, value) && (object.empty() || mentions(summary, object)))
+        // The old value alone is not enough: "four, not three" must not adopt "The user has three
+        // kids." as the dog's earlier age. The row has to be about this attribute (and object).
+        if (mentions(summary, value) && revia::memory::FactSummaryFitsAttribute(summary, attribute) &&
+            (object.empty() || mentions(summary, object)))
             candidates.push_back(ColumnText(query.get(), 0));
     }
     if (candidates.size() != 1) return {};
@@ -1533,30 +1563,41 @@ std::string longTermMemory::LinkCorrectedAwayFact(const revia::memory::MemorySub
 }
 
 bool longTermMemory::DeleteOldFactVersions(const std::string& currentMemoryId, const revia::memory::MemorySubject& expectedSubject,
-    std::size_t& outDeleted, std::string& outError) const
+    std::size_t& outDeleted, std::string& outError, const revia::memory::MemoryRevisionScopeAdmission& acquireScope) const
 {
     const std::lock_guard operationLock(databaseMutex);
     outDeleted = 0;
     outError.clear();
     sqlite3* const database = Acquire();
     if (!database) { outError = "The memory store is unavailable."; return false; }
+    // Write lock first, then the caller's scope lease (the same order as owner revisions). The slot
+    // is read inside the transaction and the lease is held until commit, so a speaker or audience
+    // change cannot slip between choosing what to delete and deleting it.
+    if (!Execute(database, "BEGIN IMMEDIATE;")) { outError = "The memory store is busy."; return false; }
+    std::unique_ptr<revia::memory::MemoryRevisionScopeLease> lease;
+    if (acquireScope)
+    {
+        try { lease = acquireScope(); } catch (...) { lease.reset(); }
+        if (!lease)
+        {
+            Execute(database, "ROLLBACK;");
+            if (outError.empty()) outError = "The conversation changed before the deletion; nothing was deleted.";
+            return false;
+        }
+    }
+    const auto refuse = [&](const char* why) { Execute(database, "ROLLBACK;"); outError = why; return false; };
     const revia::memory::FactView* target = nullptr;
     const auto views = FactViews(expectedSubject, 500);
     for (const auto& view : views)
         for (const auto& version : view.versions)
             if (version.memoryId == currentMemoryId) target = &view;
-    if (!target) { outError = "That memory is not a versioned fact of this person."; return false; }
+    if (!target) return refuse("That memory is not a versioned fact of this person.");
     if (!target->current || target->current->memoryId != currentMemoryId)
-    {
-        outError = "Older versions can be deleted only behind the fact's current value; settle which value is right first.";
-        return false;
-    }
+        return refuse("Older versions can be deleted only behind the fact's current value; settle which value is right first.");
     std::vector<std::string> doomed;
     for (const auto& version : target->versions)
         if (version.memoryId != currentMemoryId && !(target->planned && version.memoryId == target->planned->memoryId))
             doomed.push_back(version.memoryId);
-    if (doomed.empty()) return true;
-    if (!Execute(database, "BEGIN IMMEDIATE;")) { outError = "The memory store is busy."; return false; }
     bool ok = true;
     for (const auto& id : doomed)
     {
@@ -1577,6 +1618,30 @@ bool longTermMemory::DeleteOldFactVersions(const std::string& currentMemoryId, c
         return false;
     }
     return true;
+}
+
+bool longTermMemory::RecordFactCorrectionRejection(const std::string& originalId, const std::string& proposedId,
+    const revia::memory::MemorySubject& expectedSubject) const
+{
+    const std::lock_guard operationLock(databaseMutex);
+    sqlite3* const database = Acquire();
+    if (!database || originalId.empty() || proposedId.empty() || originalId == proposedId) return false;
+    // Only a pair that really is two versions of one slot of this person.
+    bool sameSlot = false;
+    for (const auto& view : FactViews(expectedSubject, 500))
+    {
+        const auto has = [&](const std::string& id)
+        { return std::any_of(view.versions.begin(), view.versions.end(), [&](const auto& v) { return v.memoryId == id; }); };
+        sameSlot = sameSlot || (has(originalId) && has(proposedId));
+    }
+    if (!sameSlot) return false;
+    auto insert = Prepare(database,
+        "INSERT OR IGNORE INTO memory_fact_rejections(original_id, proposed_id, created_at) VALUES(?1, ?2, ?3);");
+    if (!insert) return false;
+    BindText(insert.get(), 1, originalId);
+    BindText(insert.get(), 2, proposedId);
+    BindText(insert.get(), 3, CurrentEpochSeconds());
+    return sqlite3_step(insert.get()) == SQLITE_DONE;
 }
 
 std::vector<memoryEntry> longTermMemory::LoadMissingEmbeddings(const std::string& embeddingModel, const std::size_t maxEntries) const
