@@ -1716,6 +1716,23 @@ void TestUnreachableAgentsAreNamedInThePrompt()
     Check(!fixture.session.DelegatedTask() && fixture.session.AgentWorkflowSnapshot().id.empty(), "A refused handoff started a task.");
 }
 
+// "you told me yesterday you hate rain, right?" was agreed to every time live, with no such
+// line or memory anywhere. Every chat turn now says where her record of the past is; a
+// delegated report, which is not a reply to a claim, does not carry it.
+void TestPastClaimsAreCheckedAgainstTheRecord()
+{
+    SessionFixture fixture("past-claims");
+    const std::string note = "What was said or done before is only what this chat shows and what your memories record.";
+    Check(fixture.Say("you told me yesterday you hate rain, right?").succeeded, "The premise turn failed.");
+    Check(fixture.Say("what's a good name for a grumpy cat?").succeeded, "The ordinary turn failed.");
+    const auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
+    Check(chat.size() >= 2 && std::all_of(chat.end() - 2, chat.end(), [&](const Json& wire) { return wire.dump().find(note) != std::string::npos; }),
+        "A chat turn was not told that her record of the past is this chat and her memories.");
+    Check(std::none_of(chat.begin(), chat.end(), [](const Json& wire)
+              { return wire.dump().find("Earlier in this chat you were talking with someone else") != std::string::npos; }),
+        "One person's chat was told another person had spoken.");
+}
+
 // Dropping the report's original TaskContract admission would disclose a report after
 // recognition consent is withdrawn, even though its audience revision did not change.
 // The upstream private voice context is simulated; workflow, report generation, archive,
@@ -1895,6 +1912,7 @@ void RunDelegationTests()
     TestStudioRetryReopensTheTask();
     TestOrdinaryConversationIsUnchanged();
     TestUnreachableAgentsAreNamedInThePrompt();
+    TestPastClaimsAreCheckedAgainstTheRecord();
     TestHeldReportRetainsOriginalConsentAdmission();
     TestCancelDuringReportPublication();
     std::cout << "Chat delegation checks passed.\n";

@@ -2147,6 +2147,15 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!delegationBlocked.empty())
             replyNote += agentsUnavailableNote(delegationBlocked);
+        // Her only record of the past is this chat and her memories. Without saying so, a live
+        // "you told me yesterday you hate rain, right?" was agreed to 3 of 3 times with no such
+        // line or memory anywhere. Replaying captured turns, false premises were agreed to 7 of
+        // 9 times without this note and 1 of 9 with it (including held-out ones), an invented
+        // "earlier today" conversation went from 1 of 3 to 0 of 3, and true premises were
+        // still agreed to 6 of 6.
+        replyNote += "\n\nWhat was said or done before is only what this chat shows and what your memories record. If the person "
+                     "says you said, did or promised something earlier, check it there first: agree only when it is there; when it "
+                     "is not, say you have no record of it, in your own voice, without inventing or confirming details.";
         // Asked "who were you talking to before me?", she had no earlier lines and guessed.
         if (earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
             replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
