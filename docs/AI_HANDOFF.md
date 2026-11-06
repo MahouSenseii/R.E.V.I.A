@@ -19,9 +19,9 @@ applies to their own date.
 
 ## Verified Revia source
 
-[PR #39](https://github.com/MahouSenseii/R.E.V.I.A/pull/39) is merged at
-[c8f6362455bce01d1f6d666dbcc724e7747dc542](https://github.com/MahouSenseii/R.E.V.I.A/commit/c8f6362455bce01d1f6d666dbcc724e7747dc542).
-[CI 42077079104](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42077079104)
+[PR #41](https://github.com/MahouSenseii/R.E.V.I.A/pull/41) is merged at
+[a4bd7114c0421e2d3f13aff3bae28cea461fbdd2](https://github.com/MahouSenseii/R.E.V.I.A/commit/a4bd7114c0421e2d3f13aff3bae28cea461fbdd2).
+[CI 42135568077](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42135568077)
 passed six jobs: 155 tests passed, 0 failed, 2 optional video skips.
 That result is hosted application-source evidence, not a new local test run.
 
@@ -40,12 +40,26 @@ inside "creating"), which could drop harmless sentences from these two turn
 types. PR39 fixed this by matching whole words and phrases, with a regression
 for each reported example.
 
+PR41 came from live multi-turn conversations with the pinned 4B through
+`ReviaSession` (opt-in `ReviaConversationTrialLive`, shipped 32K context; below
+16K no tools are offered). It fixes a name correction that left later facts
+under the rejected name, a returning speaker who was never recognised after a
+restart, and a memory-selector rule that filed the speaker's own plans and pets
+as unattributed rows no private chat retrieves. It also makes "use your agents"
+reach the agents (2/10 to 10/10 in replays), and says so when none can start.
+Workers now open the files they were asked about. Each fix has a regression
+that failed before it.
+
 The installed app was not updated or freshly audited. Model-generated invented
-history remains open beyond those two cases. A real-model worker previously delegated and kept chat
-available, but listed files and stopped without an accepted reviewed report.
-The stopping cause and useful real-model completion remain unresolved.
-Restart recall, physical desktop, real voice/media and release qualification
-remain separately scoped. Historical setup/timing failures and long-path save
+history remains open: the model accepted a false premise in 3 of 3 live runs.
+In three live delegated runs after PR41, chat stayed responsive, the workers read
+the files and Revia reported honestly, but no run produced an accepted report:
+the model's own verification judgement is the remaining step. A skipped
+correction ("four, not three"), one misfiled correction, and unrelated memories
+passing the 0.35 similarity floor still mislead recall. Restart and exit pause
+40–70 s after "Shutdown complete" (pre-existing, not investigated).
+Physical desktop, real voice/media and release qualification remain separately
+scoped. Historical setup/timing failures and long-path save
 limits remain in the dated records.
 
 ## RNL evidence boundary

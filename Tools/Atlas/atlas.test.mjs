@@ -12,9 +12,9 @@ const denied=/([a-z]:[\\/](?:Users|Windows|Program Files)|\/home\/|\/Users\/|lib
 
 test('the current entry point uses the verified source and scoped CI result',()=>{
   const j=record();
-  assert.equal(j.current.source_commit,'c8f6362455bce01d1f6d666dbcc724e7747dc542');
-  assert.equal(j.current.source_pr,39);
-  assert.deepEqual(j.current.ci,{run:42077079104,jobs_passed:6,passed:155,failed:0,optional_skips:2});
+  assert.equal(j.current.source_commit,'a4bd7114c0421e2d3f13aff3bae28cea461fbdd2');
+  assert.equal(j.current.source_pr,41);
+  assert.deepEqual(j.current.ci,{run:42135568077,jobs_passed:6,passed:155,failed:0,optional_skips:2});
   assert.equal(j.source.installed_app_updated,false);
   assert.equal(j.source.release_qualified,false);
 });

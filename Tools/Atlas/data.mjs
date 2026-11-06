@@ -1,13 +1,13 @@
 export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
-export const pin='c8f6362455bce01d1f6d666dbcc724e7747dc542';
+export const pin='a4bd7114c0421e2d3f13aff3bae28cea461fbdd2';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
   as_of:'2026-11-05',
   source_commit:pin,
-  source_pr:39,
+  source_pr:41,
   state:'Paused at a safe stopping point',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
-  ci:{run:42077079104,jobs_passed:6,passed:155,failed:0,optional_skips:2},
+  ci:{run:42135568077,jobs_passed:6,passed:155,failed:0,optional_skips:2},
   installed_app:'Not updated or freshly audited by this work',
   research:{
     public_source_commit:researchPin,
@@ -43,6 +43,10 @@ export const current={
 };
 
 export const changes=[
+  {pr:41,title:'Keep the right person, file their plans, reach the agents.',
+    summary:'“I meant Mari, not Jo” and “hey, it’s Mari” now find the right person, her own trip is recalled after a restart, and “use your agents” reaches them.',
+    detail:'Found in live multi-turn conversations with the SHA-pinned Qwen3.5-4B through the production session, at the shipped 32K context. A name correction left later facts filed under the rejected name. A returning person was never recognised after a restart. The memory selector filed a speaker’s own plans and pets as unattributed, so a private chat never recalled them (0/6 → 6/6 in replays of the captured request). A request for the agents reached them in 2/10 replays (10/10 after). With no agent reachable, she described a review nobody ran. Workers stopped before opening a file (5/10 → 1/10) or after one of two files (the second was then read 10/10). Each fix has a regression that failed before it. After a restart, live recall now returns the name, tea, instrument and March trip. The installed app is unchanged.',
+    next:'Rebuild and requalify the installed app; repeat the live trials over more conversations.'},
   {pr:39,title:'Match grounding repairs on whole words.',
     summary:'Harmless words such as “creating” or “relying on” no longer cost a check-in or name reply its sentence.',
     detail:'PR37’s phrase lists matched parts of words (“eating” inside “creating”, “come over” inside “become overly”, “my bad” inside “my badge”), so harmless sentences in check-ins and first-time name statements could be dropped. The lists now match whole words and phrases. Regressions cover every reported example and confirm that real bodily and mix-up claims are still removed. The installed app is unchanged.',
@@ -82,16 +86,21 @@ export const changes=[
 ];
 
 export const issues=[
-  {id:'report',area:'Revia',title:'A useful delegated report is still unverified.',
-    summary:'An earlier real-model worker listed files, then stopped without an accepted report. Chat remained available.',
-    status:'Open · real-model result missing',
-    detail:'The cause of the early stop remains unresolved. Clearer receipts and private stopping diagnostics are merged; they have not demonstrated successful model completion.',
-    next:'Review the saved evidence, verify the exact runtime package, and prepare one bounded known-path report check. Do not replay an old run automatically.'},
+  {id:'report',area:'Revia',title:'A useful delegated report is still not established.',
+    summary:'Hand-off, file reading, responsiveness and honest reporting now work live. No run produced an accepted report.',
+    status:'Open · narrowed by live runs',
+    detail:'Three full live runs after PR41: every run handed off, the workers read both files, chat answered in 1.4–2.5 s while they worked, and Revia reported the outcome honestly. One investigation was verified and the independent check then declined, because the code depends on files outside the approved folder. Two investigations called themselves unverified; defining “verified” raised that from 1/8 to 4/8 in replays. The remaining step is the model’s own judgement.',
+    next:'Decide whether the host, rather than the model, should judge receipt coverage, or requalify with a larger model.'},
   {id:'history',area:'Revia',title:'Model-generated invented history remains open.',
     summary:'A scoped real-model check now covers two common cases. General grounding is still not established.',
     status:'Open · narrowed by a scoped real-model check',
-    detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. This is not proof of general truthfulness or of improvement in the installed app.',
-    next:'Add more history-shaped turns to the fixed real-model check, then requalify the installed app.'},
+    detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. Live multi-turn trials at the shipped 32K context gave mostly truthful “what have you been up to” replies. The model still accepted a false premise (“you said Biscuit was a cat”) in 3 of 3 runs, and slipped perspective (“I’m Mari”, “my sister”). This is not proof of general truthfulness or of improvement in the installed app.',
+    next:'Check false-premise acceptance with a real-model check, without adding phrase repairs; then requalify the installed app.'},
+  {id:'memory',area:'Revia',title:'Corrections and relevance still mislead recall.',
+    summary:'A corrected fact was not saved, one correction was filed under the wrong person, and unrelated memories reach some turns.',
+    status:'Open · reproduced live',
+    detail:'“She’s four, not three” was skipped because a memory already existed (ISSUE-REVIA-0080), so restart recall said three. One run saved the dog’s corrected age as “The user’s cousin Jo is four years old”. A 0.35 similarity floor with the nomic embeddings lets unrelated memories in; one run answered “Lisbon … your cousin Jo”. Restart and exit also pause for 40–70 s after “Shutdown complete”; that delay predates PR41 and has not been investigated.',
+    next:'Route explicit corrections through the revision path, and measure a relevance floor on the retrieval benchmark.'},
   {id:'comparison',area:'RNL',title:'The direct comparison stopped before RNL ran.',
     summary:'32 Qwen 0.8B replies were saved. Supervision cleanup failed; RNL and exact lookup did not run.',
     status:'Incomplete · no grade or ranking',
