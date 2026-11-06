@@ -633,7 +633,9 @@ struct AgentWorkflow::Impl
                 attempt.artifact = node.artifact;
                 attempt.view.artifact = ArtifactReference{id, node.artifact->id, node.artifact->version, node.artifact->hash};
             }
-            else if (result.succeeded && validArtifact)
+            // Only a deliverable that meets its contract: a valid hash over missing or broken
+            // sections is malformed output, and it is never shown to the person as a report.
+            else if (result.succeeded && completeDeliverable)
                 attempt.unverifiedArtifact = std::move(result.artifact);
             attempt.view.state = state;
             attempt.view.diagnostic = state == WorkflowState::Cancelled ? "The attempt was cancelled; its late result was not admitted."

@@ -213,7 +213,8 @@ class AgentWorkflow
     // before parent evaluation has finished or once cancellation was requested.
     [[nodiscard]] std::optional<WorkflowArtifact> CandidateArtifact() const;
     // Each worker's latest completed deliverable in node order, verified or not. A cancelled
-    // or malformed attempt contributes nothing, and nothing survives a reload.
+    // attempt, a bad hash, or sections that fail the node's contract contribute nothing, and
+    // nothing survives a reload.
     [[nodiscard]] std::vector<WorkerDeliverable> WorkerDeliverables() const;
     // Accept only the deliverable that was actually examined: refused when the parent's
     // current verified artifact is not `expected` by id, version and hash.
