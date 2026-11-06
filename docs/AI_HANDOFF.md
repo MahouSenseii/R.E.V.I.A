@@ -52,9 +52,16 @@ that failed before it.
 
 The installed app was not updated or freshly audited. Model-generated invented
 history remains open: the model accepted a false premise in 3 of 3 live runs.
-In three live delegated runs after PR41, chat stayed responsive, the workers read
-the files and Revia reported honestly, but no run produced an accepted report:
-the model's own verification judgement is the remaining step. A skipped
+In six live delegated runs after PR41, five handed off, chat stayed responsive and
+the workers read the files; one run passed review and acceptance and was reported
+55 s after the hand-off. The rest ended unverified, which is the model's own
+judgement. Before PR43 such a run discarded what its workers had found, and the
+report either said nothing or invented a bug. PR43 keeps that deliverable
+(never accepted or reviewed) and relays it as the worker's own unconfirmed claims.
+It keeps one only when it meets the node's deliverable contract, not merely a
+valid hash. PR42's push run timed out in the Windows WebDemo entry-point test at
+10 s while the PR run of the same commit passed (passes take 2.5-7.5 s); the
+limit is now 60 s, and whether that run was slow or stuck is unknown. A skipped
 correction ("four, not three"), one misfiled correction, and unrelated memories
 passing the 0.35 similarity floor still mislead recall. Restart and exit pause
 40–70 s after "Shutdown complete" (pre-existing, not investigated).

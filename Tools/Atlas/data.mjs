@@ -43,6 +43,10 @@ export const current={
 };
 
 export const changes=[
+  {pr:43,title:'Report what unverified workers found, labelled unconfirmed.',
+    summary:'A delegated task that ends unverified now tells you what the workers read and found, instead of “nothing established” or an invented bug.',
+    detail:'A worker that calls its own work unverified ends the run, and its deliverable used to be discarded. Revia’s report then got only a stage list: replaying the live report turn, 6 of 8 replies said “nothing established” and 2 invented bugs nobody had found. The workflow now keeps that deliverable beside the attempt, never as an accepted or reviewed result, and only when it meets the node’s deliverable contract; a review found the first version checked only the hash, and a valid hash over missing or broken sections is now dropped (regression failed before, passes after). The report relays it as the worker’s own unconfirmed claims, with the host receipts as the only facts: 8 of 8 replays relayed what the workers found, and none invented a finding. Verification, review and acceptance are unchanged.',
+    next:'Repeat the live delegated runs on more tasks; decide whether an unverified worker should get one bounded retry.'},
   {pr:41,title:'Keep the right person, file their plans, reach the agents.',
     summary:'“I meant Mari, not Jo” and “hey, it’s Mari” now find the right person, her own trip is recalled after a restart, and “use your agents” reaches them.',
     detail:'Found in live multi-turn conversations with the SHA-pinned Qwen3.5-4B through the production session, at the shipped 32K context. A name correction left later facts filed under the rejected name. A returning person was never recognised after a restart. The memory selector filed a speaker’s own plans and pets as unattributed, so a private chat never recalled them (0/6 → 6/6 in replays of the captured request). A request for the agents reached them in 2/10 replays (10/10 after). With no agent reachable, she described a review nobody ran. Workers stopped before opening a file (5/10 → 1/10) or after one of two files (the second was then read 10/10). Each fix has a regression that failed before it. After a restart, live recall now returns the name, tea, instrument and March trip. The installed app is unchanged.',
@@ -86,11 +90,11 @@ export const changes=[
 ];
 
 export const issues=[
-  {id:'report',area:'Revia',title:'A useful delegated report is still not established.',
-    summary:'Hand-off, file reading, responsiveness and honest reporting now work live. No run produced an accepted report.',
-    status:'Open · narrowed by live runs',
-    detail:'Three full live runs after PR41: every run handed off, the workers read both files, chat answered in 1.4–2.5 s while they worked, and Revia reported the outcome honestly. One investigation was verified and the independent check then declined, because the code depends on files outside the approved folder. Two investigations called themselves unverified; defining “verified” raised that from 1/8 to 4/8 in replays. The remaining step is the model’s own judgement.',
-    next:'Decide whether the host, rather than the model, should judge receipt coverage, or requalify with a larger model.'},
+  {id:'report',area:'Revia',title:'Delegated reports are not yet reliable.',
+    summary:'One live run produced a fully accepted report; unverified runs now report what the workers found, marked unconfirmed.',
+    status:'Open · first accepted live report',
+    detail:'Six live runs after PR41. Five handed off; one did not, though her reply said it would (the host receipt still said no task started). The workers read the files, and chat answered in 1.4–3.9 s while they worked. One run passed investigation, verification, independent review and acceptance, and she reported the accepted review 55 s after the hand-off. The others ended unverified: the verification worker declines a finding about code outside the approved folder, and the 4B often calls its own reading unverified. Since PR43 those reports relay what the workers found, marked unconfirmed, instead of saying nothing or inventing a bug.',
+    next:'Measure completion over more tasks; decide on one bounded retry for an unverified worker, or requalify with a larger model.'},
   {id:'history',area:'Revia',title:'Model-generated invented history remains open.',
     summary:'A scoped real-model check now covers two common cases. General grounding is still not established.',
     status:'Open · narrowed by a scoped real-model check',
@@ -109,7 +113,7 @@ export const issues=[
   {id:'runtime',area:'Revia',title:'Code checks do not qualify the installed app.',
     summary:'Restart memory, physical desktop, real voice/media and release checks remain separately scoped.',
     status:'Open · runtime qualification',
-    detail:'The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records.',
+    detail:'The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off.',
     next:'Choose one controlled runtime workflow after the source and installed revision are reconciled.'}
 ];
 
