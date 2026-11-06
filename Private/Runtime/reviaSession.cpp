@@ -6857,7 +6857,22 @@ speech::VoiceOperationResult ReviaSession::AssignVoice(const std::string& profil
 std::string ReviaSession::ResolveLocalSpeaker(const std::string& input, agents::InputContext& captured)
 {
     const std::string previous = captured.participantId;
-    const std::string stated = identity::ReadStatedName(input);
+    std::string stated = identity::ReadStatedName(input);
+    // Without a correction the session stays on a person the speaker has just disowned,
+    // and every later fact is filed under them.
+    if (const auto current = stated.empty() ? relationships.Find(previous) : std::nullopt; current)
+        stated = identity::ReadSpeakerNameCorrection(input, current->displayName);
+    // A fresh session starts anonymous, so a returning person's "it's Mari" must find
+    // Mari again or none of her memories can be recalled.
+    if (stated.empty())
+    {
+        std::vector<std::string> known;
+        for (const auto& person : relationships.All())
+            if (person.entityId.starts_with("local:") && person.entityId != identity::LocalUserEntityId() && person.entityId != previous &&
+                !person.displayName.empty())
+                known.push_back(person.displayName);
+        stated = identity::ReadReturningSpeaker(input, known);
+    }
     if (stated.empty())
         return previous;
 

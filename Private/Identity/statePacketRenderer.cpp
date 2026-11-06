@@ -217,9 +217,13 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
     }
     if (!packet.backgroundTask.empty())
     {
+        // True while it runs: findings reach her only in the finished report. Without the
+        // last sentence, 3 of 8 replays of a live "how's that review going?" invented bugs
+        // the workers had found; with it, none did.
         section("You are working in the background on a task the user gave you: " +
             packet.backgroundTask + ". Keep talking normally; if they ask how it is going, "
-            "answer from this, and do not claim it is finished.");
+            "answer from this, and do not claim it is finished. Nothing they found has "
+            "reached you yet, so do not describe any findings.");
     }
     if (!packet.finishedTask.empty())
     {

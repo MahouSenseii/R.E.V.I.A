@@ -152,6 +152,9 @@ void TestThePromptSaysWhatSheIsDoing()
     Check(Contains(working, "tidy the downloads folder") &&
             Contains(working, "do not claim it is finished"),
         "The prompt does not tell her about the task she is running.");
+    // Asked how a review was going, a live model made up bugs the workers had "found".
+    Check(Contains(working, "Nothing they found has reached you yet, so do not describe any findings."),
+        "A running task's prompt does not say that no findings have reached her yet.");
 
     packet.backgroundTask.clear();
     packet.finishedTask = "Goal 'tidy' Failed (budget).";

@@ -3,6 +3,7 @@
 #include "Identity/relationshipState.h"
 
 #include <string>
+#include <vector>
 
 namespace revia::identity
 {
@@ -35,6 +36,14 @@ struct ConversationSignals
 
 // Returns a name only from an explicit self-introduction; otherwise empty.
 [[nodiscard]] std::string ReadStatedName(const std::string& userInput);
+
+// "I meant Mari, not Jo" while the speaker is called Jo: the corrected name, else empty.
+// Only the name currently in use can be rejected, and only in the speaker's own words.
+[[nodiscard]] std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::string& currentName);
+
+// "hey, it's Mari" from someone already known as Mari: that known name, else empty. An
+// unknown name is never adopted this way, so "it's late" or "I'm tired" names nobody.
+[[nodiscard]] std::string ReadReturningSpeaker(const std::string& userInput, const std::vector<std::string>& knownNames);
 
 // Builds a bounded event with subunit keyword-inference confidence; the registry scales deltas by it.
 [[nodiscard]] RelationshipEvent BuildRelationshipEvent(const std::string& entityId, const ConversationSignals& signals);

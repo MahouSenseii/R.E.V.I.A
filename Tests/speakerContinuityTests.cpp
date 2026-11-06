@@ -240,10 +240,70 @@ void TestSessionPeopleAndAdapterIsolation()
         restarted.Stop();
     }
 }
+
+// From a live 4B conversation: after "can you call me Jo", the person said "I meant Mari,
+// not Jo. Jo is my cousin", and every later fact was filed under the cousin.
+void TestNameCorrectionReturnsToTheStatedPerson()
+{
+    ScopedTestDirectory directory;
+    Configure(directory.root);
+    WorkingDirectory cwd(directory.root);
+    const auto mari = RelationshipRegistry::NamedLocalEntityId("Mari");
+    const auto jo = RelationshipRegistry::NamedLocalEntityId("Jo");
+    const auto ana = RelationshipRegistry::NamedLocalEntityId("Ana");
+    ReviaSession session;
+    Check(session.Start(), "The name-correction fixture session did not start.");
+    const auto speakerAfter = [&](const std::string& input)
+    {
+        const auto result = session.Submit(input);
+        Check(result.succeeded && result.fromAssistant, "A local turn failed: " + result.reason);
+        return session.CurrentRelationship().entityId;
+    };
+    Check(speakerAfter("btw most people just call me Mari") == mari, "An introduction did not select Mari.");
+    Check(speakerAfter("can you call me Jo from now on?") == jo, "A requested name did not select Jo.");
+    Check(speakerAfter("sorry, I meant Mari, not Jo. Jo is my cousin lol") == mari,
+        "A correction rejecting the name in use left the session on that person.");
+    Check(speakerAfter("send the invite to Ana, not Mari") == mari && !HasPerson(session, ana),
+        "A contrast about someone else changed who is speaking.");
+    Check(speakerAfter("I told Ana, not Mari") == mari && !HasPerson(session, ana), "Telling someone else a name changed who is speaking.");
+    Check(speakerAfter("it's Jo, not Mari") == jo, "A short self-correction was not recognised.");
+    session.Stop();
+}
+
+// From the same live run: after a restart, "hey, it's Mari" left the session anonymous, so
+// none of Mari's memories could be recalled. Only an already known person is recognised.
+void TestReturningPersonIsRecognisedByName()
+{
+    ScopedTestDirectory directory;
+    Configure(directory.root);
+    WorkingDirectory cwd(directory.root);
+    const auto mari = RelationshipRegistry::NamedLocalEntityId("Mari");
+    {
+        ReviaSession session;
+        Check(session.Start() && session.Submit("call me Mari").succeeded && session.CurrentRelationship().entityId == mari,
+            "The returning-person fixture could not introduce Mari.");
+        session.Stop();
+    }
+    ReviaSession restarted;
+    Check(restarted.Start(), "The returning-person fixture did not restart.");
+    const auto speakerAfter = [&](const std::string& input)
+    {
+        Check(restarted.Submit(input).succeeded, "A local turn failed after restart.");
+        return restarted.CurrentRelationship().entityId;
+    };
+    Check(speakerAfter("hey, it's late") == LocalUserEntityId(), "An ordinary remark selected a person.");
+    Check(speakerAfter("I'm Mari's cousin") == LocalUserEntityId(), "Mentioning a known person selected them.");
+    Check(speakerAfter("it's Zed") == LocalUserEntityId() && !HasPerson(restarted, RelationshipRegistry::NamedLocalEntityId("Zed")),
+        "An unknown name was treated as a returning person.");
+    Check(speakerAfter("hey, it's Mari") == mari, "A returning known person was not recognised.");
+    restarted.Stop();
+}
 }
 
 void RunSpeakerContinuityTests()
 {
     TestSessionPeopleAndAdapterIsolation();
+    TestNameCorrectionReturnsToTheStatedPerson();
+    TestReturningPersonIsRecognisedByName();
     std::cout << "Local speaker continuity and public adapter isolation owner tests passed.\n";
 }

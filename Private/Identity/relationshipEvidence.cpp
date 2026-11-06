@@ -280,6 +280,47 @@ namespace
         return std::find(greetings.begin(), greetings.end(), lead) != greetings.end();
     }
 
+    // Rejecting these matters: "call me later" and "this is fine" both match an opener,
+    // and storing them would rename the person to a stray word.
+    bool IsNotAName(const std::string& lowered)
+    {
+        static const std::vector<std::string> notNames = {"later", "back", "when", "if", "fine", "good", "it", "the", "a", "an", "me",
+            "you", "your", "my", "and", "but", "so", "that", "this", "what", "where", "why", "how", "who", "which", "not", "part", "just",
+            "really", "very", "all", "about", "like", "going", "gonna", "getting", "what's", "it's", "because", "now", "here", "there",
+            "then", "too", "also", "only", "still", "actually", "definitely", "probably", "literally", "great", "cool", "nice", "awesome",
+            "amazing", "weird", "strange", "crazy", "wild", "wrong", "right", "true", "false", "bad", "worse", "better", "best", "hard",
+            "easy", "interesting", "important", "funny", "annoying", "broken", "working", "done", "new", "old", "big", "small", "our",
+            "his", "her", "their", "its", "some", "any", "no", "one", "exactly", "insane", "revia", "anytime", "tomorrow", "tonight",
+            "whenever", "sometime", "again", "maybe"};
+        return std::find(notNames.begin(), notNames.end(), lowered) != notNames.end();
+    }
+
+    // The speaker's own words, quotes excluded, as lowered word lists per clause.
+    std::vector<std::vector<std::string>> AuthoredClauses(const std::string& userInput, const std::string_view boundaries)
+    {
+        std::string authored = Lower(conversation::ReadSpeechAttribution(userInput).userAuthoredText);
+        for (std::size_t at = authored.find("\xE2\x80\x99"); at != std::string::npos; at = authored.find("\xE2\x80\x99", at))
+            authored.replace(at, 3, "'");
+        std::vector<std::vector<std::string>> clauses(1);
+        std::string word;
+        for (const char character : authored + '.')
+        {
+            if (std::isalpha(static_cast<unsigned char>(character)) != 0 || character == '\'' || character == '-')
+            {
+                word.push_back(character);
+                continue;
+            }
+            if (!word.empty())
+                clauses.back().push_back(std::move(word));
+            word.clear();
+            if (boundaries.find(character) != std::string_view::npos && !clauses.back().empty())
+                clauses.emplace_back();
+        }
+        if (clauses.back().empty())
+            clauses.pop_back();
+        return clauses;
+    }
+
     bool IsExplicitNameCorrection(const std::string& input, const std::size_t at, const std::size_t end)
     {
         // Require a complete final introduction; a conditional, example or joke tail
@@ -353,24 +394,7 @@ std::string ReadStatedName(const std::string& userInput)
             {
                 continue;
             }
-            // Rejecting these matters: "call me later" and "this is fine" both match an
-            // opener, and storing them would rename the person to a stray word.
-            static const std::vector<std::string> notNames = {
-                "later", "back", "when", "if", "fine", "good", "it", "the", "a", "an",
-                "me", "you", "your", "my", "and", "but", "so", "that", "this", "what",
-                "where", "why", "how", "who", "which", "not", "part", "just", "really",
-                "very", "all", "about", "like", "going", "gonna", "getting", "what's",
-                "it's", "because", "now", "here", "there", "then", "too", "also",
-                "only", "still", "actually", "definitely", "probably", "literally",
-                "great", "cool", "nice", "awesome", "amazing", "weird", "strange", "crazy",
-                "wild", "wrong", "right", "true", "false", "bad", "worse", "better", "best",
-                "hard", "easy", "interesting", "important", "funny", "annoying", "broken",
-                "working", "done", "new", "old", "big", "small", "our", "his", "her",
-                "their", "its", "some", "any", "no", "one", "exactly", "insane", "revia",
-                "anytime", "tomorrow", "tonight", "whenever", "sometime", "again", "maybe"
-            };
-            const std::string loweredName = Lower(name);
-            if (std::find(notNames.begin(), notNames.end(), loweredName) != notNames.end())
+            if (IsNotAName(Lower(name)))
             {
                 continue;
             }
@@ -380,6 +404,71 @@ std::string ReadStatedName(const std::string& userInput)
         }
         if (!stated.empty()) return stated;
     }
+    return {};
+}
+
+std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::string& currentName)
+{
+    const std::string current = Lower(currentName);
+    if (current.empty())
+        return {};
+    // The contrast must reject the exact name in use, and the new name must follow a
+    // self-reference: "I meant", "I said", "I'm", "it's". "Send it to Ana, not Jo" and
+    // "I told Ana, not Jo" are about other people.
+    for (const auto& words : AuthoredClauses(userInput, ".!?;\n"))
+    {
+        for (std::size_t index = 1; index + 2 < words.size(); ++index)
+        {
+            if (words[index + 1] != "not" || words[index + 2] != current || words[index] == current)
+                continue;
+            const std::string& frame = words[index - 1];
+            const std::string before = index >= 2 ? words[index - 2] : std::string();
+            const bool selfReference = frame == "im" || frame == "i'm" || frame == "its" || frame == "it's" ||
+                                       ((frame == "meant" || frame == "said" || frame == "am") && before == "i") ||
+                                       (frame == "is" && before == "it");
+            if (selfReference && words[index].size() >= 2 && !IsNotAName(words[index]))
+            {
+                std::string corrected = words[index];
+                corrected[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(corrected[0])));
+                return corrected;
+            }
+        }
+    }
+    return {};
+}
+
+std::string ReadReturningSpeaker(const std::string& userInput, const std::vector<std::string>& knownNames)
+{
+    const auto known = [&knownNames](const std::string& word) -> std::string
+    {
+        for (const auto& name : knownNames)
+            if (!name.empty() && Lower(name) == word)
+                return name;
+        return {};
+    };
+    static const std::vector<std::string_view> greetings = {"hey", "hi", "hello", "hiya", "yo", "oh", "ok", "okay", "so", "well", "revia"};
+    auto clauses = AuthoredClauses(userInput, ",.!?;\n");
+    for (auto& clause : clauses)
+        while (!clause.empty() && std::find(greetings.begin(), greetings.end(), clause.front()) != greetings.end())
+            clause.erase(clause.begin());
+    std::erase_if(clauses, [](const auto& clause) { return clause.empty(); });
+    if (clauses.empty())
+        return {};
+    // Only the opening clause introduces someone: "it's Mari", "I'm Mari again",
+    // "Mari here" or "it's me, Mari". "I'm Mari's cousin" names nobody present.
+    auto first = clauses.front();
+    const bool itsMe = first == std::vector<std::string>{"it's", "me"} || first == std::vector<std::string>{"its", "me"} ||
+                       first == std::vector<std::string>{"it", "is", "me"};
+    if (itsMe)
+        return clauses.size() > 1 && clauses[1].size() == 1 ? known(clauses[1][0]) : std::string();
+    if (first.size() == 2 && first.back() == "here")
+        return known(first.front());
+    if (first.size() >= 3 && (first.back() == "again" || first.back() == "here"))
+        first.pop_back();
+    if (first.size() == 2 && (first[0] == "it's" || first[0] == "its" || first[0] == "i'm" || first[0] == "im"))
+        return known(first[1]);
+    if (first.size() == 3 && ((first[0] == "it" && first[1] == "is") || (first[0] == "i" && first[1] == "am")))
+        return known(first[2]);
     return {};
 }
 
