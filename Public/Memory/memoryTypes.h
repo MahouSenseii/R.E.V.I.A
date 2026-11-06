@@ -12,6 +12,14 @@ enum class memoryImportance
     High
 };
 
+// The exchange just before the one being judged, from the same person in the same audience.
+// Context for what "she" or "it" means, never a source of facts to remember.
+struct previousExchange
+{
+    std::string user;
+    std::string reply;
+};
+
 struct memoryEntry
 {
     std::string id;

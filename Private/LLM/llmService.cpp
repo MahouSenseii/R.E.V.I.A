@@ -515,7 +515,8 @@ responseOutput llmService::AnalyzeImage(const std::filesystem::path& imagePath, 
 }
 
 memoryDecision llmService::EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope) const
+    const revia::agents::ResponseProvenance provenance, const std::stop_token stopToken, const revia::memory::MemoryScope& scope,
+    const previousExchange& previous) const
 {
     if (!bIsReady)
     {
@@ -527,7 +528,7 @@ memoryDecision llmService::EvaluateMemory(const std::string& userMessage, const 
     switch (backendType)
     {
         case llmBackendType::LLamaCpp:
-            return llamaCpp.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope);
+            return llamaCpp.EvaluateMemory(userMessage, assistantMessage, provenance, stopToken, scope, previous);
         case llmBackendType::Placeholder:
         {
             memoryDecision decision;

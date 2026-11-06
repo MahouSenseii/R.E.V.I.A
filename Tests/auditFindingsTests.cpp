@@ -1441,8 +1441,34 @@ void TestConcurrentPresenceWritesNeverRegress()
 
 } // namespace
 
+// "she's four, not three" means nothing without the turn before it, and that turn must be
+// the same person's: interleaved speakers each keep their own previous exchange.
+void TestPreviousExchangeStaysWithItsSpeaker()
+{
+    MemoryAgent agent;
+    messageRouter router;
+    revia::memory::MemoryScope mari;
+    mari.companionId = "fixture";
+    mari.participantId = "local:mari";
+    mari.audience.audienceId = "local-private";
+    auto jo = mari;
+    jo.participantId = "local:jo";
+    const auto submit = [&](const std::string& input, const revia::memory::MemoryScope& scope)
+    { agent.Submit(router, input, "ok", revia::agents::ResponseProvenance::NormalGeneration, 1, [] { return true; }, scope); };
+    submit("my dog Biscuit is three", mari);
+    submit("hi, I'm Jo", jo);
+    Check(revia::agents::MemoryAgentTestAccess::LastExchange(agent, mari).user == "my dog Biscuit is three" &&
+              revia::agents::MemoryAgentTestAccess::LastExchange(agent, jo).user == "hi, I'm Jo",
+        "Another person's turn replaced a speaker's previous exchange.");
+    submit("wait, she's four, not three", mari);
+    Check(revia::agents::MemoryAgentTestAccess::LastExchange(agent, mari).user == "wait, she's four, not three" &&
+              revia::agents::MemoryAgentTestAccess::LastExchange(agent, jo).user == "hi, I'm Jo",
+        "A speaker's exchange leaked into another person's record.");
+}
+
 void RunAuditFindingsTests()
 {
+    TestPreviousExchangeStaysWithItsSpeaker();
     TestEachCameraCanActuallyBeChosen();
     TestTheChosenCameraIsNotTheDefaultOne();
     TestAnExplicitCameraIsNeverSubstituted();

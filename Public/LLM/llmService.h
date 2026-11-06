@@ -67,7 +67,8 @@ public:
     // has no default on purpose: a caller that does not know must decide, because the
     // safe answer and the convenient answer are not the same one.
     memoryDecision EvaluateMemory(const std::string& userMessage, const std::string& assistantMessage,
-        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {}) const;
+        revia::agents::ResponseProvenance provenance, std::stop_token stopToken = {}, const revia::memory::MemoryScope& scope = {},
+        const previousExchange& previous = {}) const;
     healthOutput CheckEmbeddingHealth(std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemory(const std::string& summary, std::stop_token stopToken = {}) const;
     embeddingOutput EmbedMemoryQuery(const std::string& query, std::stop_token stopToken = {}) const

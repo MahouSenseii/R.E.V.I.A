@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <functional>
 #include <set>
 #include <mutex>
@@ -216,6 +217,8 @@ private:
         const messageRouter* router = nullptr;
         std::string input;
         std::string assistantResponse;
+        // The same person's exchange just before this one, for references like "she".
+        previousExchange previous;
         ResponseProvenance provenance = ResponseProvenance::NormalGeneration;
         memory::MemoryScope scope;
         std::string memoryId;
@@ -269,6 +272,9 @@ private:
 
     memoryManager memory;
     mutable std::mutex mutex;
+    // Each participant's latest exchange, keyed by companion, audience and participant, so
+    // one person's words are never context for another's memory. Recorded in submit order.
+    std::map<std::string, previousExchange> lastExchangeByParticipant;
     std::condition_variable_any taskAvailable;
     std::deque<Task> interactiveTasks;
     std::deque<Task> learningTasks;

@@ -316,6 +316,29 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
             });
         Check(told, "The memory selector is not told that the speaker's plans and pets are the speaker's, or that others' are not.");
     }
+    // "wait I misspoke, she's four, not three": alone, "she" was read as a cousin, or the
+    // correction was skipped as a duplicate. The previous turn travels as context only.
+    {
+        std::lock_guard lock(mutex);
+        answer = R"({"shouldRemember":true,"category":"identity","subject":"speaker",)"
+                 R"("summary":"The user's dog Biscuit is four years old.","reason":"Correction."})";
+    }
+    (void)service.EvaluateMemory("wait I misspoke, she's four, not three", "Four it is.", ResponseProvenance::NormalGeneration, {}, scope,
+        {"my dog Biscuit is three", "Cute."});
+    {
+        std::lock_guard lock(mutex);
+        Check(!envelopes.empty() && envelopes.back().contains("previous_turn") &&
+                  envelopes.back()["previous_turn"].value("user", "") == "my dog Biscuit is three" &&
+                  envelopes.back()["previous_turn"].value("revia", "") == "Cute." &&
+                  instructions.back().find("never remember a fact that appears only in previous_turn") != std::string::npos &&
+                  instructions.back().find("remember the corrected fact in full") != std::string::npos,
+            "The memory selector did not get the previous turn as context, or the correction rule.");
+    }
+    (void)service.EvaluateMemory("I prefer mint tea.", "Understood.", ResponseProvenance::NormalGeneration, {}, scope);
+    {
+        std::lock_guard lock(mutex);
+        Check(!envelopes.back().contains("previous_turn"), "A previous turn was invented when none was supplied.");
+    }
     {
         std::lock_guard lock(mutex);
         answer = R"({"shouldRemember":true,"category":"relationship","subject":"other",)"

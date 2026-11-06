@@ -15,6 +15,15 @@ struct MemoryAgentTestAccess
         agent.backfillMaximumRetry = std::chrono::milliseconds(320);
     }
 
+    // The exchange recorded for one person in one audience; empty when there is none.
+    static previousExchange LastExchange(MemoryAgent& agent, const revia::memory::MemoryScope& scope)
+    {
+        std::lock_guard lock(agent.mutex);
+        const auto found =
+            agent.lastExchangeByParticipant.find(scope.companionId + '\n' + scope.audience.audienceId + '\n' + scope.participantId);
+        return found == agent.lastExchangeByParticipant.end() ? previousExchange{} : found->second;
+    }
+
     static void SetEvaluator(MemoryAgent& agent, std::function<memoryDecision(const std::string&, const std::string&)> evaluator)
     {
         std::lock_guard lock(agent.mutex);
