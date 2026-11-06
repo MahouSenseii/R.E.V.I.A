@@ -1,17 +1,17 @@
 {
   "schema_version": 3,
-  "milestone": "Revia source through PR41; RNL paused; direct comparison incomplete",
+  "milestone": "Revia source through PR43; RNL paused; direct comparison incomplete",
   "recorded_utc": "2026-11-05",
   "refresh_mode": "Manual, source-pinned snapshot; no live monitoring",
   "repository": "MahouSenseii/R.E.V.I.A",
   "current": {
     "as_of": "2026-11-05",
-    "source_commit": "a4bd7114c0421e2d3f13aff3bae28cea461fbdd2",
-    "source_pr": 41,
+    "source_commit": "e70677b23bc867da414da34afc6c40bbb91eaeb6",
+    "source_pr": 43,
     "state": "Paused at a safe stopping point",
     "refresh_mode": "Manual, source-pinned snapshot; no live monitoring",
     "ci": {
-      "run": 42135568077,
+      "run": 42150040299,
       "jobs_passed": 6,
       "passed": 155,
       "failed": 0,
@@ -51,13 +51,13 @@
     }
   },
   "source": {
-    "main_commit": "a4bd7114c0421e2d3f13aff3bae28cea461fbdd2",
+    "main_commit": "e70677b23bc867da414da34afc6c40bbb91eaeb6",
     "installed_app_updated": false,
     "release_qualified": false
   },
   "product_delivery": "Merged source on GitHub main; installed app unchanged; no application deployment",
   "integration": {
-    "main_commit": "a4bd7114c0421e2d3f13aff3bae28cea461fbdd2",
+    "main_commit": "e70677b23bc867da414da34afc6c40bbb91eaeb6",
     "installed_app_updated": false,
     "runtime_release_qualified": false
   },
@@ -73,6 +73,13 @@
   },
   "counts_scope": "Historical 153-registration controlled checkpoint ONLY. Current source CI is current.ci; discovery is not a pass count.",
   "changes": [
+    {
+      "pr": 43,
+      "title": "Report what unverified workers found, labelled unconfirmed.",
+      "summary": "A delegated task that ends unverified now tells you what the workers read and found, instead of “nothing established” or an invented bug.",
+      "detail": "A worker that calls its own work unverified ends the run, and its deliverable used to be discarded. Revia’s report then got only a stage list: replaying the live report turn, 6 of 8 replies said “nothing established” and 2 invented bugs nobody had found. The workflow now keeps that deliverable beside the attempt, never as an accepted or reviewed result, and only when it meets the node’s deliverable contract; a review found the first version checked only the hash, and a valid hash over missing or broken sections is now dropped (regression failed before, passes after). The report relays it as the worker’s own unconfirmed claims, with the host receipts as the only facts: 8 of 8 replays relayed what the workers found, and none invented a finding. Verification, review and acceptance are unchanged.",
+      "next": "Repeat the live delegated runs on more tasks; decide whether an unverified worker should get one bounded retry."
+    },
     {
       "pr": 41,
       "title": "Keep the right person, file their plans, reach the agents.",
@@ -210,11 +217,11 @@
     {
       "id": "report",
       "area": "Revia",
-      "title": "A useful delegated report is still not established.",
-      "summary": "Hand-off, file reading, responsiveness and honest reporting now work live. No run produced an accepted report.",
-      "status": "Open · narrowed by live runs",
-      "detail": "Three full live runs after PR41: every run handed off, the workers read both files, chat answered in 1.4–2.5 s while they worked, and Revia reported the outcome honestly. One investigation was verified and the independent check then declined, because the code depends on files outside the approved folder. Two investigations called themselves unverified; defining “verified” raised that from 1/8 to 4/8 in replays. The remaining step is the model’s own judgement.",
-      "next": "Decide whether the host, rather than the model, should judge receipt coverage, or requalify with a larger model."
+      "title": "Delegated reports are not yet reliable.",
+      "summary": "One live run produced a fully accepted report; unverified runs now report what the workers found, marked unconfirmed.",
+      "status": "Open · first accepted live report",
+      "detail": "Six live runs after PR41. Five handed off; one did not, though her reply said it would (the host receipt still said no task started). The workers read the files, and chat answered in 1.4–3.9 s while they worked. One run passed investigation, verification, independent review and acceptance, and she reported the accepted review 55 s after the hand-off. The others ended unverified: the verification worker declines a finding about code outside the approved folder, and the 4B often calls its own reading unverified. Since PR43 those reports relay what the workers found, marked unconfirmed, instead of saying nothing or inventing a bug.",
+      "next": "Measure completion over more tasks; decide on one bounded retry for an unverified worker, or requalify with a larger model."
     },
     {
       "id": "history",
@@ -249,7 +256,7 @@
       "title": "Code checks do not qualify the installed app.",
       "summary": "Restart memory, physical desktop, real voice/media and release checks remain separately scoped.",
       "status": "Open · runtime qualification",
-      "detail": "The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records.",
+      "detail": "The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off. PR43’s pull-request run also failed once in the Windows WebDemo native-host test, 0.37 s in and with no message, while all 157 native tests and the twin run passed; it passed on re-run, and its cause is unknown.",
       "next": "Choose one controlled runtime workflow after the source and installed revision are reconciled."
     }
   ],

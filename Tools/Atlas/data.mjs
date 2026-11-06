@@ -1,13 +1,13 @@
 export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
-export const pin='a4bd7114c0421e2d3f13aff3bae28cea461fbdd2';
+export const pin='e70677b23bc867da414da34afc6c40bbb91eaeb6';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
   as_of:'2026-11-05',
   source_commit:pin,
-  source_pr:41,
+  source_pr:43,
   state:'Paused at a safe stopping point',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
-  ci:{run:42135568077,jobs_passed:6,passed:155,failed:0,optional_skips:2},
+  ci:{run:42150040299,jobs_passed:6,passed:155,failed:0,optional_skips:2},
   installed_app:'Not updated or freshly audited by this work',
   research:{
     public_source_commit:researchPin,
@@ -113,7 +113,7 @@ export const issues=[
   {id:'runtime',area:'Revia',title:'Code checks do not qualify the installed app.',
     summary:'Restart memory, physical desktop, real voice/media and release checks remain separately scoped.',
     status:'Open · runtime qualification',
-    detail:'The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off.',
+    detail:'The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off. PR43’s pull-request run also failed once in the Windows WebDemo native-host test, 0.37 s in and with no message, while all 157 native tests and the twin run passed; it passed on re-run, and its cause is unknown.',
     next:'Choose one controlled runtime workflow after the source and installed revision are reconciled.'}
 ];
 

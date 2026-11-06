@@ -19,9 +19,9 @@ applies to their own date.
 
 ## Verified Revia source
 
-[PR #41](https://github.com/MahouSenseii/R.E.V.I.A/pull/41) is merged at
-[a4bd7114c0421e2d3f13aff3bae28cea461fbdd2](https://github.com/MahouSenseii/R.E.V.I.A/commit/a4bd7114c0421e2d3f13aff3bae28cea461fbdd2).
-[CI 42135568077](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42135568077)
+[PR #43](https://github.com/MahouSenseii/R.E.V.I.A/pull/43) is merged at
+[e70677b23bc867da414da34afc6c40bbb91eaeb6](https://github.com/MahouSenseii/R.E.V.I.A/commit/e70677b23bc867da414da34afc6c40bbb91eaeb6).
+[CI 42150040299](https://github.com/MahouSenseii/R.E.V.I.A/actions/runs/42150040299)
 passed six jobs: 155 tests passed, 0 failed, 2 optional video skips.
 That result is hosted application-source evidence, not a new local test run.
 
