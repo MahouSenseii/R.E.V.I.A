@@ -432,6 +432,9 @@ struct AgentWorkflow::Impl
         std::string fingerprint;
         std::string privateDiagnostic;
         std::optional<WorkflowArtifact> artifact;
+        // A completed, well-formed deliverable its worker did not verify: kept only so the
+        // person can be told what was found, never admitted as this node's artifact.
+        std::optional<WorkflowArtifact> unverifiedArtifact;
     };
     struct Node
     {
@@ -630,6 +633,10 @@ struct AgentWorkflow::Impl
                 attempt.artifact = node.artifact;
                 attempt.view.artifact = ArtifactReference{id, node.artifact->id, node.artifact->version, node.artifact->hash};
             }
+            // Only a deliverable that meets its contract: a valid hash over missing or broken
+            // sections is malformed output, and it is never shown to the person as a report.
+            else if (result.succeeded && completeDeliverable)
+                attempt.unverifiedArtifact = std::move(result.artifact);
             attempt.view.state = state;
             attempt.view.diagnostic = state == WorkflowState::Cancelled ? "The attempt was cancelled; its late result was not admitted."
                                       : state == WorkflowState::Failed
@@ -1137,6 +1144,22 @@ std::optional<WorkflowArtifact> AgentWorkflow::AcceptedArtifact() const
     if (parent == impl->nodes.end() || !parent->artifact || parent->history.empty() || !parent->history.back().view.verified)
         return std::nullopt;
     return parent->artifact;
+}
+std::vector<WorkerDeliverable> AgentWorkflow::WorkerDeliverables() const
+{
+    std::lock_guard lock(impl->mutex);
+    std::vector<WorkerDeliverable> found;
+    for (const auto& node : impl->nodes)
+    {
+        if (node.spec.role != WorkflowRole::Worker || node.history.empty())
+            continue;
+        const auto& attempt = node.history.back();
+        if (attempt.view.state == WorkflowState::Succeeded && attempt.artifact)
+            found.push_back({node.spec.id, true, *attempt.artifact});
+        else if (attempt.view.state == WorkflowState::Failed && attempt.unverifiedArtifact)
+            found.push_back({node.spec.id, false, *attempt.unverifiedArtifact});
+    }
+    return found;
 }
 std::optional<WorkflowArtifact> AgentWorkflow::CandidateArtifact() const
 {

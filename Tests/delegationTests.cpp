@@ -198,6 +198,13 @@ class DelegationBackend
         std::lock_guard lock(mutex);
         workersVerified = verified;
     }
+    // Worker deliverables then leave every section empty with no reason: valid JSON with a
+    // valid hash once the host stores it, but outside the deliverable contract.
+    void SetWorkersMalformed(const bool malformed)
+    {
+        std::lock_guard lock(mutex);
+        workersMalformed = malformed;
+    }
     // Reported usage on the reviewer's answer, enough to spend the token budget before the
     // parent check can run.
     void SetReviewerTokens(const unsigned tokens)
@@ -330,6 +337,7 @@ class DelegationBackend
         ToolProposalScript proposalScript;
         std::string reportText;
         bool verified = true;
+        bool malformed = false;
         unsigned tokens = 0;
         {
             std::unique_lock lock(mutex);
@@ -358,6 +366,7 @@ class DelegationBackend
             proposalScript = toolProposal;
             reportText = report;
             verified = workersVerified || kind != Kind::Worker;
+            malformed = workersMalformed && kind == Kind::Worker;
             tokens = kind == Kind::Reviewer ? reviewerTokens : 0;
         }
         const auto plain = [&response, tokens](const std::string& content)
@@ -385,7 +394,14 @@ class DelegationBackend
         case Kind::Worker:
         case Kind::Reviewer:
         case Kind::Parent:
-            return plain(Deliverable(wire, verified).dump());
+        {
+            auto payload = Deliverable(wire, verified);
+            if (malformed)
+                for (auto& field : payload.items())
+                    if (field.value().is_object() && field.value().contains("items"))
+                        field.value() = {{"items", Json::array()}, {"noneReason", ""}};
+            return plain(payload.dump());
+        }
         case Kind::Report:
             return stream({Text(reportText)});
         case Kind::Chat:
@@ -402,6 +418,7 @@ class DelegationBackend
     ToolProposalScript toolProposal;
     std::string report = "My agents traced it: fixture/service.conf sets port 8125, and the review confirmed it.";
     bool workersVerified = true;
+    bool workersMalformed = false;
     unsigned reviewerTokens = 0;
     bool refusingTools = false;
     bool holding = false;
@@ -1022,6 +1039,119 @@ void TestUnverifiedWorkIsReportedAsNotEstablished()
     Check(fixture.Reports().size() == 1 && report.size() == 1 && report[0].dump().find("did NOT verify") != std::string::npos &&
               fixture.session.AgentWorkflowSnapshot().state != revia::agents::WorkflowState::Accepted,
         "Unverified work was presented as verified, or accepted.");
+    // What the workers handed in still reaches her, labelled as theirs and unconfirmed. Given
+    // only the stage list, a live report said nothing, or invented bugs nobody had found.
+    const std::string sent = report.empty() ? std::string{} : report[0].dump();
+    Check(sent.find("The port is set in fixture/service.conf (port=8125).") != std::string::npos &&
+              sent.find("NOT verified, even by its worker") != std::string::npos &&
+              sent.find("Relay it as that worker's own unconfirmed claims") != std::string::npos &&
+              sent.find("No finding from this run is established") != std::string::npos,
+        "The unverified report did not carry what the workers found, or did not label it as unconfirmed.");
+    const auto workers = fixture.session.AgentWorkflowSnapshot().nodes;
+    Check(std::none_of(workers.begin(), workers.end(),
+              [](const auto& node) { return node.role == revia::agents::WorkflowRole::Reviewer && !node.attempts.empty(); }),
+        "An unverified worker deliverable was passed on to the reviewer.");
+}
+
+// Workers that hand in sections outside the contract give her nothing to relay: the report
+// says only that nothing was established, never the malformed text.
+void TestMalformedWorkIsNotPresentedAsAReport()
+{
+    SessionFixture fixture("delegation-malformed");
+    fixture.backend.SetWorkersVerified(false);
+    fixture.backend.SetWorkersMalformed(true);
+    fixture.backend.SetReport("My agents could not establish anything.");
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::NotEstablished);
+    Check(settled, "Malformed work was not reported as not established; " + fixture.Describe());
+    const auto report = fixture.backend.Requests(DelegationBackend::Kind::Report);
+    const std::string sent = report.empty() ? std::string{} : report[0].dump();
+    Check(report.size() == 1 && sent.find("The port is set in fixture/service.conf") == std::string::npos &&
+              sent.find("unconfirmed claims") == std::string::npos &&
+              sent.find("No finding from this run is established. Its full record is in Agent Studio") != std::string::npos,
+        "Malformed worker output was presented in the report as what the workers found.");
+}
+
+// A worker's unverified deliverable can be read to tell the person what was found, and is
+// never admitted: not a node artifact, not a prerequisite, not a candidate.
+void TestUnverifiedDeliverablesAreReadableButNeverAdmitted()
+{
+    using namespace revia::agents;
+    if (AgentWorkflow::ArtifactHash("probe").empty())
+    {
+        std::cout << "Unverified deliverable checks skipped: this platform build has no artifact hash.\n";
+        return;
+    }
+    WorkflowSpec spec;
+    spec.id = "unverified-fixture";
+    const DeliverableRequirement steps{DeliverableSection::Steps, "List what was found.", false};
+    spec.nodes = {{"parent", "", WorkflowRole::Parent, 3, "Acceptance", "Accept", "objective", "e1", {"review"}, true, {{steps}, true}},
+        {"first", "parent", WorkflowRole::Worker, 1, "First", "Investigate", "objective", "e1", {}, true, {{steps}, false}},
+        {"second", "parent", WorkflowRole::Worker, 1, "Second", "Check", "objective", "e1", {}, true, {{steps}, false}},
+        {"review", "parent", WorkflowRole::Reviewer, 1, "Reviewer", "Review", "objective", "e1", {"first", "second"}, true,
+            {{steps}, true}}};
+    RuntimeStamp stamp;
+    stamp.companionId = "fixture";
+    stamp.sessionId = "session";
+    stamp.generation = 1;
+    stamp.taskId = spec.id;
+    // Malformed: a hash that does not match. MissingSections and BrokenSections hash correctly
+    // but fail the contract: no "steps" at all, or steps with no items and no reason.
+    enum class Kind { Unverified, Verified, Malformed, MissingSections, BrokenSections };
+    // Each run: what the first and the second worker hand in. Only the first run keeps two.
+    for (const auto [firstKind, secondKind] : {std::pair{Kind::Unverified, Kind::Verified}, std::pair{Kind::Malformed, Kind::Unverified},
+             std::pair{Kind::MissingSections, Kind::Unverified}, std::pair{Kind::BrokenSections, Kind::Unverified}})
+    {
+        std::atomic<bool> reviewerRan{false};
+        const auto provider = [&reviewerRan, firstKind, secondKind](const NodeRequest& request, std::stop_token)
+        {
+            if (request.node.role == WorkflowRole::Reviewer)
+                reviewerRan = true;
+            const Kind kind = request.node.id == "first" ? firstKind : secondKind;
+            NodeResult result;
+            Json payload = {{"summary", request.node.id + " found it."}, {"evidence", "Fixture."},
+                {"steps", {{"items", {"Found it."}}, {"noneReason", ""}}}, {"prerequisiteEvidence", Json::array()}};
+            if (kind == Kind::MissingSections)
+                payload.erase("steps");
+            else if (kind == Kind::BrokenSections)
+                payload["steps"] = {{"items", Json::array()}, {"noneReason", ""}};
+            result.succeeded = true;
+            result.verified = kind == Kind::Verified;
+            result.artifact.content = payload.dump();
+            result.artifact.id = request.node.id + "-artifact";
+            result.artifact.version = request.attempt;
+            result.artifact.hash = kind == Kind::Malformed ? std::string(64, '0') : AgentWorkflow::ArtifactHash(result.artifact.content);
+            return result;
+        };
+        AgentWorkflow workflow;
+        std::string error;
+        Check(workflow.Start(spec, stamp, provider, error), error);
+        workflow.Join();
+        const auto deliverables = workflow.WorkerDeliverables();
+        if (firstKind == Kind::Unverified)
+            Check(deliverables.size() == 2 && deliverables[0].nodeId == "first" && !deliverables[0].verified &&
+                      deliverables[0].artifact.content.find("first found it.") != std::string::npos &&
+                      deliverables[1].nodeId == "second" && deliverables[1].verified,
+                "Worker deliverables were lost or mislabelled.");
+        else
+            Check(deliverables.size() == 1 && deliverables[0].nodeId == "second" && !deliverables[0].verified &&
+                      deliverables[0].artifact.content.find("first found it.") == std::string::npos,
+                "A malformed deliverable (bad hash, or a good hash over missing or broken sections) was kept, or an unverified "
+                "one was lost.");
+        const auto snapshot = workflow.Snapshot();
+        const auto unverified = std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(),
+            [&](const auto& node) { return node.id == (firstKind == Kind::Unverified ? "first" : "second"); });
+        Check(unverified != snapshot.nodes.end() && unverified->state == WorkflowState::Failed && !unverified->attempts.back().artifact &&
+                  !reviewerRan.load() && !workflow.CandidateArtifact() && snapshot.state != WorkflowState::Accepted,
+            "An unverified deliverable was admitted as an artifact, reached the reviewer, or became a candidate.");
+    }
 }
 
 // With approved folders the workers get tools, but only to read; and starting them from chat
@@ -1751,6 +1881,8 @@ void RunDelegationTests()
     TestCancelReachesOnlyTheNamedTask();
     TestStaleOutcomesAreNeverReported();
     TestUnverifiedWorkIsReportedAsNotEstablished();
+    TestUnverifiedDeliverablesAreReadableButNeverAdmitted();
+    TestMalformedWorkIsNotPresentedAsAReport();
     TestToolWorkersAreReadOnlyAndKeepTheReply();
     TestWorkersAreToldWhichListedFilesAreUnread();
     TestHandoffRetainsPrimaryUserPathsWithoutGrantingAuthority();
