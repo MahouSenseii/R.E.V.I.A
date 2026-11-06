@@ -89,6 +89,7 @@ ReviaMcpClientTests
 ReviaMemoryCorrectionAgentTests
 ReviaMemoryCorrectionRuntimeTests
 ReviaMemoryCorrectionTests
+ReviaFactVersioningTests
 ReviaMemoryRevisionTests
 ReviaMemoryScopeTests
 ReviaOperatorUpgradeTests
