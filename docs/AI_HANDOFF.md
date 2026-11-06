@@ -89,7 +89,7 @@ limits remain in the dated records.
 
 ## RNL evidence boundary
 
-RNL is paused; no rerun, lifecycle fixture, continuation or upload is active.
+RNL is closed out (6 November 2026); no training, continuation or upload is active.
 [Public research source](https://github.com/MahouSenseii/R.E.V.I.A/tree/aac6f161fd080db400317670e4b3a78973dbb105/research/rnl)
 is pinned at aac6f161fd080db400317670e4b3a78973dbb105 through STATE-010.
 Later Atlas summaries do not release the corresponding source and detailed evidence.
@@ -100,16 +100,26 @@ versus 970/1008 for original/sham, recovering 38 errors without new ones.
 These are synthetic four-key/eight-value studies with supplied/parsed keys.
 They do not establish general routing, language understanding, conversation
 memory, equal-capacity training, an LLM replacement or a Revia improvement.
-STATE-017 scaling is proposed only. Candidate for Revia: None. Integrated: None.
+STATE-017 (local, development data only) trained RNL against a compact keyed
+store on a synthetic people-and-facts task with corrections, misspellings,
+aliases and overload, at 64-512 floats per conversation. Two designs (63 models,
+three seeds) fell 7-32 points short of the store at every size; a diagnosed
+layout fix closed 7-11 points, and doubling training added under 1. It closed
+under its pre-registered stop rule. A no-training pre-check of a learned name
+matcher in front of a store found at most about 2.5 points of room once the
+store's baseline was corrected. Neither result proves RNL or every hybrid
+cannot work. The sealed test was never opened. Candidate for Revia: None.
+Integrated: None.
 
-COMPARE-001 retained 32 Qwen3.5-0.8B responses, then stopped on
-"Owned monitor did not join". RNL and exact lookup never ran. No gold accuracy
-was graded. The 34 preserved files are not the planned 46-file seal, so there is
-no valid comparative result or ranking, especially of the usual 4B model.
-Native processes exited and key removal was checked in the owner handoff.
+COMPARE-001 finished: RNL (three seeds) and exact lookup 32/32, Qwen3.5-0.8B
+17/32, every LLM miss an earlier overwritten value. Its first stop ("Owned
+monitor did not join") was traced to a disk census inside the log reader; the
+continuation reused the 34 preserved LLM files and sealed all 46 outputs before
+grading. It cannot rank the usual 4B model.
 
 Detailed local methods, source deltas, deterministic fixtures, seeds, predictions,
-traces, frozen snapshots and the partial comparison seal are still needed for
+traces, frozen snapshots, the comparison seal and the STATE-017 code, fixtures
+and checkpoints are still needed for
 reproduction. Raw local manifests/logs can contain private paths or process data.
 Review an exact sanitized inventory, hashes and destination before any upload.
 This summary alone cannot reproduce the local studies.

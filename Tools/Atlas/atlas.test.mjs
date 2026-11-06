@@ -18,16 +18,22 @@ test('the current entry point uses the verified source and scoped CI result',()=
   assert.equal(j.source.installed_app_updated,false);
   assert.equal(j.source.release_qualified,false);
 });
-test('research does not turn saved replies into a comparison or local evidence into public files',()=>{
+test('research reports the finished comparison and closeout without overclaiming or publishing local evidence',()=>{
   const r=record().current.research;
-  assert.equal(r.comparison_complete,false);
-  assert.equal(r.graded,false);
+  assert.equal(r.comparison_complete,true);
+  assert.equal(r.graded,true);
   assert.equal(r.saved_responses,32);
   assert.equal(r.integration,'None');
-  assert.equal(r.local_studies,'STATE-011–016');
-  assert.equal(r.proposed_study,'STATE-017');
-  assert.match(read('research.html'),/963\/1,008/);
-  assert.match(read('research.html'),/1,008\/1,008/);
+  assert.equal(r.candidate,'None');
+  assert.equal(r.local_studies,'STATE-011–017');
+  assert.equal(r.proposed_study,'None');
+  const page=read('research.html');
+  assert.match(page,/963\/1,008/);
+  assert.match(page,/1,008\/1,008/);
+  assert.match(page,/17\/32/);
+  assert.match(page,/not proof that RNL cannot work/);
+  assert.match(page,/not proof that every hybrid is useless/);
+  assert.match(page,/sealed test set was never opened/);
 });
 test('all public files preserve the original artifact and privacy boundary',()=>{
   assert.deepEqual(fs.readdirSync(root).sort(),files);
