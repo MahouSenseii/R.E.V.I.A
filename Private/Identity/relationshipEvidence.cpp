@@ -423,6 +423,52 @@ bool NamesThemselves(const std::string& userInput)
     return !ReadStatedNameFrom(userInput, false).empty();
 }
 
+bool AnnouncesAnotherPerson(const std::string& userInput)
+{
+    const auto at = [](const std::vector<std::string>& words, const std::size_t index, const std::initializer_list<std::string_view> run)
+    {
+        if (index + run.size() > words.size()) return false;
+        std::size_t offset = index;
+        for (const std::string_view word : run)
+            if (words[offset++] != word) return false;
+        return true;
+    };
+    for (const auto& words : AuthoredClauses(userInput, ".!?;,"))
+    {
+        for (std::size_t index = 0; index < words.size(); ++index)
+        {
+            // "not the same person" says so outright; "a different person" or "someone else"
+            // say so unless negated ("I'm not a different person").
+            if (at(words, index, {"not", "the", "same", "person"})) return true;
+            const bool negated = (index >= 1 && words[index - 1] == "not") || (index >= 2 && words[index - 2] == "not");
+            for (const auto run : {std::initializer_list<std::string_view>{"different", "person"}, {"someone", "else"},
+                     {"somebody", "else"}, {"new", "person"}, {"taking", "over"}, {"took", "over"}, {"my", "turn"}})
+                if (!negated && at(words, index, run)) return true;
+        }
+        // The one who was speaking has gone: "Noor left", "she's gone", "he had to go". A
+        // clause ending in "left" after a direction or an amount ("turn left", "nothing left")
+        // is not a departure, and the speaker leaving ("I left") is not a handover.
+        if (words.size() < 2 || words.front() == "i" || words.front() == "i'm" || words.front() == "i've" || words.front() == "we")
+            continue;
+        // "she's gone now", "Noor left already": a trailing time word does not change the departure.
+        static const std::vector<std::string> trailing = {"now", "already", "btw", "lol", "though", "today", "tonight", "again",
+            "actually", "just", "anyway"};
+        std::size_t end = words.size();
+        while (end > 2 && std::find(trailing.begin(), trailing.end(), words[end - 1]) != trailing.end())
+            --end;
+        const std::string& last = words[end - 1];
+        const std::string& before = words[end - 2];
+        static const std::vector<std::string> notDeparture = {"turn", "a", "the", "go", "keep", "bear", "hang", "take", "on", "to",
+            "nothing", "anything", "something", "none", "much", "little", "any", "some", "is", "are", "was", "were", "far", "upper", "lower"};
+        if ((last == "left" || last == "gone") && std::find(notDeparture.begin(), notDeparture.end(), before) == notDeparture.end())
+            return true;
+        if ((before == "to" && last == "go") || (before == "went" && last == "home") || (before == "stepped" && last == "away") ||
+            (before == "logged" && last == "off"))
+            return true;
+    }
+    return false;
+}
+
 std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::string& currentName)
 {
     const std::string current = Lower(currentName);

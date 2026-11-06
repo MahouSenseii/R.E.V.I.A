@@ -299,7 +299,8 @@ void TestNamesAreReadOnlyFromRealIntroductions()
         "\"call me\" matched inside another word.");
 }
 
-// Naming oneself versus someone arriving: only the first keeps what an unnamed speaker said.
+// Naming oneself versus someone arriving; both withhold what an unnamed speaker said, and
+// differ only in what she is told.
 void TestNamingOneselfIsNotAnArrival()
 {
     using revia::identity::NamesThemselves;
@@ -310,6 +311,22 @@ void TestNamingOneselfIsNotAnArrival()
     Check(!NamesThemselves("hi, this is Sam!") && !NamesThemselves("hey, it's Mari") && !NamesThemselves("Sam here") &&
               !NamesThemselves("call me later"),
         "An arrival or an ordinary remark was read as someone naming themselves.");
+}
+
+// An explicit handover is a different person even when the newcomer says "my name is".
+void TestAHandoverIsAnotherPerson()
+{
+    using revia::identity::AnnouncesAnotherPerson;
+    using revia::tests::Check;
+    for (const char* handover : {"Noor left. My name is Sam", "I'm a different person. Call me Sam.", "noor's gone, my name is Sam",
+             "she had to go, you can call me Sam", "hey, someone else here now. call me Sam", "not the same person btw, name's Sam",
+             "my turn! I'm called Sam", "Noor just stepped away. my name is Sam", "Noor logged off, call me Sam",
+             "ok Noor went home. my name is Sam", "Sam taking over from Noor, my name is Sam"})
+        Check(AnnouncesAnotherPerson(handover), std::string("A handover was not read as another person: ") + handover);
+    for (const char* same : {"btw call me Mari", "my name is Noor", "I left my keys at work, call me Mari", "turn left at the light",
+             "there's nothing left, my name is Mari", "I'm not a different person, call me Mari", "the pain is finally better, call me Mari",
+             "She said \"I'm a different person\" lol. call me Mari", "I had to go, call me Mari"})
+        Check(!AnnouncesAnotherPerson(same), std::string("An ordinary remark was read as a handover: ") + same);
 }
 
 void TestSpeakerNameCorrectionsRejectTheNameInUse()
@@ -470,6 +487,7 @@ void RunLoadAndNameTests()
     TestBatchClipFramingRefusesAnythingAmbiguous();
     TestNamesAreReadOnlyFromRealIntroductions();
     TestNamingOneselfIsNotAnArrival();
+    TestAHandoverIsAnotherPerson();
     TestSpeakerNameCorrectionsRejectTheNameInUse();
     TestReturningSpeakersAreOnlyKnownPeople();
     TestLearningANameKeepsEverythingEarned();
