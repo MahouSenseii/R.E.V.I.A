@@ -1716,6 +1716,34 @@ void TestUnreachableAgentsAreNamedInThePrompt()
     Check(!fixture.session.DelegatedTask() && fixture.session.AgentWorkflowSnapshot().id.empty(), "A refused handoff started a task.");
 }
 
+// Live, "use your agents..." once got "I'm going to delegate..." with no delegate_task call.
+// Her next turn now says no task started, until one does; a real hand-off clears it.
+void TestAMissedHandoffIsNotTreatedAsStarted()
+{
+    SessionFixture fixture("missed-handoff");
+    const std::string note = "Your last request to use your agents did not start a task";
+    const auto lastChat = [&] { return fixture.backend.Requests(DelegationBackend::Kind::Chat).back().dump(); };
+    fixture.backend.SetChat([](const Json&) { return std::vector<Json>{Text("I'm going to delegate this to my agents.")}; });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
+    Check(!fixture.session.DelegatedTask() && lastChat().find(note) == std::string::npos,
+        "A task started without a call, or the request turn itself was told it had failed.");
+    Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) != std::string::npos,
+        "The turn after a missed hand-off was not told that no task started.");
+    Check(fixture.Say("ok, anything else new?").succeeded && lastChat().find(note) != std::string::npos,
+        "The missed hand-off was forgotten while still true.");
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text("Handed off.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded && fixture.session.DelegatedTask(),
+        "The real hand-off did not start a task.");
+    Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) == std::string::npos,
+        "After a real hand-off she was still told no task had started.");
+}
+
 // "you told me yesterday you hate rain, right?" was agreed to every time live, with no such
 // line or memory anywhere. Every chat turn now says where her record of the past is; a
 // delegated report, which is not a reply to a claim, does not carry it.
@@ -1913,6 +1941,7 @@ void RunDelegationTests()
     TestOrdinaryConversationIsUnchanged();
     TestUnreachableAgentsAreNamedInThePrompt();
     TestPastClaimsAreCheckedAgainstTheRecord();
+    TestAMissedHandoffIsNotTreatedAsStarted();
     TestHeldReportRetainsOriginalConsentAdmission();
     TestCancelDuringReportPublication();
     std::cout << "Chat delegation checks passed.\n";

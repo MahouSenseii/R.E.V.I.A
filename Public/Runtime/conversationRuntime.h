@@ -429,6 +429,8 @@ private:
     // sure it was. Transient, like the tier.
     bool previousTurnWasUnreliable = false;
     std::atomic<bool> earlierSpeakerWithheld{false};
+    // The last "use your agents" request in this context started no task.
+    std::atomic<bool> lastHandoffNotStarted{false};
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
 };

@@ -370,6 +370,7 @@ void ConversationRuntime::ResetParticipantContinuity()
 {
     context.Clear();
     earlierSpeakerWithheld.store(false);
+    lastHandoffNotStarted.store(false);
     previousDeliveredTier.reset();
     previousTurnWasUnreliable = false;
 }
@@ -2008,6 +2009,9 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                                                   : "No new task was started for this request.";
             event.detail = submittedTaskId;
             events.Publish(std::move(event));
+            // Kept for her next turn: told nothing, she described progress on a task that never
+            // started, and sometimes findings nobody had made.
+            lastHandoffNotStarted.store(submittedTaskId.empty());
         }
         return finished;
     };
@@ -2156,6 +2160,12 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         replyNote += "\n\nWhat was said or done before is only what this chat shows and what your memories record. If the person "
                      "says you said, did or promised something earlier, check it there first: agree only when it is there; when it "
                      "is not, say you have no record of it, in your own voice, without inventing or confirming details.";
+        // After "use your agents" started no task, the next turn was asked how it was going: told
+        // nothing, 6 of 6 replays described agents still at work and 3 of 6 invented findings;
+        // with this statement, 6 of 6 said nothing had started and none invented a finding.
+        if (lastHandoffNotStarted.load() && !delegationRequested)
+            replyNote += "\n\nYour last request to use your agents did not start a task: nothing was handed off and no agent is "
+                         "working on it. If it comes up, say so plainly.";
         // Asked "who were you talking to before me?", she had no earlier lines and guessed.
         if (earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
             replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
