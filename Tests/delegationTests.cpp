@@ -564,6 +564,12 @@ void TestTheCueComesFromThePersonsOwnWords()
               ReadDelegationCue("Answer this directly please") == DelegationCue::AnswerDirectly &&
               ReadDelegationCue("don’t delegate it") == DelegationCue::AnswerDirectly,
         "Asking for a direct answer did not win over the words it contains.");
+    Check(ReadDelegationCue("use your agents to check delegation.cpp and tell me whether \"don't use your agents\" counts as "
+                            "asking you to delegate") == DelegationCue::UseAgents &&
+              ReadDelegationCue("my boss said \"use your agents for this\" but just answer directly") == DelegationCue::AnswerDirectly &&
+              ReadDelegationCue("is “don’t delegate” stronger than “answer directly”? use your agents to compare them") ==
+                  DelegationCue::UseAgents,
+        "Quoted words decided the cue instead of the person's own words.");
     Check(ReadDelegationCue("What do you think of that character?") == DelegationCue::None &&
               ReadDelegationCue("What's in the background of this picture?") == DelegationCue::None &&
               ReadDelegationCue("Who directed this movie?") == DelegationCue::None,

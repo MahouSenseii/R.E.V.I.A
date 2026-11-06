@@ -1,5 +1,7 @@
 #include "Agents/delegation.h"
 
+#include "Core/speechAttribution.h"
+
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
@@ -60,7 +62,10 @@ DelegationCue ReadDelegationCue(const std::string& input)
 {
     if (input.empty() || input.size() > 4000)
         return DelegationCue::None;
-    const std::string text = Normalized(input);
+    // Only the person's own words: a quoted "don't use your agents" inside "use your agents to
+    // check whether ..." is the subject of the question, not an instruction. Read whole, the
+    // quote won, delegate_task was never offered, and a live request went undelegated.
+    const std::string text = Normalized(conversation::ReadSpeechAttribution(input).userAuthoredText);
     // Asked first: "don't use your agents" contains "use your agents".
     if (ContainsAny(text, {"answer this directly", "answer that directly", "answer it directly", "answer directly", "just answer",
                               "don't delegate", "do not delegate", "dont delegate", "without your agents", "without the agents",
