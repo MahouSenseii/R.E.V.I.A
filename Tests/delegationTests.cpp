@@ -1771,6 +1771,50 @@ void TestPastClaimsAreCheckedAgainstTheRecord()
         "One person's chat was told another person had spoken.");
 }
 
+// An explicit handover is a privacy boundary even when the newcomer says "my name is" or "call
+// me": the unnamed speaker's private lines never reach the newcomer's request, and she is told
+// someone else spoke before. Someone simply naming themselves is withheld too (words cannot tell
+// the same person from a new one) and told the lines came before their name.
+void TestAnExplicitHandoverWithholdsTheEarlierSpeaker()
+{
+    const std::string privateLine = "my bank PIN reminder is under the blue mug";
+    const std::string otherPersonNote = "Earlier in this chat you were talking with someone else";
+    const std::string beforeNameNote = "This person gave their name partway through this chat";
+    const auto check = [&](const std::string& id, const std::string& introduction, const bool handover)
+    {
+        SessionFixture fixture(id);
+        Check(fixture.Say(privateLine).succeeded && fixture.Say("also my sister Ana is moving to Porto").succeeded,
+            "The unnamed speaker's turns failed: " + introduction);
+        Check(fixture.Say(introduction).succeeded && fixture.Say("what were we just talking about?").succeeded,
+            "The newcomer's turns failed: " + introduction);
+        const auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
+        Check(chat.size() >= 2, "No chat request was captured: " + introduction);
+        for (auto wire = chat.end() - 2; wire != chat.end(); ++wire)
+        {
+            const std::string request = wire->dump();
+            Check(request.find("blue mug") == std::string::npos && request.find("Porto") == std::string::npos,
+                "The previous speaker's private lines reached the next person's request: " + introduction);
+            Check(request.find(handover ? otherPersonNote : beforeNameNote) != std::string::npos &&
+                      request.find(handover ? beforeNameNote : otherPersonNote) == std::string::npos,
+                "She was not told the right reason the earlier lines are withheld: " + introduction);
+        }
+        const auto context = ReviaSessionTestAccess::WorkingContext(fixture.session);
+        Check(std::none_of(context.begin(), context.end(), [&](const auto& message) { return message.content == privateLine; }) &&
+                  std::any_of(context.begin(), context.end(), [&](const auto& message) { return message.content == introduction; }),
+            "The working context kept the unnamed speaker's line, or lost the newcomer's own: " + introduction);
+        Check(ReviaSessionTestAccess::EarlierSpeakerWithheld(fixture.session) &&
+                  ReviaSessionTestAccess::WithheldBeforeTheirName(fixture.session) == !handover,
+            "The session did not record why the earlier lines are withheld: " + introduction);
+    };
+    check("handover-left", "Noor left. My name is Sam", true);
+    check("handover-different", "I'm a different person. Call me Sam.", true);
+    check("handover-gone", "ok she's gone now, you can call me Sam", true);
+    check("handover-arrival", "hi, this is Sam!", true);
+    check("handover-swap", "we swapped seats, I'm someone else now. my name is Sam", true);
+    check("self-naming", "btw call me Mari", false);
+    check("self-naming-left", "I left the oven on earlier lol, anyway my name is Mari", false);
+}
+
 // Dropping the report's original TaskContract admission would disclose a report after
 // recognition consent is withdrawn, even though its audience revision did not change.
 // The upstream private voice context is simulated; workflow, report generation, archive,
@@ -1951,6 +1995,7 @@ void RunDelegationTests()
     TestOrdinaryConversationIsUnchanged();
     TestUnreachableAgentsAreNamedInThePrompt();
     TestPastClaimsAreCheckedAgainstTheRecord();
+    TestAnExplicitHandoverWithholdsTheEarlierSpeaker();
     TestAMissedHandoffIsNotTreatedAsStarted();
     TestHeldReportRetainsOriginalConsentAdmission();
     TestCancelDuringReportPublication();

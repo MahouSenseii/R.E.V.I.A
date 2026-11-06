@@ -6858,9 +6858,11 @@ std::string ReviaSession::ResolveLocalSpeaker(const std::string& input, agents::
 {
     const std::string previous = captured.participantId;
     std::string stated = identity::ReadStatedName(input);
-    // Only naming oneself is surely the person who was typing before; "this is Sam" or "it's
-    // Mari" may be someone else arriving, so the anonymous lines before it stay withheld.
-    const bool selfNamed = !stated.empty() && identity::NamesThemselves(input);
+    // Earlier unnamed lines stay withheld whenever a name is given; this decides only what she
+    // is told. Naming oneself may be the same person ("they came before the name"); an arrival
+    // ("this is Sam") or an explicit handover ("Noor left. My name is Sam", "I'm a different
+    // person. Call me Sam") is someone else, even when it says "my name is" or "call me".
+    const bool selfNamed = !stated.empty() && identity::NamesThemselves(input) && !identity::AnnouncesAnotherPerson(input);
     // Without a correction the session stays on a person the speaker has just disowned,
     // and every later fact is filed under them.
     if (const auto current = stated.empty() ? relationships.Find(previous) : std::nullopt; current)

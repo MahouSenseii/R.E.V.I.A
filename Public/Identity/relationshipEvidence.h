@@ -38,9 +38,15 @@ struct ConversationSignals
 [[nodiscard]] std::string ReadStatedName(const std::string& userInput);
 
 // True when the speaker names themselves ("my name is", "call me", "I'm called", "name's"), not
-// when someone announces an arrival ("this is Sam"): only the first is surely the same person
-// who was typing before.
+// when someone announces an arrival ("this is Sam"). Either way earlier unnamed lines stay
+// withheld; this only decides how she is told about them.
 [[nodiscard]] bool NamesThemselves(const std::string& userInput);
+
+// True when the speaker's own words say a different person is now speaking: the previous one
+// left ("Noor left", "she had to go") or the speaker is someone else ("I'm a different person",
+// "not the same person", "my turn"). Quoted words do not count. A handover is a privacy
+// boundary even when the new person goes on to say "my name is" or "call me".
+[[nodiscard]] bool AnnouncesAnotherPerson(const std::string& userInput);
 
 // "I meant Mari, not Jo" while the speaker is called Jo: the corrected name, else empty.
 // Only the name currently in use can be rejected, and only in the speaker's own words.
