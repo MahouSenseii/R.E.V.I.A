@@ -101,9 +101,10 @@ std::string SectionTitle(const agents::DeliverableSection section)
 
 // The reviewed deliverable as Revia examines it: every section, the evidence with the host's
 // own receipts, and the exact identities of what each role produced.
-std::string DeliverableEvidence(const agents::WorkflowArtifact& artifact, const agents::WorkflowSnapshot& snapshot)
+// A deliverable's summary, evidence (with the host's receipts) and every section it filled.
+std::string DeliverableSections(const agents::WorkflowArtifact& artifact)
 {
-    std::string text = "Reviewed deliverable: " + Reference(ReferenceTo("parent", artifact)) + "\n";
+    std::string text;
     try
     {
         const auto payload = Json::parse(artifact.content);
@@ -128,6 +129,13 @@ std::string DeliverableEvidence(const agents::WorkflowArtifact& artifact, const 
     {
         text += "The deliverable's sections could not be read; only its identity above is reliable.\n";
     }
+    return text;
+}
+
+std::string DeliverableEvidence(const agents::WorkflowArtifact& artifact, const agents::WorkflowSnapshot& snapshot)
+{
+    std::string text = "Reviewed deliverable: " + Reference(ReferenceTo("parent", artifact)) + "\n";
+    text += DeliverableSections(artifact);
     text += "Produced by:";
     for (const auto& node : snapshot.nodes)
     {
@@ -153,9 +161,14 @@ bool BudgetSpent(const agents::WorkflowSnapshot& snapshot, const agents::Workflo
 }
 
 // An outcome without a verified deliverable: which stage stopped and the host's safe reason,
-// so she can say plainly that nothing was established instead of inventing a finding.
-std::string UnverifiedEvidence(const agents::WorkflowSnapshot& snapshot, const bool budgetSpent)
+// then what each worker handed in, labelled as its own unconfirmed claims. Given only the
+// stage list, a live 4B report said "nothing established" in 6 of 8 replays and invented
+// bugs (a "missing null-check", a "race condition") in the other 2; given the workers' own
+// deliverables, all 8 relayed what the workers had actually found and read.
+std::string UnverifiedEvidence(
+    const agents::WorkflowSnapshot& snapshot, const bool budgetSpent, const std::vector<agents::WorkerDeliverable>& reports)
 {
+    constexpr std::size_t MaximumReportCharacters = 2400;
     std::string text = snapshot.state == agents::WorkflowState::Exhausted || budgetSpent
                            ? "The workflow spent its budget before the work was verified; the acceptance check never ran.\n"
                            : "The workflow stopped before the work was verified.\n";
@@ -170,7 +183,24 @@ std::string UnverifiedEvidence(const agents::WorkflowSnapshot& snapshot, const b
         }
         text += "\n";
     }
-    text += "No finding from this run is established. Its full record is in Agent Studio, where it can be retried with changed input.";
+    if (reports.empty())
+    {
+        text += "No finding from this run is established. Its full record is in Agent Studio, where it can be retried with changed input.";
+        return text;
+    }
+    text += "No finding from this run is established: nothing was independently verified, and this run has ended, so no further "
+            "check is coming. What each worker handed in is below. Relay it as that worker's own unconfirmed claims, in its terms "
+            "and without adding to it; only the host receipts in it are facts. Its full record is in Agent Studio, where it can be "
+            "retried with changed input.\n";
+    for (const auto& report : reports)
+    {
+        const auto node =
+            std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(), [&](const auto& item) { return item.id == report.nodeId; });
+        const std::string label = node == snapshot.nodes.end() ? report.nodeId : node->workingOn;
+        text += "\n" + label +
+                (report.verified ? " (its worker verified it; not independently reviewed):\n" : " (NOT verified, even by its worker):\n") +
+                utf8::Prefix(DeliverableSections(report.artifact), MaximumReportCharacters) + "\n";
+    }
     return text;
 }
 
@@ -580,7 +610,7 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
                 if (BudgetSpent(snapshot, view.budget))
                 {
                     record.candidate.reset();
-                    outcome(false, UnverifiedEvidence(snapshot, true));
+                    outcome(false, UnverifiedEvidence(snapshot, true, agentWorkflow.WorkerDeliverables()));
                 }
                 else
                 {
@@ -604,7 +634,7 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
         else if (state == agents::WorkflowState::Paused || state == agents::WorkflowState::Exhausted)
         {
             record.candidate.reset();
-            outcome(false, UnverifiedEvidence(snapshot, false));
+            outcome(false, UnverifiedEvidence(snapshot, false, agentWorkflow.WorkerDeliverables()));
         }
     }
     if (evaluate)
