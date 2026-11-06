@@ -29,6 +29,8 @@
 #include "Identity/socialIdentity.h"
 #include "Speech/speechService.h"
 
+#include <atomic>
+
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -189,6 +191,10 @@ public:
         std::function<void(const responseOutput& reply, std::uint64_t audienceRevision, const std::string& participantId)>;
     void SetDeliveredReplyObserver(DeliveredReplyObserver observer);
     void ResetParticipantContinuity();
+    // A different person spoke earlier in this chat and their lines are withheld from this
+    // participant's context; she is told so rather than left to guess. Cleared by a reset.
+    void SetEarlierSpeakerWithheld(bool withheld);
+    [[nodiscard]] bool EarlierSpeakerWithheld() const { return earlierSpeakerWithheld.load(); }
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
     void SetInvestigationExecutorFactory(InvestigationExecutorFactory factory);
@@ -422,6 +428,7 @@ private:
     // reply the quality monitor found ungrounded -- and never from asking the model how
     // sure it was. Transient, like the tier.
     bool previousTurnWasUnreliable = false;
+    std::atomic<bool> earlierSpeakerWithheld{false};
     std::uint64_t turnCounter = 0;
     std::uint64_t utteranceCounter = 0;
 };

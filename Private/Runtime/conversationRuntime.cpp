@@ -361,9 +361,15 @@ SessionResult ConversationRuntime::ReplyPublic(const std::string& input, const s
     return Generate(input, promptContext, publicProfile, llmAvailable, shouldSpeak, false, false, {}, {}, stopToken, policy);
 }
 
+void ConversationRuntime::SetEarlierSpeakerWithheld(const bool withheld)
+{
+    earlierSpeakerWithheld.store(withheld);
+}
+
 void ConversationRuntime::ResetParticipantContinuity()
 {
     context.Clear();
+    earlierSpeakerWithheld.store(false);
     previousDeliveredTier.reset();
     previousTurnWasUnreliable = false;
 }
@@ -2141,6 +2147,10 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!delegationBlocked.empty())
             replyNote += agentsUnavailableNote(delegationBlocked);
+        // Asked "who were you talking to before me?", she had no earlier lines and guessed.
+        if (earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
+            replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
+                         "shown to you here; if asked about it, say so plainly instead of guessing or inventing it.";
         plainReplyNote = replyNote;
         arithmeticGrounded = !arithmetic.empty();
         if (toolLoop)

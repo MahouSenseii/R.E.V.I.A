@@ -135,6 +135,12 @@ std::string RenderStatePacket(const ReviaStatePacket& packet, const bool include
         std::ostringstream relationship;
         relationship << markers::SpeakerRelationship
             << packet.relationship.DescribeForPrompt();
+        // The name the host attributes this turn to. Without it she had only the chat text
+        // to go on, and lost the name whenever that text was not in view.
+        if (!packet.relationship.displayName.empty())
+        {
+            relationship << " They go by " << packet.relationship.displayName << ".";
+        }
         // Stated, never computed. The elapsed time is already in words for the same
         // reason the memory block states its clock.
         if (!packet.lastSpokeAt.empty())

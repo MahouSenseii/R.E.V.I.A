@@ -231,12 +231,29 @@ bool ReviaSession::PreparePrivateContext(const memory::MemoryScope& scope, const
         return false;
     if (privateContextParticipant != scope.participantId || privateContextAudience != scope.audience.audienceId)
     {
+        // The anonymous speaker naming themselves is the same person at the keyboard, not a
+        // new one: what they said before giving a name stays in view, still attributed to
+        // the anonymous speaker. Reset here, it vanished, and "btw call me Mari" left her
+        // with only that one line of the conversation.
+        const bool namedThemselves = privateContextParticipant == identity::LocalUserEntityId() &&
+                                     privateContextAudience == scope.audience.audienceId && scope.participantId.starts_with("local:");
+        // A different named person: their predecessor's private lines are withheld, and she
+        // is told so instead of being left to guess who said what.
+        const bool anotherPerson = !namedThemselves && !privateContextParticipant.empty() &&
+                                   privateContextParticipant != identity::LocalUserEntityId() &&
+                                   privateContextAudience == scope.audience.audienceId;
+        std::vector<conversationMessage> carried;
+        if (namedThemselves)
+            carried = context.GetRecentMessages();
         conversationRuntime.ResetParticipantContinuity();
         privateContextParticipant = scope.participantId;
         privateContextAudience = scope.audience.audienceId;
         // Transient local:user continuity is valid; durable restoration retains its
         // stricter attributed-private check inside RestoreConversationContext.
         RestoreConversationContext(scope, admission);
+        for (auto& message : carried)
+            context.AddMessage(std::move(message));
+        conversationRuntime.SetEarlierSpeakerWithheld(anotherPerson);
     }
     return admitted();
 }
