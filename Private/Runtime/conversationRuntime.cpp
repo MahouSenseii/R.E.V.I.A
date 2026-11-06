@@ -2156,18 +2156,20 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         // line or memory anywhere. Replaying captured turns, false premises were agreed to 7 of
         // 9 times without this note and 1 of 9 with it (including held-out ones), an invented
         // "earlier today" conversation went from 1 of 3 to 0 of 3, and true premises were
-        // still agreed to 6 of 6.
-        replyNote += "\n\nWhat was said or done before is only what this chat shows and what your memories record. If the person "
-                     "says you said, did or promised something earlier, check it there first: agree only when it is there; when it "
-                     "is not, say you have no record of it, in your own voice, without inventing or confirming details.";
+        // still agreed to 6 of 6. A factual image request carries no conversation state and must
+        // end with the person's question, so these conversation notes stay out of it.
+        if (!factualImageInspection)
+            replyNote += "\n\nWhat was said or done before is only what this chat shows and what your memories record. If the person "
+                         "says you said, did or promised something earlier, check it there first: agree only when it is there; when it "
+                         "is not, say you have no record of it, in your own voice, without inventing or confirming details.";
         // After "use your agents" started no task, the next turn was asked how it was going: told
         // nothing, 6 of 6 replays described agents still at work and 3 of 6 invented findings;
         // with this statement, 6 of 6 said nothing had started and none invented a finding.
-        if (lastHandoffNotStarted.load() && !delegationRequested)
+        if (!factualImageInspection && lastHandoffNotStarted.load() && !delegationRequested)
             replyNote += "\n\nYour last request to use your agents did not start a task: nothing was handed off and no agent is "
                          "working on it. If it comes up, say so plainly.";
         // Asked "who were you talking to before me?", she had no earlier lines and guessed.
-        if (earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
+        if (!factualImageInspection && earlierSpeakerWithheld.load() && !turnPolicy.publicAudience)
             replyNote += "\n\nEarlier in this chat you were talking with someone else. What they said is private to them and is not "
                          "shown to you here; if asked about it, say so plainly instead of guessing or inventing it.";
         plainReplyNote = replyNote;
