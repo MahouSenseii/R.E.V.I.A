@@ -348,6 +348,33 @@ void TestAPossessiveFactIsSavedAndHerToneIsLeftOut()
         service.EvaluateMemory("My friend prefers mint tea.", "Understood.", ResponseProvenance::NormalGeneration, {}, scope);
     Check(thirdParty.bShouldRemember && thirdParty.subject.kind == revia::memory::MemorySubjectKind::Unattributed,
         "Third-party claim was silently assigned to the speaker.");
+    // Fact slots: the speaker's single-value fact carries one, normalised to the closed list; an
+    // attribute outside that list, or someone else's fact, carries none.
+    {
+        std::lock_guard lock(mutex);
+        answer = R"({"shouldRemember":true,"category":"other","subject":"speaker","summary":"The user's Civic is green.",)"
+                 R"("fact":{"attribute":"Car Color","object":"my Civic","value":"green"},"reason":"Correction."})";
+    }
+    const auto slotted = service.EvaluateMemory("My Civic is green, not blue", "Green it is.", ResponseProvenance::NormalGeneration, {}, scope);
+    Check(slotted.fact && slotted.fact->attribute == "car colour" && slotted.fact->object == "civic" && slotted.fact->value == "green",
+        "The speaker's fact slot was not parsed and normalised.");
+    {
+        std::lock_guard lock(mutex);
+        Check(instructions.back().find("also return fact: {attribute, object, value}") != std::string::npos &&
+                  instructions.back().find("Omit fact for anything else, for other people's facts") != std::string::npos,
+            "The memory selector is not told how to report a fact slot.");
+        answer = R"({"shouldRemember":true,"category":"other","subject":"speaker","summary":"The user's shoe size is 42.",)"
+                 R"("fact":{"attribute":"shoe size","object":"","value":"42"},"reason":"Fact."})";
+    }
+    const auto unlisted = service.EvaluateMemory("My shoe size is 42", "Noted.", ResponseProvenance::NormalGeneration, {}, scope);
+    Check(unlisted.bShouldRemember && !unlisted.fact, "An attribute outside the closed list was given a slot.");
+    {
+        std::lock_guard lock(mutex);
+        answer = R"({"shouldRemember":true,"category":"relationship","subject":"other","summary":"The user's sister's car is green.",)"
+                 R"("fact":{"attribute":"car colour","object":"","value":"green"},"reason":"Third-party fact."})";
+    }
+    const auto sisters = service.EvaluateMemory("My sister's car is green", "Nice.", ResponseProvenance::NormalGeneration, {}, scope);
+    Check(!sisters.fact, "Someone else's fact was given the speaker's slot.");
     server.stop();
 }
 

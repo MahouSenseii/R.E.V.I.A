@@ -3253,6 +3253,7 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
     decision.category = std::move(verdict.category);
     decision.summary = std::move(verdict.summary);
     decision.subject = std::move(verdict.subject);
+    decision.fact = std::move(verdict.fact);
     if (decision.bShouldRemember)
     {
         const embeddingOutput memoryEmbedding =
