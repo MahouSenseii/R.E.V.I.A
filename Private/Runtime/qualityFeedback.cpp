@@ -550,14 +550,31 @@ bool ReviaSession::AcceptMemoryCorrectionProposal(const std::string& proposalId,
 bool ReviaSession::RejectMemoryCorrectionProposal(const std::string& proposalId, std::string& error, const std::stop_token stopToken)
 {
     if (OwnerMutationCanceled(stopToken, error)) return false;
-    const std::scoped_lock lock(speakerMutex, audienceMutex, memoryCorrectionMutex);
-    if (OwnerMutationCanceled(stopToken, error)) return false;
-    PruneMemoryCorrectionsLocked(CapturePrivateMemoryScopeLocked(), Stamp());
-    const auto removed = std::erase_if(memoryCorrections, [&](const auto& pending) { return pending.proposal.id == proposalId; });
-    if (removed == 0)
+    std::optional<memory::MemoryCorrectionProposal> rejected;
     {
-        error = "This correction proposal is no longer available in the current private session.";
-        return false;
+        const std::scoped_lock lock(speakerMutex, audienceMutex, memoryCorrectionMutex);
+        if (OwnerMutationCanceled(stopToken, error)) return false;
+        PruneMemoryCorrectionsLocked(CapturePrivateMemoryScopeLocked(), Stamp());
+        const auto found = std::find_if(memoryCorrections.begin(), memoryCorrections.end(),
+            [&](const auto& pending) { return pending.proposal.id == proposalId; });
+        if (found == memoryCorrections.end())
+        {
+            error = "This correction proposal is no longer available in the current private session.";
+            return false;
+        }
+        rejected = found->proposal;
+        memoryCorrections.erase(found);
+    }
+    // Slot corrections are rebuilt from the store, so a rejection must be stored too or the same
+    // review would come straight back. Other proposals stay transient, as before.
+    if (rejected->sameFactSlot)
+    {
+        const longTermMemory store(companionPaths.Resolve("Memory/revia_memory.db").string());
+        if (!store.RecordFactCorrectionRejection(rejected->original.id, rejected->proposedMemoryId, rejected->original.subject))
+        {
+            error = "The rejection could not be saved, so this review may be offered again.";
+            return false;
+        }
     }
     return true;
 }
@@ -579,8 +596,21 @@ bool ReviaSession::DeleteOldFactVersionsOwnerRequested(const std::string& curren
         error = "Old versions can be deleted only for the person in the current private conversation.";
         return false;
     }
+    // Held from inside the store's transaction until commit: the same speaker and audience must still
+    // be current, or nothing is deleted (an audience change mid-deletion refuses the lease).
+    auto acquireScope = [this, scope, stopToken, &error]() -> std::unique_ptr<memory::MemoryRevisionScopeLease>
+    {
+        auto lease = std::make_unique<OwnerRevisionScopeLease>(speakerMutex, audienceMutex);
+        if (OwnerMutationCanceled(stopToken, error)) return {};
+        if (!SameCorrectionScope(scope, CapturePrivateMemoryScopeLocked()) || configuredAudience.kind != identity::AudienceKind::Private)
+        {
+            error = "The conversation changed before the deletion finished; nothing was deleted.";
+            return {};
+        }
+        return lease;
+    };
     const longTermMemory store(companionPaths.Resolve("Memory/revia_memory.db").string());
-    if (!store.DeleteOldFactVersions(currentMemoryId, memory::ParticipantSubject(scope), deleted, error)) return false;
+    if (!store.DeleteOldFactVersions(currentMemoryId, memory::ParticipantSubject(scope), deleted, error, acquireScope)) return false;
     {
         // Reviews of this fact pointed from a now-deleted older version to the current one; they are
         // gone with it. Reviews of other facts are untouched.

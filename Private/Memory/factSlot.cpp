@@ -162,14 +162,19 @@ FactChange ClassifyFactChange(const std::string& userInput, const std::string_vi
 //    - L restates the same value as everything else: stated (or reviewed, if approved).
 //    - L is a plain statement that disagrees with an earlier value: unresolved, no current value,
 //      unless the owner approved one of them, which then stands.
-FactView ResolveFactSlot(std::vector<FactVersion> versions)
+FactView ResolveFactSlot(std::vector<FactVersion> versions, const std::vector<std::pair<std::string, std::string>>& rejectedPairs)
 {
     std::stable_sort(versions.begin(), versions.end(), [](const auto& a, const auto& b) { return a.sequence < b.sequence; });
     FactView view;
     view.versions = versions;
+    // An owner-retired value stays retired only behind the approved current value. If the person
+    // later clearly returns to it ("blue after all"), that newer version competes again.
+    std::int64_t approvedAt = -1;
+    for (const auto& v : versions)
+        if (v.reviewedCurrent) approvedAt = std::max(approvedAt, v.sequence);
     std::vector<FactVersion> present;
     for (const auto& v : versions)
-        if (v.change != FactChange::Future && !v.reviewedHistorical) present.push_back(v);
+        if (v.change != FactChange::Future && !(v.reviewedHistorical && v.sequence < approvedAt)) present.push_back(v);
     const std::int64_t newestPresent = present.empty() ? -1 : present.back().sequence;
     for (const auto& v : versions)
         if (v.change == FactChange::Future && v.sequence > newestPresent) view.planned = v;
@@ -187,7 +192,9 @@ FactView ResolveFactSlot(std::vector<FactVersion> versions)
         view.state = approved ? FactState::Reviewed : FactState::Stated;
         return view;
     }
-    if (last.change == FactChange::Correction || last.change == FactChange::Change)
+    const bool rejected = std::any_of(rejectedPairs.begin(), rejectedPairs.end(), [&](const auto& pair)
+        { return pair.second == last.memoryId && pair.first == differing.front().memoryId; });
+    if ((last.change == FactChange::Correction || last.change == FactChange::Change) && !rejected)
     {
         view.current = last;
         view.replaced = differing;
@@ -208,6 +215,31 @@ FactView ResolveFactSlot(std::vector<FactVersion> versions)
     view.state = FactState::Unresolved;
     for (auto it = present.rbegin(); it != present.rend(); ++it) view.conflicting.push_back(*it);
     return view;
+}
+
+bool FactSummaryFitsAttribute(const std::string& summary, const std::string& attribute)
+{
+    static const std::vector<std::pair<std::string, std::vector<std::string_view>>> cues = {
+        {"home city", {"live", "lives", "living", "city", "from", "moved", "home", "hometown"}},
+        {"job", {"work", "works", "working", "job", "employed", "profession", "career", "as a", "as an"}},
+        {"employer", {"work", "works", "working", "employer", "company", "employed", "job"}},
+        {"school", {"school", "study", "studies", "studying", "student", "university", "college"}},
+        {"car colour", {"car", "vehicle", "truck", "van", "drive", "drives", "colour", "color"}},
+        {"car model", {"car", "vehicle", "truck", "van", "drive", "drives"}},
+        {"phone model", {"phone"}},
+        {"pet name", {"dog", "cat", "pet", "puppy", "kitten", "named", "called", "parrot", "rabbit", "hamster"}},
+        {"pet age", {"dog", "cat", "pet", "puppy", "kitten", "parrot", "rabbit", "hamster"}},
+        {"age", {"years old", "age", "aged"}},
+        {"birthday", {"birthday", "born"}},
+        {"partner name", {"partner", "wife", "husband", "girlfriend", "boyfriend", "spouse", "fiance", "fiancee"}},
+        {"favourite colour", {"favourite colour", "favorite color", "favourite color", "favorite colour"}},
+        {"favourite food", {"favourite food", "favorite food", "favourite dish", "favorite dish"}},
+        {"favourite drink", {"favourite drink", "favorite drink"}}};
+    const std::string text = " " + Lower(summary) + " ";
+    for (const auto& [name, words] : cues)
+        if (name == attribute)
+            return std::any_of(words.begin(), words.end(), [&](std::string_view w) { return Contains(text, w); });
+    return false;
 }
 
 std::string DescribeFactForPrompt(const FactView& view)

@@ -74,8 +74,14 @@ public:
     // Owner-requested only. Deletes every other version of the slot that `currentMemoryId` is the
     // current value of (a newer planned change is kept), with their revision receipts, vectors and
     // marks. Refused when that row is not the slot's established current value, e.g. while unresolved.
+    // `acquireScope`, when given, is taken after the write lock and held until commit; a refused lease
+    // (the speaker or audience changed) deletes nothing.
     bool DeleteOldFactVersions(const std::string& currentMemoryId, const revia::memory::MemorySubject& expectedSubject,
-        std::size_t& outDeleted, std::string& outError) const;
+        std::size_t& outDeleted, std::string& outError, const revia::memory::MemoryRevisionScopeAdmission& acquireScope = {}) const;
+    // Owner rejected an old-to-new slot correction in review; the pair is remembered so the review is
+    // not rebuilt and the newer value is no longer treated as a clear correction of the older one.
+    bool RecordFactCorrectionRejection(const std::string& originalId, const std::string& proposedId,
+        const revia::memory::MemorySubject& expectedSubject) const;
     std::vector<memoryEntry> LoadMissingEmbeddings(const std::string& embeddingModel, std::size_t maxEntries = 25) const;
     // Row-id traversal moves past failed rows without an offset into a shrinking
     // result set. Restarting a scan at zero rediscovers failures and newly added rows.
