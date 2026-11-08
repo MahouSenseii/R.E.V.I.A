@@ -2,13 +2,13 @@ export const repo='https://github.com/MahouSenseii/R.E.V.I.A';
 export const pin='375ea55fcb4d64bcd6a9c90c851f29cf50ae2c53';
 export const researchPin='aac6f161fd080db400317670e4b3a78973dbb105';
 export const current={
-  as_of:'2026-11-06',
+  as_of:'2026-11-08',
   source_commit:pin,
   source_pr:45,
-  state:'Paused at a safe stopping point',
+  state:'Submission status and bounded save-claim fixes installed; independently verified, not launched',
   refresh_mode:'Manual, source-pinned snapshot; no live monitoring',
   ci:{run:42216017963,jobs_passed:6,passed:155,failed:0,optional_skips:2},
-  installed_app:'Not updated or freshly audited by this work',
+  installed_app:'Two-EXE update verified on 8 November; backups preserved; not launched',
   research:{
     public_source_commit:researchPin,
     public_source_through:'STATE-010',
@@ -19,12 +19,38 @@ export const current={
     saved_responses:32,
     integration:'None',
     candidate:'None',
-    state:'Closed out after STATE-017 and a hybrid pre-check; no training or upload active'
+    state:'Lightweight regression complete; further scoped improvements in progress; no new training or publication'
+  },
+  validation:{
+    as_of:'2026-11-08',
+    scope:'Fresh permitted native and two-EXE update qualification. Earlier model/RNL results remain separate; later Atlas-only edits are outside the tested application snapshot.',
+    candidate_base:'c5ef5599d8fb22f90bb2fd2c3b7622bf22f18e19',
+    includes_uncommitted_changes:true,
+    earlier_qualified_native:{eligible:128,attempted:128,passing_receipts:128,failed:0,skipped:0,incomplete:0,timeouts:0,wrapper_seconds:451.09,junit_seconds:444.01,unchanged_pins:1573},
+    native:{eligible:128,attempted:128,passing_receipts:128,failed:0,skipped:0,incomplete:0,timeouts:0,wrapper_seconds:503.9956644,unchanged_pins:1854},
+    build:{targets:124,configuration:'Qt13 Debug -O0 -g0; assertions retained',source_entries:1416,canonical_config_tools_entries:195,runtime_entries:22},
+    earlier_native:{first_pass_passed:122,first_pass_failed:6,short_path_recoveries:5,video_dependency_recoveries:1,passing_receipts:128,scope:'Earlier source checkpoint; original failures retained. Its truncated JUnit did not support exhaustive internal-skip accounting.'},
+    native_scope:'One fresh run qualifies both installed follow-ups, not later Atlas-only edits. Interrupted prior run: 83 passes and case 84 unknown; never aggregated into this pass.',
+    native_limit:'128 of 159 registrations selected; 31 excluded. Absent NumPy benchmark is neither passed nor skipped. All 1,854 pins unchanged before install. FoundationWithoutMicrophone excludes 16 microphone functions; full Foundation, denied fixtures, hardware/browser and training remain unrun.',
+    video:{passed:true,seconds:3.20,source_and_binary_unchanged:true,original_failed_runs_retained:2,decoder_failure:'0xC0000135: missing libopenh264.dll',repair:'Staging only: existing DLL and license/readme sidecars copied with matching hashes; no source, assertions or timeouts changed',test_binary_sha256:'71734117F1AB1380CF4E57AF62F1AAA344F582556C7A85425A625DE6CF2DA376',scope:'Earlier offscreen Qt poster/playback/pause/resume/seek with silent synthetic video; retained prior binary evidence',physical_media_verified:false},
+    catalog:{configured:159,source_expected:160,missing:'Revia.RetrievalBenchmarkContracts (NumPy unavailable)'},
+    exclusions:'Restricted, manual, live-input, interactive-browser and physical-audio workflows remain unrun. Latest output audit found no truncation or additional explicit internal skips; two microphone-exclusion notices remain.',
+    interpreted:{python_methods_passed:116,node_methods_passed:31,scope:'Earlier interpreted evidence includes documented skips, partial registrations and deliberately excluded methods; do not add it to native registrations.'},
+    model:{turns:12,processes:3,synthetic_only:true,semantic_result:'PARTIAL',acceptance_attempted:true,native_acceptance_restart:'PASS',pending_proposals:0,acceptance_receipts:1,restored_chat_turns:0,native_work_drained_turns:12,background_completion_proven:false,embedding_backfill_failures:1,canonical_memories_embedded:3,summary:'Exactly one owner acceptance receipt survived a fresh process with approved correction context. Old/new rows retained; no pending proposal or restored chat. A preserved coordinator stop preceded acceptance; preparation was not repeated and acceptance was not retried.',remaining_faults:'Save claim 2.572 seconds early, pronoun mix-up, typo, poor introduction and two guesses instead of one.',embedding_scope:'The historical archive failure recovered at dataset level. All three canonical facts are embedded; only the newest reply tail lacks an embedding in each phase. Not exact failed-attempt mapping or complete-background proof.',cause_limit:'No new unsupported summary was created. One unseeded synthetic run is not general semantic grounding.',previous_run:'r1: 11 turns, correction persisted with one pending proposal/zero receipts. Original failed run: lost correction, unsupported summary and false storage-scope claim. Earlier evidence retained.',no_training:true,no_cloud:true,no_physical_audio:true},
+    rnl:{python_cases_passed:182,python_cases_failed:0,helper_cases_passed:35,real_training_cases_excluded:1,retained_audits_passed:3,arithmetic_checks:512,graph_matches:1440,learn026_controls:11,learn027_patched_controls:23,original_artifacts_unchanged:1143,training_performed:false,scope:'Distinct and sometimes overlapping suites, not one additive total. LEARN027 baseline failure was reproduced; its strict-history patch is isolated, not normal-app integration. Software correctness is not general language-quality improvement.'},
+    memory_observation:{result:'GREEN',seconds:0.836,test_functions:9,retained_admission_proposal_saved:true,revoked_admission_save_attempted:false,safety_or_admission_changed:false,actual_model_replay:'Completed; semantic PARTIAL',summary:'Completion tracking and qualification waiting now distinguish active work from an idle queue. Retry, stop, overflow and scan diagnostics passed focused deterministic checks.',limit:'Focused native observation evidence, not a semantic fix. The separate real replay is partial; no admission or prompt policy changed.'},
+    memory_guard:{result:'GREEN',new_rejects:4,controls:13,existing_functions:9,summary:'A participant candidate whose value is absent from raw current input is rejected before save.',limit:'Narrow containment, not general grounding; quoted/context-only and rapid-chat admission limitations remain.'},
+    earlier_normal_update:{applied:true,independently_verified:true,files:4,safeguard_tests_passed:25,isolated_current_legacy_loads_passed:true,original_executable_backups_preserved:true,normal_app_launched:false,config_or_memory_changed:false,status:'Applied; independent postcheck passed; physical UI/audio unproven'},
+    normal_update:{applied:true,independently_verified:true,files:2,installed_utc:'2026-11-08T02:14:56Z',safeguard_tests_passed:80,safeguard_success:1,safeguard_expected_holds:79,independent_checks:20137,isolated_current_legacy_loads_passed:true,ui_loaders_passed:2,loader_warning:'Nonfatal staged-font warning in each offscreen load; no font download',original_executable_backups_preserved:true,displaced_originals_preserved:true,normal_app_launched:false,config_or_memory_changed:false,status:'Exact two-EXE update independently verified; helpers/runtime/shortcut retained; user data preserved by fixed mutation scope, not inspected'},
+    submission_followup:{result:'GREEN',focused_suites_passed:6,seconds:38.11,changed_source_test_files:9,review:'PASS',installed:true,new_full_native_qualification:true,summary:'Native status now acknowledges actual memory handoff, not a durable save. The false-queued regression failed before and passed unchanged after the fix.',detail:'Two existing test observers migrated from Queued to Submitted, with a real positive control and prior assertions preserved. Production remains scoped to a typed submission result and native status; no new speech or memory authority.',limit:'Now included in the fresh permitted run and verified installation. General save claims and rapid-message retention remain open; no training or physical-audio proof.'},
+    save_claim_followup:{review:'ACCEPT',changed_feature_files:9,request_forms:2,acknowledgement_forms:4,installed:true,new_full_native_qualification:true,gates:[{suites:'OutputBoundaries + StructuredReply',passed:2,seconds:29.89},{suites:'ContextFitting + QualityFeedback',passed:2,seconds:28.54}],summary:'Finite explicit correction-request acknowledgements receive an uncertainty statement before delivery, gated by attributed-private scope and exempt when a tool was invoked.',coverage:'Actual r2 text/history/observer/raw/display identity and queued speech; 24 revocation cells, eight tool/fallback controls and raw-feedback-digest refusal.',limits:'Unsupported wording, implicit-prior/fiction ambiguity and rapid-message retention remain. Queued speech is not physical playback or model-quality proof. Optional long harmless-prefix tool-barrier test strengthening remains.',physical_audio_verified:false},
+    fixes:'Submission status and bounded save-claim fixes installed; wider wording and rapid-chat retention open',
+    evidence:'Bounded save-claim and submission follow-up results, earlier native results and failures, focused memory guard/observation, r2 acceptance/restart evidence and update safeguards, RNL regression results and closeout verification; raw prompts, logs and host paths are not included.'
   },
   pages:{
-    state:'published',
-    artifact:'Validated and uploaded',
-    deployment:'Verified live on GitHub Pages',
+    state:'Atlas release snapshot',
+    artifact:'Reviewed public milestone',
+    deployment:'See Pages workflow for deployment; receipt below is historical',
     verified_publication:{
       run:41961109918,
       source_commit:'ac755b28d635676e398623841b7c4c49eee5416c',
@@ -109,20 +135,20 @@ export const issues=[
     detail:'PR34 fixed a quoted-correction path. PR37 was then measured through the conversation runtime with the pinned 4B: casual check-ins went from 0/4 to 4/4 and first-time name statements from 1/4 to 4/4 on CPU; 11/12 cases passed on GPU. The model still produces invented details that host repair removes. Live multi-turn trials at the shipped 32K context gave mostly truthful “what have you been up to” replies. The model still accepted a false premise (“you said Biscuit was a cat”) in 3 of 3 runs, and slipped perspective (“I’m Mari”, “my sister”). PR44 tells her that her past is only this chat and her memories: replaying captured turns, false premises were agreed 1/9 (7/9 before, including held-out ones), an invented “earlier today” went 1/3 → 0/3, and true premises stayed 6/6. Live held-out claims (“you said you love jazz”, “you promised to name my car”) were agreed before and declined after. She still volunteers invented activity unprompted, and perspective slips remain. This is not proof of general truthfulness or of improvement in the installed app.',
     next:'Widen the premise checks to more conversations; then requalify the installed app.'},
   {id:'memory',area:'Revia',title:'Corrections and relevance still mislead recall.',
-    summary:'Corrections are now saved for the right person, but after a restart the old and new versions can both be recalled.',
-    status:'Open · saving fixed, restart recall open',
+    summary:'Exact owner acceptance survived restart with no pending proposal. The real replay still claimed a save too early and mixed up a pronoun.',
+    status:'In progress; latest semantic qualification partial',
     detail:'“She’s four, not three” was skipped because a memory already existed (ISSUE-REVIA-0080), so restart recall said three. One run saved the dog’s corrected age as “The user’s cousin Jo is four years old”. The memory selector saw only the current message, so “she” had no referent. PR44 gives it the same person’s previous exchange as context only: the dog’s age is saved under the speaker 4/4 (0/4 before), three held-out corrections 12/12, and nothing is saved from the previous turn alone. Still open: the old row stays active until the owner reviews a revision, and a revision is proposed only for narrow first-person phrasings, so after a restart “owns a blue Civic” and “owns a green Civic” were recalled as two cars (the dog case recalled “four” 3/3). Asking the selector to name the replaced value helped 2/12 and hurt a control, so it was not adopted. A 0.35 similarity floor with the nomic embeddings lets unrelated memories in; one run answered “Lisbon … your cousin Jo”. Restart and exit also pause for 40–70 s after “Shutdown complete”; that delay predates PR41 and has not been investigated.',
-    next:'Decide, as a design choice, how an in-chat correction should retire the old row; measure a relevance floor on the retrieval benchmark.'},
+    next:'Widen tests for premature save claims, quoted/context-only inputs and rapid chat. A narrow candidate guard is verified, not general semantic grounding. The retained PR44 replay evidence does not qualify the current candidate.'},
   {id:'comparison',area:'RNL',title:'The direct comparison finished: RNL tied exact lookup.',
     summary:'RNL (each of three seeds) and exact lookup answered 32/32; Qwen3.5-0.8B answered 17/32, and every miss was an earlier, overwritten value.',
     status:'Complete · small fixed-format task',
     detail:'COMPARE-001 first stopped at “Owned monitor did not join”. Without a model, the cause was traced to a full disk census run for every chunk of server log on the monitor thread: one census took 2.6–2.8 s, so a 2 s join failed 3/3, and with a byte counter instead it joined 3/3 (the fix is a proposal; the frozen files are unchanged). A later continuation reused the 34 preserved LLM files after checking their hashes and ran the four missing cells; all 46 outputs were sealed before the answers were read. The tie only shows RNL loses nothing against a table on four supplied names; it cannot rank RNL above a good memory or rank Revia’s usual 4B model.',
     next:'None planned. The LLM’s failure mode, answering with a superseded value, matches the correction problem tracked for Revia.'},
   {id:'runtime',area:'Revia',title:'Code checks do not qualify the installed app.',
-    summary:'Restart memory, physical desktop, real voice/media and release checks remain separately scoped.',
+    summary:'Latest permitted native batch passed 128/128 in one fresh run. Normal update applied; independent postcheck passed. Physical UI/audio remains unproven.',
     status:'Open · runtime qualification',
-    detail:'The latest source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off. PR43’s pull-request run also failed once in the Windows WebDemo native-host test, 0.37 s in and with no message, while all 157 native tests and the twin run passed; it passed on re-run, and its cause is unknown.',
-    next:'Choose one controlled runtime workflow after the source and installed revision are reconciled.'}
+    detail:'At the retained PR45 main checkpoint, source CI passed 155 tests. The two optional video checks were skipped. Historic long-path save limits, setup interruptions and timing failures remain in the dated records. PR42’s push run timed out in the Windows WebDemo entry-point test at its 10 s limit while the same commit passed in the PR run; passes took 2.5–7.5 s on the same image, so the limit is now 60 s. Whether that run was slow or stuck is unknown, because it was cut off. PR43’s pull-request run also failed once in the Windows WebDemo native-host test, 0.37 s in and with no message, while all 157 native tests and the twin run passed; it passed on re-run, and its cause is unknown.',
+    next:'Retain verified update receipts and manual, restricted and live coverage gaps.'}
 ];
 
 export const studies=[
