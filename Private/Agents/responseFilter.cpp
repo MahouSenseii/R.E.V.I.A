@@ -445,6 +445,18 @@ std::string ResponseFilterContext::Describe() const
                        "not composing replies in this chat. If asked for one of those desktop actions, explain that its "
                        "permission is off.";
     }
+    else if (desktopStateKnown)
+    {
+        // Hands on is not the same as this reply having hands. A request the action path
+        // recognised never reaches this prompt; one that did reach it was not recognised,
+        // so nothing written here will click, type or open anything. Said plainly, so a
+        // request phrased another way is answered with how to ask rather than with a
+        // claim that it is being done.
+        description += " Desktop control is on, but a reply in this chat does not click, type or open anything by itself. "
+                       "A desktop action starts when the person asks for it directly, beginning with the action, such as "
+                       "'open Notepad' or 'type hello in Notepad'. If this message asks for one in other words, do not say "
+                       "it is done or under way; say they can ask for it that way.";
+    }
     return description;
 }
 

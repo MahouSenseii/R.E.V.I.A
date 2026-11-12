@@ -10,6 +10,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -22,9 +24,16 @@ struct McpConfirmationRequest
 {
     std::string server;
     std::string tool;
-    // The validated arguments, bounded for display.
+    // The validated arguments as ArgumentsForApproval describes them.
     std::string arguments;
 };
+
+// The arguments as the owner sees them before approving. Short ones are shown whole.
+// Longer ones still name every argument: each long value is cut on its own and marked
+// with how many bytes were left out, and the total is stated, so one long value cannot
+// push another argument out of the prompt. Empty when there are more arguments than a
+// prompt can name; such a call is refused rather than approved unseen.
+[[nodiscard]] std::optional<std::string> ArgumentsForApproval(const nlohmann::json& arguments);
 
 // The boundary an MCP tool call passes through, supplied by the session for one turn.
 struct McpGatePorts

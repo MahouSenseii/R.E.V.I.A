@@ -266,7 +266,17 @@ ChatTool FileTool(const bool listing, const ToolExecutors& executors, const std:
         return (listing ? "Listing " : "Reading ") + Shown(name);
     };
     auto executor = listing ? executors.listDirectory : executors.readFile;
-    tool.execute = [executor](const Json& arguments, const ToolCallContext& context) { return executor(Text(arguments, "path"), context); };
+    tool.execute = [executor, roots](const Json& arguments, const ToolCallContext& context)
+    {
+        ToolExecution outcome = executor(Text(arguments, "path"), context);
+        // A model that miscopies a long path was told only that it is outside every
+        // approved root, and concluded it had no file access at all. Naming the folders
+        // again lets its next call use one exactly.
+        if (!outcome.succeeded && outcome.error.find("outside every approved root") != std::string::npos)
+            outcome.error += " The approved folders are: " + roots + ". If the person named a path inside one of them, use it "
+                             "exactly as they wrote it and try again.";
+        return outcome;
+    };
     return tool;
 }
 

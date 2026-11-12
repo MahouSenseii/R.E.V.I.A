@@ -70,6 +70,8 @@ public:
 
 private:
     [[nodiscard]] bool Write(const std::map<std::string, std::string>& values) const;
+    // `readable` is false when the file exists and is not a JSON object.
+    [[nodiscard]] std::map<std::string, std::string> Read(bool& readable) const;
 
     std::filesystem::path storePath;
 };

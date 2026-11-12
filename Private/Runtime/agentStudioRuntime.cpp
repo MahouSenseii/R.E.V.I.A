@@ -113,8 +113,13 @@ nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, co
             {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
         if (requirement.allowNoneWithReason)
         {
+            // The empty list states its item type so that its bound binds. llama.cpp puts
+            // no length limit in the grammar of an array whose items are left unstated, so
+            // "no items, with a reason" admitted items as well. A live 9B's verifying worker
+            // gave both in 10 replies of 10; ValidateDeliverable refused each, and no
+            // delegated run could be verified. With the item type stated, all 10 passed.
             nlohmann::json absent = {{"type", "object"},
-                {"properties", {{"items", {{"type", "array"}, {"maxItems", 0}}},
+                {"properties", {{"items", {{"type", "array"}, {"maxItems", 0}, {"items", {{"type", "string"}}}}},
                                    {"noneReason", {{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}}}},
                 {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
             properties[name] = {{"anyOf", {populated, absent}}};
@@ -461,15 +466,25 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                 for (const auto& executable : scope.settings.process.approvedExecutables)
                     material["approvedExecutables"].push_back(actions::PathToUtf8(executable));
             const auto toolSchema = agents::WorkerToolSchema(allowWrites, allowProcess);
+            // A first step, with somewhere to look, has to look. Told only that tool:null
+            // would end the work with nothing found, a live 9B still answered tool:null to one
+            // hand-off's first step 20 times in 20, and the person was told the agents could
+            // not find the file. With null left out of what that step may answer it read
+            // the file it was asked about 20 times in 20.
+            const bool somewhereToLook = !scope.settings.approvedRoots.empty();
+            const auto firstToolSchema = somewhereToLook ? agents::WorkerToolSchema(allowWrites, allowProcess, false) : toolSchema;
             for (unsigned index = 0; index < agents::MaximumWorkerToolsPerAttempt; ++index)
             {
                 // Said by the host from its own receipts. Without it the pinned 4B chose tool:null
                 // with no receipt at all in 5 of 10 replays of a live first step, ending a file
                 // review before any file was opened; with it, in 1 of 10.
+                const bool nothingRun = material["toolReceipts"].empty();
                 const std::string progress =
-                    material["toolReceipts"].empty()
-                        ? "No host tool has run for this worker yet, so it has no evidence: tool:null now ends the work with nothing found. "
-                        : "";
+                    !nothingRun        ? ""
+                    : somewhereToLook ? "No host tool has run for this worker yet, so it has no evidence: choose the first action that "
+                                        "will get some. "
+                                      : "No host tool has run for this worker yet, so it has no evidence: tool:null now ends the work "
+                                        "with nothing found. ";
                 const auto proposal = review(progress +
                     "Choose one bounded tool action necessary for this worker's objective, or tool:null when evidence is sufficient "
                     "or no admitted useful action remains. If evidence remains insufficient, the final deliverable must say verified:false. "
@@ -482,7 +497,7 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     "unavailable; pathDigests identifies the full request but cannot be used as a path. "
                     "Writes require a prior read's exact contentDigest or missing for a new file. Never invent a digest. "
                     "Only the host can report execution; returned tools remain subject to current authority.",
-                    material.dump() + UnreadListedFilesNote(material["toolReceipts"]), toolSchema);
+                    material.dump() + UnreadListedFilesNote(material["toolReceipts"]), nothingRun ? firstToolSchema : toolSchema);
                 if (!proposal || !usagePersisted)
                     return result;
                 std::optional<actions::ActionRequest> action;

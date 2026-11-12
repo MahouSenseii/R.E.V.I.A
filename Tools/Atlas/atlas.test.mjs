@@ -37,8 +37,12 @@ test('research reports the finished comparison and closeout without overclaiming
 });
 test('all public files preserve the original artifact and privacy boundary',()=>{
   assert.deepEqual(fs.readdirSync(root).sort(),files);
-  const bytes=files.reduce((n,f)=>n+Buffer.byteLength(read(f)),0);
+  // Counted as Git stores and Pages serves it, whatever line endings this checkout uses.
+  const bytes=files.reduce((n,f)=>n+Buffer.byteLength(read(f).replaceAll('\r\n','\n')),0);
   assert.ok(bytes<500000,'artifact '+bytes+' exceeds original bound');
+  // The Atlas tracks what was done and what happened. It is not the archive: when an
+  // update takes it past this size, older entries move out to the repository history.
+  assert.ok(bytes<250000,'the Atlas has grown to '+bytes+' bytes; it is meant to stay a small tracking document');
   for(const f of files)assert.ok(!denied.test(read(f)),'private/local content in '+f);
   for(const f of files)assert.equal(fs.lstatSync(path.join(root,f)).isSymbolicLink(),false);
   assert.equal(record().product_delivery,'Merged source on GitHub main; installed app unchanged; no application deployment');
@@ -48,11 +52,14 @@ test('all public files preserve the original artifact and privacy boundary',()=>
   assert.equal(c.passing_controlled_evidence_after_rechecks+c.remaining_setup_qualifications+c.not_run_build_blocked+c.not_selected_safety,c.registered);
   assert.equal(c.raw_zero_exit+c.raw_failed,c.executed_unique);
 });
-test('dated evidence is retained without presenting it as the current snapshot',()=>{
-  assert.equal(record().history.recorded_utc,'2026-11-03T16:37:17.085871+00:00');
+test('earlier records are linked from the pages, not copied into every update',()=>{
+  const earlier='42853a828502793bc53edf32ea7179547e32ea1f';
+  assert.equal(record().history,undefined);
+  assert.equal(record().earlier_records.commit,earlier);
+  assert.equal(record().earlier_records.url,'https://github.com/MahouSenseii/R.E.V.I.A/tree/'+earlier+'/docs/atlas');
   for(const name of ['index.html','research.html']){
-    assert.match(read(name),/BEGIN RETAINED RECORD/);
-    assert.match(read(name),/Dated records/);
+    assert.doesNotMatch(read(name),/RETAINED RECORD|class="legacy"|record-drawer/);
+    assert.ok(read(name).includes('/tree/'+earlier+'/docs/atlas'),'no link to the earlier records in '+name);
     const ids=[...read(name).matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);
     assert.equal(new Set(ids).size,ids.length,'duplicate IDs in '+name);
     for(const m of read(name).matchAll(/href="#([^"]+)"/g)) assert.ok(ids.includes(m[1]),'broken fragment #'+m[1]+' in '+name);
@@ -69,12 +76,12 @@ test('release snapshot keeps historical publication evidence separate',()=>{
   });
   assert.equal(pages.previous_failure.run,41893563372);
   for(const name of ['index.html','research.html']){
-    const active=read(name).split('<!-- BEGIN RETAINED RECORD -->')[0];
+    const active=read(name);
     assert.match(active,/Atlas release snapshot/);
     assert.match(active,/Normal update verified, not launched/);
     assert.doesNotMatch(active,/Local redesign preview|The deployment stalled\.|This redesign is a local review copy|This redesign is local only/);
   }
-  const active=read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0];
+  const active=read('index.html');
   assert.match(active,/Earlier deployment failure \(4 November 2026\)/);
   assert.match(active,/actions\/runs\/41961109918/);
 });
@@ -108,7 +115,7 @@ test('November 8 installation and permitted checks retain historical scope and l
   assert.match(v.native_scope,/83 passes and case 84 unknown/);
   assert.equal(v.normal_update.normal_app_launched,false);
   assert.equal(v.normal_update.config_or_memory_changed,false);
-  assert.doesNotMatch(read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0],/postcheck pending|verification pending|verification is pending|postcheck is pending/i);
+  assert.doesNotMatch(read('index.html'),/postcheck pending|verification pending|verification is pending|postcheck is pending/i);
   assert.deepEqual(v.catalog,{configured:159,source_expected:160,missing:'Revia.RetrievalBenchmarkContracts (NumPy unavailable)'});
   assert.equal(v.model.semantic_result,'PARTIAL');
   assert.equal(v.model.pending_proposals,0);
@@ -146,7 +153,7 @@ test('November 8 installation and permitted checks retain historical scope and l
   assert.match(read('index.html'),/Both follow-ups are installed/);
   assert.match(read('index.html'),/79 expected HOLDs/);
   assert.match(read('index.html'),/missing staged-font warnings/);
-  assert.doesNotMatch(read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0],/follow-ups remain uninstalled|source-only guard|follow-up is not installed/);
+  assert.doesNotMatch(read('index.html'),/follow-ups remain uninstalled|source-only guard|follow-up is not installed/);
   assert.equal(v.memory_observation.result,'GREEN');
   assert.equal(v.memory_observation.seconds,0.836);
   assert.equal(v.memory_observation.test_functions,9);
@@ -162,18 +169,18 @@ test('November 8 installation and permitted checks retain historical scope and l
   assert.equal(v.video.physical_media_verified,false);
   assert.equal(v.video.test_binary_sha256,'71734117F1AB1380CF4E57AF62F1AAA344F582556C7A85425A625DE6CF2DA376');
   for(const name of ['index.html','research.html']){
-    const active=read(name).split('<!-- BEGIN RETAINED RECORD -->')[0];
+    const active=read(name);
     assert.match(active,/8 November 2026/);
     assert.doesNotMatch(active,/Work is paused|Research paused|No further study is planned|Published Atlas snapshot/);
   }
   assert.match(read('index.html'),/128\/128/);
   assert.match(read('index.html'),/VideoPreview/);
   assert.match(read('index.html'),/libopenh264\.dll/);
-  assert.doesNotMatch(read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0],/VideoPreview still fails|VideoPreview remains failed|remaining playback failure/);
+  assert.doesNotMatch(read('index.html'),/VideoPreview still fails|VideoPreview remains failed|remaining playback failure/);
   assert.match(read('index.html'),/PARTIAL/);
   assert.match(read('index.html'),/0\.836 seconds/);
   assert.match(read('index.html'),/correction survived restart/);
   assert.match(read('index.html'),/one durable acceptance receipt and no pending proposal/);
-  assert.doesNotMatch(read('index.html').split('<!-- BEGIN RETAINED RECORD -->')[0],/observation-only real-model replay is pending|actual-model replay is pending/);
+  assert.doesNotMatch(read('index.html'),/observation-only real-model replay is pending|actual-model replay is pending/);
   assert.match(read('research.html'),/182\/182/);
 });

@@ -42,11 +42,11 @@ void WriteJson(const std::filesystem::path& path, const json& value)
 // Every optional host is off; memory, embeddings, identity and the archive stay on, and
 // the models are the caller's servers behind the observation proxies.
 void IsolateSettings(const std::filesystem::path& path, const int mainPort, const int fastPort, const int embeddingPort,
-    const std::string& delegation, const int mainContext)
+    const std::string& delegation, const int mainContext, const std::string& mainModel)
 {
     json settings = ReadJson(path);
     auto& llm = settings["llm"];
-    llm.update({{"host", "127.0.0.1"}, {"port", mainPort}, {"modelName", "Qwen3.5-4B-Q4_K_M.gguf"}, {"autoStartServer", false},
+    llm.update({{"host", "127.0.0.1"}, {"port", mainPort}, {"modelName", mainModel}, {"autoStartServer", false},
         {"shutdownServerOnExit", false}, {"autoTune", false}, {"visionEnabled", false}, {"contextSize", mainContext}});
     llm["cloud"]["enabled"] = false;
     auto& intelligence = settings["intelligence"];
@@ -155,7 +155,10 @@ int main(int argc, char** argv)
             fast = std::make_unique<revia::quality::ObservedLocalModel>(fastUpstream);
         // The shipped Main context; below 16K no tool, delegate_task included, is offered at all.
         IsolateSettings(root / "Config/settings.json", main.port, fast ? fast->port : 0, embeddingPort,
-            script.value("delegation", std::string("off")), script.value("mainContext", 32768));
+            script.value("delegation", std::string("off")), script.value("mainContext", 32768),
+            // The name the Main server reports. Revia refuses a server that serves another model,
+            // so a script that tests a different Main names it here.
+            script.value("mainModel", std::string("Qwen3.5-4B-Q4_K_M.gguf")));
         if (script.contains("approvedRoots"))
         {
             // Seeded into the live permissions file on first start; workers read them only.

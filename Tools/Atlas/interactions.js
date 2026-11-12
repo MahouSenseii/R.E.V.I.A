@@ -16,11 +16,8 @@ document.addEventListener('keydown',event=>{
 });
 nav.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{if(opened)drawer(false);}));
 const search=document.getElementById('site-search'),clear=document.getElementById('clear-search');
-// Older research records predate data-search. Index whole sections when they
-// have no indexed child records, so a preserved study cannot become a false miss.
-const historical=[...document.querySelectorAll('.legacy section[id]')].filter(s=>!s.querySelector('[data-search],section'));
-const rows=[...document.querySelectorAll('[data-search]'),...historical];
-const groups=[...document.querySelectorAll('[data-search-group],.legacy .capability-group')],status=document.getElementById('search-status'),empty=document.getElementById('search-empty');
+const rows=[...document.querySelectorAll('[data-search]')];
+const groups=[...document.querySelectorAll('[data-search-group]')],status=document.getElementById('search-status'),empty=document.getElementById('search-empty');
 let savedDetails=null;
 function expose(node){for(let parent=node.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;}
 function filter(){
@@ -29,11 +26,11 @@ function filter(){
   for(const row of rows){const match=!q||((row.dataset.search||'')+' '+row.textContent).toLocaleLowerCase().includes(q);row.hidden=!match;if(match){count++;if(q)expose(row);}}
   for(const group of groups)group.hidden=!!q&&![...group.querySelectorAll('[data-search]')].some(r=>!r.hidden);
   if(!q&&savedDetails){for(const [d,open] of savedDetails)d.open=open;savedDetails=null;}
-  empty.hidden=!q||count>0;status.textContent=q?count+' matching records on this page. Matching dated records open below.':'Search current summaries and dated records on this page.';
+  empty.hidden=!q||count>0;status.textContent=q?count+' matching records on this page.':'Search the records on this page.';
 }
 search.addEventListener('input',filter);clear.addEventListener('click',()=>{search.value='';filter();search.focus();});filter();
 const technical=document.getElementById('technical-toggle'),technicalDetails=[...document.querySelectorAll('[data-technical]')];
-technical.addEventListener('click',()=>{const open=technical.getAttribute('aria-expanded')!=='true';technicalDetails.forEach(d=>{d.open=open;});technical.setAttribute('aria-expanded',String(open));technical.textContent=open?'Hide technical detail':'Show technical detail';});
+technical.addEventListener('click',()=>{const open=technical.getAttribute('aria-expanded')!=='true';technicalDetails.forEach(d=>{d.open=open;if(savedDetails)savedDetails.set(d,open);});technical.setAttribute('aria-expanded',String(open));technical.textContent=open?'Hide technical detail':'Show technical detail';});
 function revealHash(){if(!location.hash)return;let id;try{id=decodeURIComponent(location.hash.slice(1));}catch{return;}const target=document.getElementById(id);if(!target)return;if(search.value){search.value='';filter();}expose(target);requestAnimationFrame(()=>target.scrollIntoView({block:'start',behavior:'instant'}));}
 addEventListener('hashchange',revealHash);revealHash();
 const currentLinks=[...nav.querySelectorAll('a[href^="#"]')],sections=currentLinks.map(a=>document.getElementById(a.hash.slice(1))).filter(Boolean);

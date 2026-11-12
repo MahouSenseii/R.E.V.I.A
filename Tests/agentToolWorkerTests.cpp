@@ -3,6 +3,7 @@
 #include "testSupport.h"
 
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,22 @@ void RunAgentToolWorkerTests()
     using tests::Check;
     std::optional<actions::ActionRequest> action;
     std::string error;
+    // A first step may be asked for an action and nothing else: a live 9B answered tool:null
+    // to one 20 times in 20, and the work ended with nothing read.
+    const auto mayAnswerNull = [](const std::string& schema)
+    {
+        const auto choices = nlohmann::json::parse(schema).at("properties").at("tool").at("anyOf");
+        return std::any_of(choices.begin(), choices.end(), [](const auto& choice) { return choice.value("type", "") == "null"; });
+    };
+    for (const bool writes : {false, true})
+        for (const bool process : {false, true})
+        {
+            Check(mayAnswerNull(agents::WorkerToolSchema(writes, process)), "A later tool step can no longer stop choosing.");
+            const auto first = nlohmann::json::parse(agents::WorkerToolSchema(writes, process, false)).at("properties").at("tool").at("anyOf");
+            Check(!mayAnswerNull(agents::WorkerToolSchema(writes, process, false)) &&
+                      first.size() + 1 == nlohmann::json::parse(agents::WorkerToolSchema(writes, process)).at("properties").at("tool").at("anyOf").size(),
+                "A first tool step that must act can still answer null, or lost one of its actions.");
+        }
     Check(agents::ParseWorkerToolResponse(R"({"tool":null})", false, false, action, error) && !action, "Explicit completion failed.");
     Check(agents::ParseWorkerToolResponse(
               R"({"tool":{"action":"read_text_file","source":"C:/workspace/readme.txt"}})", false, false, action, error) &&

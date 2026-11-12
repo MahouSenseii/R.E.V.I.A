@@ -2,11 +2,15 @@
 
 #include "Actions/actionTypes.h"
 #include "Agents/toolRegistry.h"
+#include "LLM/toolCall.h"
 #include "Planning/reminders.h"
 
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace revia::agents
 {
@@ -39,6 +43,31 @@ struct ChatActionPort
 // A read_file or list_dir request for `path`, typed exactly as the structured parser
 // would type it. The path is resolved and checked against approved roots by policy.
 [[nodiscard]] actions::ActionRequest ChatFileRequest(actions::ActionType type, const std::string& path);
+
+// The absolute Windows paths written in `text`, in order: "C:\notes\todo.md", "D:/data".
+// Inside quotes a path may hold spaces; outside them it ends at the first one.
+[[nodiscard]] std::vector<std::string> AuthoredPaths(std::string_view text);
+
+// The reads the person's own words call for, made before the model's first step: one call
+// for each file or folder they named that exists inside an approved root, list_dir for a
+// folder and read_file for a file, two at most. A full path is read as written. A file
+// named on its own ("todo.md in that folder") is looked for in the folders they pointed
+// at in `text` and in `earlier`, their recent messages newest first, and then in the
+// approved roots.
+//
+// Left to choose, a live 9B asked to list a folder it could read answered without looking
+// in about one try in eight and described files that were not there, and asked what
+// notes.txt said, replied that it had looked and made the contents up. This only says
+// what to read. Each call still goes through the tool loop's validation and the action
+// policy, as a call the model makes does.
+[[nodiscard]] std::vector<llm::ToolCall> OpeningFileCalls(
+    std::string_view text, const std::vector<std::filesystem::path>& approvedRoots, const std::vector<std::string>& earlier = {});
+
+// The hand-off the person asked for with "use your agents", for a reply that ends without
+// making it: their own request is the task. Asked that way, a live 9B called delegate_task
+// in 8 tries of 13; in the others it said it would, asked a question back, or answered
+// itself. The call is still delegate_task's to accept or refuse.
+[[nodiscard]] llm::ToolCall RequestedDelegationCall(std::string_view request);
 
 // Sets a reminder from a tool call through the same deterministic parser and book that
 // "remind me in 10 minutes to stretch" uses: the model supplies words, never a time.

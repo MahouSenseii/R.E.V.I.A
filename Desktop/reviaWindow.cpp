@@ -4142,6 +4142,11 @@ bool ReviaWindow::RunAdmittedQuestion(QMessageBox& question, const std::function
 {
     if (!admitted())
         return false;
+    // Every approval names things Revia did not write: a control's accessible name from
+    // the page or program being driven, a window title, a model's MCP arguments. Left on
+    // automatic, Qt renders a first line that looks like HTML as HTML, so a control named
+    // with markup could restyle or hide the rest of what is being approved.
+    question.setTextFormat(Qt::PlainText);
     QTimer admissionTimer;
     connect(&admissionTimer, &QTimer::timeout, &question,
         [&question, admitted]()

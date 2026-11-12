@@ -8932,10 +8932,7 @@ goals::Goal ReviaSession::ExecuteOperate(
     // kinds that always need their own confirmation still stop the task.
     const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
                                  goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
-    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
-    goalRunner.SeedToolDelegation(
-        tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
     const auto desktopApproval = actionRuntime.ApproveDesktopTask(goal.id, messaging);
     const auto startedAt = std::chrono::steady_clock::now();
     if (reportState)
@@ -8956,6 +8953,12 @@ goals::Goal ReviaSession::ExecuteOperate(
     const GoalTokenScope scope(*this, stopToken);
     if (!scope.admitted)
         return RefusedGoalAuthority(std::move(goal));
+    // Seeded only once this goal is admitted and about to run. The runner takes a seed up
+    // at the start of its next run, so one left behind by a refused goal was handed to
+    // whichever goal ran next and could confirm a step nobody had approved for it.
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
+    goalRunner.SeedToolDelegation(
+        tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
     const goals::Goal finished = FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt, reportState);
     // The run's own record, handed back so the last decision's row can be completed
     // from what the runner actually established rather than from what it intended. The

@@ -4,6 +4,7 @@
 #include "Core/utf8.h"
 #include "LLM/promptBuilder.h"
 
+#include <algorithm>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -82,6 +83,16 @@ void ToolLoop::SetAdmission(std::function<bool()> inputAdmission)
 void ToolLoop::SetTurnId(const std::uint64_t inputTurnId)
 {
     turnId = inputTurnId;
+}
+
+void ToolLoop::SetOpeningCalls(std::vector<llm::ToolCall> calls)
+{
+    openingCalls = std::move(calls);
+}
+
+void ToolLoop::SetRequiredCall(llm::ToolCall call)
+{
+    requiredCall = std::move(call);
 }
 
 bool ToolLoop::Active() const
@@ -290,6 +301,21 @@ responseOutput ToolLoop::Run(const messageRouter& router, const std::string& inp
         };
     }
 
+    // What the person's own words asked to be read. It goes through Execute like any
+    // call, so a refusal by policy comes back as its result and the model is told.
+    if (!openingCalls.empty() && callContext.Admitted())
+    {
+        std::vector<llm::ToolCall> calls = openingCalls;
+        const auto toolsStarted = Clock::now();
+        auto results = Execute(calls, callContext, transcriptBytes, executed);
+        toolMilliseconds += ElapsedMilliseconds(toolsStarted);
+        for (auto& call : calls)
+            call.arguments = ReplayableArguments(call.arguments);
+        exchange.rounds.push_back({std::string{}, std::move(calls), std::move(results)});
+    }
+
+    // Still owed while the model has not asked for the tool the person's words require.
+    bool requiredOwed = requiredCall.has_value();
     for (std::size_t step = 0;; ++step)
     {
         if (!callContext.Admitted())
@@ -320,7 +346,14 @@ responseOutput ToolLoop::Run(const messageRouter& router, const std::string& inp
             output.toolCallsExecuted = executed;
             return output;
         }
-        if (output.toolCalls.empty() || !exchange.allowCalls)
+        const bool finishing = output.toolCalls.empty() || !exchange.allowCalls;
+        if (finishing && requiredOwed && callContext.Admitted())
+        {
+            // The model is ending the turn without the call the person asked for, so it
+            // is made for it, and the next step says what came of it.
+            output.toolCalls = {*requiredCall};
+        }
+        else if (finishing)
         {
             output.toolCalls.clear();
             output.response = Joined(visible, output.response);
@@ -343,6 +376,10 @@ responseOutput ToolLoop::Run(const messageRouter& router, const std::string& inp
             separatorPending = delivered;
         }
         std::vector<llm::ToolCall> calls = output.toolCalls;
+        // Asked for by the model or made for it, the required tool has now been tried once.
+        // A second try after a refusal would only be refused again.
+        if (requiredOwed && std::any_of(calls.begin(), calls.end(), [this](const llm::ToolCall& call) { return call.name == requiredCall->name; }))
+            requiredOwed = false;
         const auto toolsStarted = Clock::now();
         auto results = Execute(calls, callContext, transcriptBytes, executed);
         toolMilliseconds += ElapsedMilliseconds(toolsStarted);

@@ -2238,6 +2238,22 @@ void TestResponseFiltersStayLayered()
         12000);
     Check(!permitted.blocked,
         "A permitted action claim was blocked as if she had no hands.");
+    // Hands on does not mean this reply has hands. A request that reaches the model was
+    // not recognised by the action path, so she is told a reply clicks nothing and how the
+    // person can ask instead; with hands off she is told that, and not this.
+    // The description stops early while the internet state is unknown, as it is in a
+    // context built by hand.
+    revia::agents::ResponseFilterContext described = handed;
+    described.internetStateKnown = true;
+    Check(described.Describe().find("does not click, type or open anything by itself") != std::string::npos &&
+              described.Describe().find("Desktop control is off") == std::string::npos,
+        "With desktop control on, the model was not told that a chat reply cannot itself act.");
+    revia::agents::ResponseFilterContext unhanded;
+    unhanded.desktopStateKnown = true;
+    unhanded.internetStateKnown = true;
+    Check(unhanded.Describe().find("Desktop control is off") != std::string::npos &&
+              unhanded.Describe().find("does not click, type or open anything by itself") == std::string::npos,
+        "With desktop control off, the model was told the wrong thing about its hands.");
 
     // And a real observation still licenses describing what is on screen, which is the
     // rule that already existed and must not be inverted by the new one.
@@ -6436,6 +6452,18 @@ void TestPreferencesPersistAndValidate()
         "An authority key hand-written into the file was loaded.");
     Check(values.at("speech.volume") == "33",
         "A legitimate key was dropped alongside the rejected one.");
+
+    // A damaged file is not an empty one: changing one preference must not erase the rest.
+    const std::string damaged = R"({"speech.volume":"33","speech.enabled":"false")";
+    {
+        std::ofstream file(path, std::ios::trunc | std::ios::binary);
+        file << damaged;
+    }
+    Check(!tampered.Set("speech.volume", "50").succeeded && !tampered.Clear("speech.volume").succeeded,
+        "A preference was written over a file that could not be read.");
+    std::ifstream kept(path, std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(kept)), std::istreambuf_iterator<char>());
+    Check(after == damaged, "An unreadable preference file was overwritten.");
 }
 
 // Unit 4.3D playback. The parser, the bank and the policy all existed and all worked,

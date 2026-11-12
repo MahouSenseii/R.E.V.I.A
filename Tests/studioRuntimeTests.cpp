@@ -850,6 +850,17 @@ void TestLocalStudioGrammarPinsNativeEvidence()
                   alternatives.at(1).at("properties").at("items").at("maxItems") == 0 &&
                   alternatives.at(1).at("properties").at("noneReason").at("minLength") == 1,
             "Model grammar lost mutually exclusive optional-section content and absence rationale.");
+        // An array bound binds in llama.cpp's grammar only where the item type is stated.
+        // Without it "no items, with a reason" admitted items too, a live 9B's verifying
+        // worker gave both 10 times in 10, and every such deliverable was refused.
+        for (const auto* section : {"risks", "constraints"})
+        {
+            if (!properties.contains(section) || !properties.at(section).contains("anyOf"))
+                continue;
+            const auto& emptyList = properties.at(section).at("anyOf").at(1).at("properties").at("items");
+            Check(emptyList.at("maxItems") == 0 && emptyList.contains("items") && emptyList.at("items").value("type", "") == "string",
+                std::string("The empty list of a section that may be absent does not bind in the model grammar: ") + section);
+        }
     }
 }
 

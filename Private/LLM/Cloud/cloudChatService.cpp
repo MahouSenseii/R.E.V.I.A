@@ -364,6 +364,15 @@ responseOutput CloudChatService::GenerateResponse(const std::vector<conversation
         failure = "The cloud model returned HTTP " + std::to_string(transfer.status) + ": " + ErrorPreview(errorBody);
     else if (!streamError.empty())
         failure = "The cloud model reported an error: " + revia::utf8::Prefix(streamError, 300);
+    // HTTP 200 only says the stream began. The transport can still stop it part-way (its
+    // whole-stream deadline, the size cap, a dropped connection), and the text received
+    // up to then is not the answer.
+    else if (!transfer.error.empty())
+        failure = "The cloud reply was cut off before it finished: " + revia::utf8::Prefix(revia::utf8::Sanitize(transfer.error), 300);
+    // A stream that ends cleanly says so: a finish reason, the provider's end marker, or
+    // both. Neither means the connection closed mid-reply without the transport noticing.
+    else if (!done && finishReason.empty())
+        failure = "The cloud reply ended without its end marker, so it is incomplete.";
     else if (finishReason == "refusal")
         failure = "The cloud model declined to answer.";
 

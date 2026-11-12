@@ -93,10 +93,35 @@ void TestCorrectionAndStrictPersistence()
 }
 }
 
+// The history is bounded at 256 records. It used to fill once and refuse every lesson
+// after that; a finished record now makes room, and an open one never does.
+void TestAFullHistoryMakesRoomOnlyFromFinishedRecords()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    LearningRecordStore store(fixture.root / "learning");
+    std::string error, id, first;
+    Check(store.Initialize(error), error);
+    for (std::size_t index = 0; index < 256; ++index)
+    {
+        Check(store.Propose(Candidate(7 + index), id, error), "Filling the history failed at " + std::to_string(index) + ": " + error);
+        if (index == 0)
+            first = id;
+    }
+    std::string extra;
+    Check(!store.Propose(Candidate(900), extra, error), "A full history of open reviews dropped one to make room.");
+    Check(store.Decide(first, LearningDecision::Reject, "Counts do not establish the proposed cause.", error), error);
+    Check(store.Propose(Candidate(900), extra, error), "A full history refused a lesson although a finished record could go: " + error);
+    Check(!store.Find(first) && store.Find(extra) && store.History().size() == 256,
+        "Making room did not drop exactly the finished record.");
+    LearningRecordStore restarted(fixture.root / "learning");
+    Check(restarted.Initialize(error) && restarted.History().size() == 256 && restarted.Find(extra), "The pruned history did not persist.");
+}
+
 void RunLearningReviewTests()
 {
     TestImmutableEvidenceRevisionAndRejectedHistory();
     TestChecksCannotBeOverriddenAndMemorySaveIsRetryable();
     TestCorrectionAndStrictPersistence();
+    TestAFullHistoryMakesRoomOnlyFromFinishedRecords();
     std::cout << "Learning review checks passed: private revisions, rejection, objective admission and retryable semantic receipts.\n";
 }

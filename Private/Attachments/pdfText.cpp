@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +32,82 @@ constexpr std::size_t MaximumStringBytes = 1024 * 1024;
 constexpr int MaximumNesting = 32;
 constexpr int MaximumFormDepth = 8;
 constexpr std::size_t MaximumCMapEntries = 1 << 20;
+// Every font's map together. One map is bounded above; a file with many of them is not.
+constexpr std::size_t MaximumCMapEntriesTotal = 4u << 20;
+// A code stands for a character or a short ligature, never for a megabyte of text.
+constexpr std::size_t MaximumMappedBytes = 256;
+constexpr std::size_t MaximumCodespaceRanges = 256;
+constexpr std::size_t MaximumInlineFonts = 4096;
+constexpr std::size_t MaximumResolvedCodes = 1 << 17;
+// Work is counted, not timed, so the same file always gets the same answer. A unit is
+// roughly one token read or one container entry looked at. Honest files spend well under
+// one unit per byte; the allowance grows with the file and with what its streams
+// decode to, so a large document is never cut short while a small file built to make
+// the parser rescan itself is.
+constexpr std::uint64_t BaseWorkUnits = 4'000'000;
+constexpr std::uint64_t WorkUnitsPerFileByte = 8;
+constexpr std::uint64_t WorkUnitsPerDecodedByte = 4;
+
+struct WorkBudget
+{
+    std::uint64_t remaining = BaseWorkUnits;
+    std::uint64_t sinceStopCheck = 0;
+    std::stop_token stop;
+    bool cancelled = false;
+
+    void Grant(const std::uint64_t units)
+    {
+        if (!cancelled)
+            remaining += units;
+    }
+
+    bool Spend(const std::uint64_t units)
+    {
+        if (remaining == 0)
+            return false;
+        remaining = units >= remaining ? 0 : remaining - units;
+        sinceStopCheck += units;
+        if (sinceStopCheck >= 65536)
+        {
+            sinceStopCheck = 0;
+            if (stop.stop_requested())
+            {
+                cancelled = true;
+                remaining = 0;
+            }
+        }
+        return remaining != 0;
+    }
+};
+
+// One extraction runs on one thread, so the budget it works under is found here rather
+// than handed through every lexer, value and map that spends from it.
+thread_local WorkBudget* activeWork = nullptr;
+
+struct WorkScope
+{
+    explicit WorkScope(WorkBudget& budget) : previous(activeWork) { activeWork = &budget; }
+    ~WorkScope() { activeWork = previous; }
+    WorkScope(const WorkScope&) = delete;
+    WorkScope& operator=(const WorkScope&) = delete;
+    WorkBudget* previous;
+};
+
+bool Spend(const std::uint64_t units = 1)
+{
+    return activeWork == nullptr || activeWork->Spend(units);
+}
+
+bool WorkSpent()
+{
+    return activeWork != nullptr && activeWork->remaining == 0;
+}
+
+void GrantWork(const std::uint64_t units)
+{
+    if (activeWork != nullptr)
+        activeWork->Grant(units);
+}
 
 bool IsWhitespace(const char character)
 {
@@ -111,7 +188,23 @@ public:
         }
     }
 
+    // Every read is paid for by how far it moved, so no caller can rescan the same
+    // bytes for free. Once the work allowance is gone the source simply ends.
     Token Next()
+    {
+        if (WorkSpent())
+        {
+            position = data.size();
+            return {};
+        }
+        const std::size_t begin = position;
+        Token token = Read();
+        Spend(1 + (position - begin) / 8);
+        return token;
+    }
+
+private:
+    Token Read()
     {
         SkipSpace();
         Token token;
@@ -190,7 +283,6 @@ public:
         return token;
     }
 
-private:
     static bool ParseNumber(const std::string& text, double& value, bool& integer)
     {
         std::size_t index = 0;
@@ -350,6 +442,9 @@ struct Value
 
     [[nodiscard]] const Value* Get(const std::string_view key) const
     {
+        // A dictionary is searched in order, so a very large one is paid for by size.
+        if (!Spend(1 + entries.size() / 8))
+            return nullptr;
         for (const auto& [name, value] : entries)
             if (name == key)
                 return &value;
@@ -539,11 +634,44 @@ struct ToUnicodeMap
     std::unordered_map<std::uint64_t, std::string> single;
     std::vector<Range> ranges;
     std::size_t entries = 0;
+    // Codes already looked up in `ranges`. The ranges are searched in file order, so a
+    // font with thousands of them would otherwise pay that search for every glyph on
+    // every page; a code is the same text each time it is shown.
+    mutable std::unordered_map<std::uint64_t, std::optional<std::string>> resolved;
 
     [[nodiscard]] std::optional<std::string> Lookup(const std::uint32_t code, const std::size_t length) const
     {
-        if (const auto found = single.find((static_cast<std::uint64_t>(length) << 32) | code); found != single.end())
+        const std::uint64_t key = (static_cast<std::uint64_t>(length) << 32) | code;
+        if (const auto found = single.find(key); found != single.end())
             return found->second;
+        if (ranges.empty())
+            return std::nullopt;
+        if (const auto found = resolved.find(key); found != resolved.end())
+            return found->second;
+        if (!Spend(1 + ranges.size() / 8))
+            return std::nullopt;
+        std::optional<std::string> text = LookupRange(code, length);
+        if (resolved.size() < MaximumResolvedCodes)
+            resolved.emplace(key, text);
+        return text;
+    }
+
+    // The byte length of the code starting at `bytes`, from the codespace ranges.
+    [[nodiscard]] std::size_t CodeLength(const std::string_view bytes, const std::size_t fallback) const
+    {
+        for (std::size_t length = 1; length <= 4 && length <= bytes.size(); ++length)
+        {
+            const std::uint32_t code = CodeValue(bytes.substr(0, length));
+            for (const auto& [rangeLength, bounds] : codespace)
+                if (rangeLength == length && code >= bounds.first && code <= bounds.second)
+                    return length;
+        }
+        return std::min(fallback, bytes.size());
+    }
+
+private:
+    [[nodiscard]] std::optional<std::string> LookupRange(const std::uint32_t code, const std::size_t length) const
+    {
         for (const Range& range : ranges)
         {
             if (range.length != length || code < range.low || code > range.high)
@@ -565,20 +693,13 @@ struct ToUnicodeMap
         }
         return std::nullopt;
     }
-
-    // The byte length of the code starting at `bytes`, from the codespace ranges.
-    [[nodiscard]] std::size_t CodeLength(const std::string_view bytes, const std::size_t fallback) const
-    {
-        for (std::size_t length = 1; length <= 4 && length <= bytes.size(); ++length)
-        {
-            const std::uint32_t code = CodeValue(bytes.substr(0, length));
-            for (const auto& [rangeLength, bounds] : codespace)
-                if (rangeLength == length && code >= bounds.first && code <= bounds.second)
-                    return length;
-        }
-        return std::min(fallback, bytes.size());
-    }
 };
+
+// What one code maps to, as UTF-16BE bytes cut to whole units within the bound.
+std::string MappedBytes(const std::string& destination)
+{
+    return destination.substr(0, std::min(destination.size(), MaximumMappedBytes) & ~std::size_t{1});
+}
 
 ToUnicodeMap ParseToUnicode(const std::string_view source)
 {
@@ -607,9 +728,16 @@ ToUnicodeMap ParseToUnicode(const std::string_view source)
                     if (first.empty() || first.size() > 4)
                         continue;
                     if (codespace)
-                        map.codespace.push_back({first.size(), {CodeValue(first), CodeValue(second)}});
+                    {
+                        // Real maps declare one to four. Every glyph is checked against all of them.
+                        if (map.codespace.size() < MaximumCodespaceRanges)
+                            map.codespace.push_back({first.size(), {CodeValue(first), CodeValue(second)}});
+                    }
                     else
-                        map.single[(static_cast<std::uint64_t>(first.size()) << 32) | CodeValue(first)] = Utf16BeToUtf8(second);
+                    {
+                        map.single[(static_cast<std::uint64_t>(first.size()) << 32) | CodeValue(first)] =
+                            Utf16BeToUtf8(MappedBytes(second));
+                    }
                     ++map.entries;
                 }
                 section.clear();
@@ -634,7 +762,7 @@ ToUnicodeMap ParseToUnicode(const std::string_view source)
                 for (Token item = lexer.Next(); item.kind == TokenKind::String; item = lexer.Next())
                 {
                     if (range.each.size() < 65536)
-                        range.each.push_back(item.text);
+                        range.each.push_back(MappedBytes(item.text));
                 }
                 if (range.low <= range.high && range.high - range.low < 65536)
                 {
@@ -653,7 +781,7 @@ ToUnicodeMap ParseToUnicode(const std::string_view source)
                 range.low = CodeValue(operands[0].text);
                 range.high = CodeValue(operands[1].text);
                 range.length = std::max<std::size_t>(1, std::min<std::size_t>(4, operands[0].text.size()));
-                range.start = operands[2].text;
+                range.start = MappedBytes(operands[2].text);
                 if (range.low <= range.high && range.high - range.low < 65536)
                 {
                     map.entries += 1;
@@ -702,6 +830,8 @@ public:
         std::vector<int> pages;
         for (const auto& [number, object] : objects)
         {
+            if (WorkSpent())
+                return pages;
             const Value* type = object.value.Get("Type");
             if (type && type->IsName("Catalog"))
             {
@@ -717,6 +847,8 @@ public:
         // No usable page tree: take every page object in number order.
         for (const auto& [number, object] : objects)
         {
+            if (WorkSpent())
+                break;
             const Value* type = object.value.Get("Type");
             if (type && type->IsName("Page") && pages.size() < MaximumPages)
                 pages.push_back(number);
@@ -757,6 +889,10 @@ public:
         std::string data(object.stream.substr(0, std::min(object.stream.size(), MaximumStreamBytes)));
         for (const std::string& filter : filters)
         {
+            // A stream that fails late, or names a filter this reader lacks, is decoded
+            // again each time it is asked for, so the attempt itself is paid for.
+            if (!Spend(1 + data.size() / 64))
+                return std::nullopt;
             if (filter == "FlateDecode" || filter == "Fl")
             {
                 InflateResult inflated = InflateZlib(data, MaximumStreamBytes);
@@ -781,6 +917,8 @@ public:
             }
         }
         decodedTotal += data.size();
+        // What was decoded still has to be read, and that is honest work.
+        GrantWork(WorkUnitsPerDecodedByte * data.size());
         return data;
     }
 
@@ -852,7 +990,10 @@ private:
     void ScanObjects()
     {
         std::size_t cursor = 0;
-        while (cursor < file.size() && objects.size() < MaximumObjects)
+        // Where a search for "endstream" last came back empty. Nothing at or past it can
+        // find one either, so a file of stream headers with no ends is searched once.
+        std::size_t noEndstreamFrom = std::string_view::npos;
+        while (cursor < file.size() && objects.size() < MaximumObjects && Spend())
         {
             const std::size_t at = file.find("obj", cursor);
             if (at == std::string_view::npos)
@@ -914,9 +1055,12 @@ private:
                 }
                 if (length == std::string_view::npos)
                 {
-                    const std::size_t end = file.find("endstream", start);
+                    const std::size_t end = start >= noEndstreamFrom ? std::string_view::npos : file.find("endstream", start);
                     if (end == std::string_view::npos)
+                    {
+                        noEndstreamFrom = std::min(noEndstreamFrom, start);
                         continue;
+                    }
                     std::size_t trimmed = end;
                     if (trimmed > start && file[trimmed - 1] == '\n')
                         --trimmed;
@@ -936,8 +1080,10 @@ private:
                 encrypted = true;
             objects[number] = std::move(object);
         }
-        // Classic trailers carry the encryption dictionary.
-        for (std::size_t at = file.find("trailer"); at != std::string_view::npos; at = file.find("trailer", at + 7))
+        // Classic trailers carry the encryption dictionary. A trailer whose dictionary
+        // never closes is read to the end of the file, so each one is paid for in full
+        // and a file made of nothing but the word stops here instead of being rescanned.
+        for (std::size_t at = file.find("trailer"); at != std::string_view::npos && !WorkSpent(); at = file.find("trailer", at + 7))
         {
             Lexer lexer(file, at + 7);
             if (const auto trailer = ParseValue(lexer); trailer && trailer->Get("Encrypt"))
@@ -956,6 +1102,8 @@ private:
         }
         for (const int container : containers)
         {
+            if (WorkSpent())
+                break;
             const PdfObject& source = objects.at(container);
             const Value* count = source.value.Get("N");
             const Value* first = source.value.Get("First");
@@ -979,6 +1127,8 @@ private:
             }
             for (const auto& [number, offset] : members)
             {
+                if (!Spend())
+                    break;
                 if (objects.contains(number) || base + offset >= buffer->size() || objects.size() >= MaximumObjects)
                     continue;
                 Lexer lexer(*buffer, base + offset);
@@ -995,7 +1145,7 @@ private:
 
     void CollectPages(const int number, std::vector<int>& pages, std::set<int>& visited, const int depth, const Value* inherited)
     {
-        if (depth > 64 || pages.size() >= MaximumPages || !visited.insert(number).second)
+        if (depth > 64 || pages.size() >= MaximumPages || !Spend() || !visited.insert(number).second)
             return;
         const PdfObject* node = Object(number);
         if (!node)
@@ -1112,6 +1262,18 @@ private:
         const Value* font = pdf.Resolve(entry);
         if (!font || font->kind != Value::Kind::Dictionary)
             return nullptr;
+        // A font written directly into the resources has no object number, so it is
+        // known by the dictionary it was read from. That dictionary belongs to the
+        // document and does not move, and neither does an entry in either map: the
+        // pointer handed back stays good while a form inside the page selects other
+        // fonts and control then returns to this one.
+        if (key < 0)
+        {
+            if (const auto cached = inlineFonts.find(font); cached != inlineFonts.end())
+                return &cached->second;
+            if (inlineFonts.size() >= MaximumInlineFonts)
+                return nullptr;
+        }
         FontInfo info;
         const Value* subtype = font->Get("Subtype");
         info.composite = subtype && subtype->IsName("Type0");
@@ -1123,16 +1285,17 @@ private:
             }
             else if (const PdfObject* object = pdf.Object(map->reference))
             {
-                if (auto decoded = pdf.DecodeStream(*object))
-                    info.toUnicode = std::make_shared<ToUnicodeMap>(ParseToUnicode(*decoded));
+                if (cmapEntries < MaximumCMapEntriesTotal)
+                    if (auto decoded = pdf.DecodeStream(*object))
+                    {
+                        info.toUnicode = std::make_shared<ToUnicodeMap>(ParseToUnicode(*decoded));
+                        cmapEntries += info.toUnicode->entries;
+                    }
                 cmapCache[map->reference] = info.toUnicode;
             }
         }
         if (key < 0)
-        {
-            anonymousFonts.push_back(std::move(info));
-            return &anonymousFonts.back();
-        }
+            return &inlineFonts.emplace(font, std::move(info)).first->second;
         return &fontCache.emplace(key, std::move(info)).first->second;
     }
 
@@ -1143,7 +1306,9 @@ private:
         if (currentFont && currentFont->toUnicode)
         {
             const ToUnicodeMap& map = *currentFont->toUnicode;
-            for (std::size_t at = 0; at < bytes.size();)
+            // The limit is checked for every code, not once on the way in: one string
+            // can hold a million codes and each may stand for more than one byte.
+            for (std::size_t at = 0; at < bytes.size() && text.size() <= limit;)
             {
                 const std::size_t length = map.CodeLength(std::string_view(bytes).substr(at), currentFont->composite ? 2 : 1);
                 if (length == 0)
@@ -1173,9 +1338,12 @@ private:
             undecodedGlyphs += bytes.size() / 2;
             return;
         }
-        for (const char byte : bytes)
+        // Each byte becomes at most three, so one bounded string cannot pass the limit by much.
+        const std::size_t room = limit - text.size() + 1;
+        const std::string_view shown = std::string_view(bytes).substr(0, room);
+        for (const char byte : shown)
             AppendWinAnsi(text, static_cast<unsigned char>(byte));
-        decodedGlyphs += bytes.size();
+        decodedGlyphs += shown.size();
     }
 
     void Run(const std::string_view stream, const Value* resources, const int depth)
@@ -1305,8 +1473,9 @@ private:
     PdfDocument& pdf;
     const FontInfo* currentFont = nullptr;
     std::map<int, FontInfo> fontCache;
-    std::vector<FontInfo> anonymousFonts;
+    std::map<const Value*, FontInfo> inlineFonts;
     std::map<int, std::shared_ptr<ToUnicodeMap>> cmapCache;
+    std::size_t cmapEntries = 0;
     std::set<int> formsVisited;
 };
 
@@ -1348,7 +1517,7 @@ std::size_t VisibleCharacters(const std::string& text)
 }
 } // namespace
 
-ExtractedText ExtractPdfText(const std::string_view bytes, const std::size_t maxTextBytes)
+ExtractedText ExtractPdfText(const std::string_view bytes, const std::size_t maxTextBytes, const std::stop_token stopToken)
 {
     ExtractedText result;
     const std::size_t header = bytes.substr(0, 1024).find("%PDF-");
@@ -1357,14 +1526,37 @@ ExtractedText ExtractPdfText(const std::string_view bytes, const std::size_t max
         result.reason = "This is not a PDF file.";
         return result;
     }
+    WorkBudget work;
+    work.stop = stopToken;
+    work.Grant(WorkUnitsPerFileByte * bytes.size());
+    const WorkScope scope(work);
+    // Checked wherever a result could otherwise be read from a parse that was cut short:
+    // a half-read file must not be reported as "no pages" or "no text layer".
+    const auto stopped = [&]()
+    {
+        if (stopToken.stop_requested())
+            work.cancelled = true;
+        if (work.remaining != 0 && !work.cancelled)
+            return false;
+        result = {};
+        result.reason = work.cancelled ? "Reading this PDF was cancelled."
+                                       : "This PDF takes far more work to read than its size accounts for, so it was not read. It may be "
+                                         "damaged, or built to stall a reader.";
+        return true;
+    };
     PdfDocument document(bytes);
     std::string error;
-    if (!document.Load(error))
+    const bool loaded = document.Load(error);
+    if (stopped())
+        return result;
+    if (!loaded)
     {
         result.reason = error;
         return result;
     }
     const std::vector<int> pages = document.Pages();
+    if (stopped())
+        return result;
     if (pages.empty())
     {
         result.reason = "No pages were found in this PDF; it may be damaged.";
@@ -1378,6 +1570,8 @@ ExtractedText ExtractPdfText(const std::string_view bytes, const std::size_t max
     {
         collector.text.clear();
         collector.RunPage(page);
+        if (stopped())
+            return result;
         std::string pageText = Tidy(collector.text);
         if (!combined.empty())
             combined += "\n\n";

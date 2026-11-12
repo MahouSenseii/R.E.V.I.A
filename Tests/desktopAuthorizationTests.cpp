@@ -361,6 +361,13 @@ void TestAnApprovableStepCanActuallyBeApproved()
         !seen.reason.empty(),
         "The prompt did not say which control, in which application, or why.");
 
+    // The window named is the one Windows reports, not the shorter title the model asked
+    // for: "Messenger" also matches "Messenger - Chat with Sam's landlord".
+    Check(revia::policy::AuthorizeOrExplain(revia::policy::DesktopOperation::PointerActivate,
+              Control("Send", "Messenger - Chat with Sam's landlord"), settings, request, refusal, &gate) &&
+              seen.windowTitle == "Messenger - Chat with Sam's landlord",
+        "The approval prompt showed the model's window title instead of the real one: " + seen.windowTitle);
+
     // Declining is a refusal, not a retry, and it says the person declined rather than
     // blaming the policy.
     gate.SetHandler([](const revia::policy::ApprovalPrompt&) { return false; });

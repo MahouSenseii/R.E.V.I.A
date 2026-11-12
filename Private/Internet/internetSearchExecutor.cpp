@@ -119,6 +119,13 @@ bool GetHttps(const std::wstring& host, const std::wstring& path, const int time
             WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)
         : nullptr;
     const wchar_t* headers = L"Accept: application/json\r\n";
+    // The approved host is checked once, here. A redirect would take the query to a host
+    // nobody checked, so none is followed; it arrives as a non-200 answer and fails.
+    if (request != nullptr)
+    {
+        DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+    }
     if (admission.beforeEffect)
     {
         outError = admission.beforeEffect(std::string(host.begin(), host.end()));

@@ -93,6 +93,107 @@ namespace
             { return paragraph.starts_with(header) || paragraph.find("\n" + std::string(header)) != std::string_view::npos; });
     }
 
+    // DRY lowers the chance of each token that would continue a run of tokens already in
+    // the context, more steeply the longer the run. That is what ends a phrase loop. It
+    // cannot tell her repeating herself from her handing back what she was given, and
+    // with every run past two tokens penalised, as each chat reply used to be, the local
+    // 9B could do none of these in any try: copy a folder path into a tool call (0 of
+    // 28), report a searched height as the result gave it (0 of 28), read a remembered
+    // phone number back (0 of 8). It wrote a near-copy, or a different number, or said it
+    // had no record. So a run is now let through for as long as these stay whole.
+    //
+    // Ordinary talk: long enough to say a phone number or a name back, short enough that
+    // a phrase she starts to repeat is cut off about a dozen tokens in. Over a 45-reply
+    // conversation about one in a hundred of her four-word runs was one she had already
+    // used, at 8 as at 2.
+    constexpr int SpokenRepeatAllowance = 8;
+    // A reply that has text to carry across: long enough for a line of a file or a
+    // sentence of a search result, and a run of that length repeated is still a loop.
+    constexpr int CarriedRepeatAllowance = 64;
+    // A joke or a roast she was asked for: nothing in it has to be said back as given,
+    // and the one thing it must not be is the one she told last. Asked for a joke about
+    // welding a second time, the 9B retold its last one in 3 tries of 10 at 8, and in 1 of
+    // 10 when asked for another; in none of either at 2.
+    constexpr int PerformedRepeatAllowance = 2;
+
+    enum class RepeatBrake
+    {
+        Performed,
+        Spoken,
+        Carried
+    };
+
+    // Whether the person asked for a joke, a roast, a pun or the like, read from the
+    // whole words of what they said. A miss either way only moves the brake.
+    bool AsksForAPerformance(const std::string_view text)
+    {
+        constexpr std::string_view acts[] = {"joke", "jokes", "roast", "pun", "puns", "riddle", "riddles", "limerick", "haiku"};
+        std::string word;
+        const auto performs = [&word, &acts] { return std::find(std::begin(acts), std::end(acts), word) != std::end(acts); };
+        for (const char raw : text)
+        {
+            const auto character = static_cast<unsigned char>(raw);
+            if (std::isalpha(character) != 0)
+            {
+                word.push_back(static_cast<char>(std::tolower(character)));
+                continue;
+            }
+            if (performs())
+                return true;
+            word.clear();
+        }
+        return performs();
+    }
+
+    // Whether `text` holds something that has to be handed back character for character:
+    // a long number, a path or address, a file name, quoted words, a line of code. "In 20
+    // minutes" is ordinary talk; five digits or more is a phone number, a date, a total.
+    bool HoldsExactText(const std::string_view text)
+    {
+        int digits = 0;
+        for (std::size_t at = 0; at < text.size(); ++at)
+        {
+            const auto character = static_cast<unsigned char>(text[at]);
+            if ((std::isdigit(character) != 0 && ++digits >= 5) || std::string_view("/\\@`_\"={}<>").find(text[at]) != std::string_view::npos)
+                return true;
+            // "todo.md", "example.com": a dot with a letter or digit on each side.
+            if (character == '.' && at > 0 && at + 1 < text.size() && std::isalnum(static_cast<unsigned char>(text[at - 1])) != 0 &&
+                std::isalnum(static_cast<unsigned char>(text[at + 1])) != 0)
+                return true;
+            // Typographic double quotes, U+201C and U+201D.
+            if (character == 0xE2 && at + 2 < text.size() && static_cast<unsigned char>(text[at + 1]) == 0x80 &&
+                (static_cast<unsigned char>(text[at + 2]) == 0x9C || static_cast<unsigned char>(text[at + 2]) == 0x9D))
+                return true;
+        }
+        return false;
+    }
+
+    // Whether the runtime put text in front of this reply for it to answer from: a page it
+    // read, search results, the clipboard, an attached file, passages of a kept document.
+    bool HoldsGroundingText(const std::string_view text)
+    {
+        namespace markers = revia::identity::markers;
+        constexpr std::string_view headers[] = {markers::LivePageGrounding, markers::VisibleBrowserGrounding, markers::ClipboardGrounding,
+            markers::AttachmentGrounding, markers::DocumentGrounding};
+        return std::any_of(
+            std::begin(headers), std::end(headers), [text](const std::string_view header) { return text.find(header) != std::string_view::npos; });
+    }
+
+    void ApplyRepetitionBrake(json& requestBody, const RepeatBrake brake)
+    {
+        requestBody["dry_multiplier"] = 0.8;
+        requestBody["dry_base"] = 1.75;
+        requestBody["dry_allowed_length"] = brake == RepeatBrake::Carried  ? CarriedRepeatAllowance
+                                            : brake == RepeatBrake::Spoken ? SpokenRepeatAllowance
+                                                                           : PerformedRepeatAllowance;
+        requestBody["dry_penalty_last_n"] = 4096;
+        // A run starts again after any of these. The first four are llama.cpp's own, and
+        // naming any replaces them all. With the two separators each folder name is a run
+        // of its own, so a path of any depth gets through.
+        if (brake == RepeatBrake::Carried)
+            requestBody["dry_sequence_breakers"] = json::array({"\n", ":", "\"", "*", "/", "\\"});
+    }
+
     std::vector<std::string> CaptureTurnPriorityParagraphs(const std::string& posture)
     {
         std::optional<std::pair<std::size_t, std::size_t>> purpose;
@@ -1816,10 +1917,28 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         requestBody["response_format"] = frameResponseFormat;
     else if (!factualImageInspection)
     {
-        requestBody["dry_multiplier"] = 0.8;
-        requestBody["dry_base"] = 1.75;
-        requestBody["dry_allowed_length"] = 2;
-        requestBody["dry_penalty_last_n"] = 4096;
+        // Text this reply may have to hand back as it stands: a tool result in play,
+        // something the runtime read for the turn, or a number, path, file name or
+        // quotation in what the person just said.
+        bool carriesText = (offerTools && !tools->rounds.empty()) || (latestUser != context.rend() && HoldsExactText(latestUser->content));
+        for (auto message = textMessages.begin(); message != textMessages.end() && !carriesText; ++message)
+        {
+            const auto content = message->find("content");
+            carriesText = content != message->end() && content->is_string() && HoldsGroundingText(content->get_ref<const std::string&>());
+        }
+        // Or in the few things they said before it ("the other file in there"), unless
+        // what they ask for now is a joke: that needs nothing handed back.
+        constexpr int MessagesStillInHand = 4;
+        const bool performing = !carriesText && latestUser != context.rend() && AsksForAPerformance(latestUser->content);
+        int considered = 0;
+        for (auto said = context.rbegin(); said != context.rend() && considered < MessagesStillInHand && !carriesText && !performing; ++said)
+        {
+            if (said->role != "user" || said->content.empty())
+                continue;
+            carriesText = HoldsExactText(said->content);
+            ++considered;
+        }
+        ApplyRepetitionBrake(requestBody, carriesText ? RepeatBrake::Carried : performing ? RepeatBrake::Performed : RepeatBrake::Spoken);
     }
     requestBody["stop"] = json::array();
     for (const char* marker : StopMarkers)
@@ -2658,16 +2777,13 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
                         {"schema", operation == "saved source review" ? nlohmann::ordered_json::parse(responseSchema)
                                                                      : nlohmann::ordered_json(json::parse(responseSchema))}}}};
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
-        // Not for a code review. DRY penalises repeating text that is already in the
-        // context, and a review's whole job is to repeat the code it replaces exactly
-        // and then most of it again as the replacement. With it on, she shortened the
-        // lines she meant with "...", dropped their indentation, and replies ended
-        // mid-string, and the edit could never be found in the file.
-        if (operation != "self code review" && operation != "saved source review")
-        {
-            requestBody["dry_multiplier"] = 0.8;
-            requestBody["dry_penalty_last_n"] = 4096;
-        }
+        // No DRY on a reply that code reads. DRY penalises repeating text that is
+        // already in the context, and what these replies carry is such text, which has
+        // to arrive unchanged: the numbers in a sum, the path in an action, the name of
+        // the control to press, the words the person asked her to type. A code review
+        // showed it first: she shortened the lines she meant with "...", dropped their
+        // indentation, and the edit could never be found in the file. The schema and the
+        // token ceiling bound these replies instead.
     }
 
     if (operation == "saved source review")
@@ -3070,8 +3186,10 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
             {"top_k", 20},
             {"top_p", 0.8},
             {"min_p", 0.0},
-            {"dry_multiplier", 0.8},
-            {"dry_penalty_last_n", 4096},
+            // No DRY. The summary has to carry the person's fact across as they gave it,
+            // and DRY lowers the chance of every token that would. A live 9B told a
+            // sister's phone number kept it exactly in none of 18 tries with DRY at 0.8,
+            // saving an invented number in most, and in all 18 without it.
             {"max_tokens", 256},
             // Streamed so a user's turn preempts classification at once.
             {"stream", true},

@@ -45,11 +45,13 @@ void AddPathIdentity(Json& receipt, const char* field, const std::filesystem::pa
 }
 }
 
-std::string WorkerToolSchema(const bool allowWrites, const bool allowProcess)
+std::string WorkerToolSchema(const bool allowWrites, const bool allowProcess, const bool mayEnd)
 {
     const Json path = {{"type", "string"}, {"minLength", 1}, {"maxLength", 2048}};
-    Json choices = Json::array(
-        {Json{{"type", "null"}}, ObjectSchema({{"action", {{"enum", {"list_directory", "read_text_file"}}}}, {"source", path}})});
+    Json choices = Json::array();
+    if (mayEnd)
+        choices.push_back(Json{{"type", "null"}});
+    choices.push_back(ObjectSchema({{"action", {{"enum", {"list_directory", "read_text_file"}}}}, {"source", path}}));
     if (allowWrites)
         choices.push_back(ObjectSchema({{"action", {{"const", "write_text_file"}}}, {"source", path},
             {"content", {{"type", "string"}, {"maxLength", 8192}}}, {"expected_digest", {{"type", "string"}, {"maxLength", 64}}}}));

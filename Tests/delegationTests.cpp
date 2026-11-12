@@ -761,9 +761,53 @@ void TestNarrowingTasksDoNotRevokeOtherWork()
 
 // ---- Whole session ----------------------------------------------------------------
 
-void TestExplicitDelegationWithoutCallHasHostOutcome()
+// "Use your agents" starts them, whatever the reply says. Asked that way a live 9B made the
+// hand-off in 8 tries of 13; in the others it said it would, asked a question back, or
+// answered itself, and nothing started. A reply that ends without the call now has it made
+// from the person's own request, and the model's next step says what came of it.
+void TestExplicitDelegationStartsATaskWithoutTheModelsCall()
 {
     SessionFixture fixture("delegation-no-call");
+    fixture.backend.HoldWorkers();
+    const std::string request = "Use your agents to compare the fixture release notes.";
+    const std::string prose = "I'm going to delegate this to my agents.";
+    const std::string after = "It is with them now.";
+    fixture.backend.SetChat([&](const Json& wire) { return std::vector<Json>{Text(ToolMessages(wire).empty() ? prose : after)}; });
+    const auto reply = fixture.Say(request);
+    Check(reply.succeeded && reply.fromAssistant && reply.text == prose + "\n\n" + after,
+        "The reply did not keep the model's own words around the hand-off: " + reply.reason + " / " + reply.text);
+    const auto task = fixture.session.DelegatedTask();
+    Check(task && task->objective == request && task->originTurnId != 0 && fixture.session.AgentWorkflowSnapshot().id == task->taskId,
+        "A request for the agents that the reply only talked about did not start a task from the person's own words.");
+    const auto chat = fixture.backend.Requests(DelegationBackend::Kind::Chat);
+    Check(chat.size() == 2 && Offers(chat[0], "delegate_task") && ToolMessages(chat[0]).empty() && ToolMessages(chat[1]).size() == 1 &&
+              ToolMessages(chat[1])[0].value("tool_call_id", "") == "requested_1",
+        "The model was not asked first, or was not shown the hand-off made for it.");
+    auto outcomes = fixture.DelegationOutcomes();
+    Check(outcomes.size() == 1 && outcomes[0].kind == RuntimeEventKind::DelegationOutcome && outcomes[0].phase == "Submitted" &&
+              task && outcomes[0].detail == task->taskId && outcomes[0].audienceRevision != 0 &&
+              outcomes[0].audienceRevision == reply.audienceRevision && outcomes[0].stamp.SameSession(reply.stamp),
+        "The hand-off made for the model lacked its host outcome, bound to the turn, audience and session.");
+    const auto history = ReviaSessionTestAccess::WorkingContext(fixture.session);
+    Check(std::any_of(history.begin(), history.end(), [&reply](const auto& message)
+              { return message.role == "assistant" && message.content == reply.text; }),
+        "The reply around the hand-off was not kept in conversation history.");
+
+    // Asked again while that task runs: its owner refuses once, and nothing is replaced.
+    const auto busy = fixture.Say("Use your agents to compare a different fixture release note.");
+    const auto still = fixture.session.DelegatedTask();
+    outcomes = fixture.DelegationOutcomes();
+    Check(busy.succeeded && task && still && still->taskId == task->taskId && outcomes.size() == 2 &&
+              outcomes.back().phase == "Refused" && outcomes.back().detail.empty(),
+        "A second request made for the model replaced the running task, or was not refused once.");
+}
+
+// Where no hand-off can be made (here delegation is switched off), nothing is started
+// whatever the reply claims, and the host says so.
+void TestExplicitDelegationThatCannotStartHasHostOutcome()
+{
+    SessionFixture fixture("delegation-cannot-start");
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Off);
     const std::vector<std::string> replies = {
         "I just sent off a new task to the workers to compare the release notes.",
         "I would rather answer directly; no new task was started."};
@@ -1281,6 +1325,17 @@ void TestWorkersAreToldWhichListedFilesAreUnread()
         if (receipts.size() == 1 && !receipts[0].value("succeeded", false))
             Check(false, "The fixture listing did not succeed: " + receipts.dump());
         notes.try_emplace(receipts.size(), DelegationBackend::Note(wire));
+        // With nothing read and a folder it may read, a worker's step has to be an action.
+        // Told only that tool:null would end the work with nothing found, a live 9B still
+        // answered tool:null to one hand-off's first step 20 times in 20.
+        const auto& choices = wire.at("response_format").at("json_schema").at("schema").at("properties").at("tool").at("anyOf");
+        const bool mayEnd =
+            std::any_of(choices.begin(), choices.end(), [](const Json& choice) { return choice.value("type", "") == "null"; });
+        const std::string instructions = wire.at("messages").at(0).value("content", std::string{});
+        Check(mayEnd == !receipts.empty(), "A worker's first step may still end with nothing read, or a later one may not end.");
+        Check((instructions.find("choose the first action that will get some") != std::string::npos) == receipts.empty() &&
+                  instructions.find("tool:null now ends the work") == std::string::npos,
+            "A worker was not told to act first, or was told about an answer it may not give: " + instructions.substr(0, 160));
     }
     Check(notes.size() == 4, "A worker did not take the four fixture steps; " + fixture.Describe());
     Check(notes[0].empty(), "A worker was given a host note before anything was listed: " + notes[0]);
@@ -1703,9 +1758,15 @@ void TestUnreachableAgentsAreNamedInThePrompt()
     const auto pointed = [](const Json& wire)
     { return wire.dump().find("The person asked you to use your agents: hand the work to them with delegate_task.") != std::string::npos; };
 
+    // The fixture's reply never makes the call, so the hand-off is made for it; its task is
+    // held in flight so the rest of this test meets one known task.
+    fixture.backend.HoldWorkers();
     auto chat = turn(ask);
-    Check(Offers(chat.back(), "delegate_task") && !told(chat.back()), "Reachable agents were described as unavailable.");
-    Check(pointed(chat.back()), "Asked for the agents, the tool note did not point the model at delegate_task.");
+    Check(Offers(chat.front(), "delegate_task") && !told(chat.front()) && !told(chat.back()),
+        "Reachable agents were described as unavailable.");
+    Check(pointed(chat.front()), "Asked for the agents, the tool note did not point the model at delegate_task.");
+    const auto reachable = fixture.session.DelegatedTask();
+    Check(reachable.has_value(), "Reachable agents were asked for and none started.");
     ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Auto);
     chat = turn("Why does the audio keep cutting out?");
     Check(Offers(chat.back(), "delegate_task") && !pointed(chat.back()) && !told(chat.back()),
@@ -1723,33 +1784,33 @@ void TestUnreachableAgentsAreNamedInThePrompt()
     chat = turn(ask);
     Check(chat.size() >= 2 && Offers(chat.front(), "delegate_task") && !chat.back().contains("tools") && told(chat.back()),
         "After the server turned the tools down, the retried reply had no word that no task can start.");
-    Check(!fixture.session.DelegatedTask() && fixture.session.AgentWorkflowSnapshot().id.empty(), "A refused handoff started a task.");
+    const auto after = fixture.session.DelegatedTask();
+    Check(reachable && after && after->taskId == reachable->taskId && fixture.session.AgentWorkflowSnapshot().id == reachable->taskId,
+        "A refused handoff started a task.");
 }
 
-// Live, "use your agents..." once got "I'm going to delegate..." with no delegate_task call.
-// Her next turn now says no task started, until one does; a real hand-off clears it.
+// A request for the agents that started nothing is remembered. Here delegation is switched
+// off, so none can start: her next turn says so, until one does. Live, "use your agents..."
+// once got "I'm going to delegate..." with no delegate_task call; that reply now ends with
+// the hand-off made for it, which clears the note like any other.
 void TestAMissedHandoffIsNotTreatedAsStarted()
 {
     SessionFixture fixture("missed-handoff");
     const std::string note = "Your last request to use your agents did not start a task";
     const auto lastChat = [&] { return fixture.backend.Requests(DelegationBackend::Kind::Chat).back().dump(); };
-    fixture.backend.SetChat([](const Json&) { return std::vector<Json>{Text("I'm going to delegate this to my agents.")}; });
+    fixture.backend.SetChat([](const Json& wire)
+        { return std::vector<Json>{Text(ToolMessages(wire).empty() ? "I'm going to delegate this to my agents." : "Handed off.")}; });
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::Off);
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed.");
     Check(!fixture.session.DelegatedTask() && lastChat().find(note) == std::string::npos,
-        "A task started without a call, or the request turn itself was told it had failed.");
+        "A task started with delegation off, or the request turn itself was told it had failed.");
     Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) != std::string::npos,
         "The turn after a missed hand-off was not told that no task started.");
     Check(fixture.Say("ok, anything else new?").succeeded && lastChat().find(note) != std::string::npos,
         "The missed hand-off was forgotten while still true.");
-    fixture.backend.SetChat(
-        [](const Json& wire)
-        {
-            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
-                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
-            return std::vector<Json>{Text("Handed off.")};
-        });
+    ReviaSessionTestAccess::SetDelegationMode(fixture.session, DelegationMode::OnRequest);
     Check(fixture.Say("Use your agents to check the fixture port.").succeeded && fixture.session.DelegatedTask(),
-        "The real hand-off did not start a task.");
+        "A reply that only said it would delegate did not end with the hand-off made for it.");
     Check(fixture.Say("how's that going?").succeeded && lastChat().find(note) == std::string::npos,
         "After a real hand-off she was still told no task had started.");
 }
@@ -1974,7 +2035,8 @@ void RunDelegationTests()
     TestDelegationSettingIsValidatedAndLive();
     TestWorkflowAcceptsOnlyTheExaminedCandidate();
     TestNarrowingTasksDoNotRevokeOtherWork();
-    TestExplicitDelegationWithoutCallHasHostOutcome();
+    TestExplicitDelegationStartsATaskWithoutTheModelsCall();
+    TestExplicitDelegationThatCannotStartHasHostOutcome();
     TestInvalidatedDelegationTurnHasNoHostOutcome();
     TestChatDelegationReportsThroughHerReply();
     TestCancelReachesOnlyTheNamedTask();

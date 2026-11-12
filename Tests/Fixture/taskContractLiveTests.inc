@@ -12,9 +12,11 @@ LiveToolProposal InspectLiveToolProposal(const nlohmann::json& schema, const std
     {
         const auto value = nlohmann::json::parse(content);
         proposal.any = value.contains("tool") && value.at("tool").is_object();
+        // A first step's schema leaves out the null answer; both are the worker's tool step.
         for (const bool writes : {false, true})
             for (const bool process : {false, true})
-                if (schema == nlohmann::json::parse(agents::WorkerToolSchema(writes, process)))
+                if (schema == nlohmann::json::parse(agents::WorkerToolSchema(writes, process)) ||
+                    schema == nlohmann::json::parse(agents::WorkerToolSchema(writes, process, false)))
                 {
                     std::optional<actions::ActionRequest> action;
                     std::string error;

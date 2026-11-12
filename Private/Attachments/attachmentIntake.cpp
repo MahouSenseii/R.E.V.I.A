@@ -344,7 +344,7 @@ IntakeResult AttachmentIntake::IntakeBytes(const std::string_view rawName, const
             if (bytes.size() > limits.maxPdfBytes)
                 return tooLarge(limits.maxPdfBytes);
             staged.mimeType = "application/pdf";
-            extracted = ExtractPdfText(bytes, limits.maxExtractedTextBytes);
+            extracted = ExtractPdfText(bytes, limits.maxExtractedTextBytes, stopToken);
             break;
         case AttachmentKind::Docx:
             if (bytes.size() > limits.maxDocxBytes)

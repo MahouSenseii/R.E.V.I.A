@@ -20,6 +20,7 @@
 #include "Agents/replyFormat.h"
 #include "Agents/replyFragmenter.h"
 #include "Agents/reasoningRelay.h"
+#include "Agents/chatTools.h"
 #include "Agents/toolLoop.h"
 #include "Memory/conversationRecall.h"
 #include "Emotion/stimulusBuilder.h"
@@ -1770,7 +1771,29 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             }
         }
         if (!registry.Empty())
+        {
             toolLoop.emplace(std::move(registry));
+            // A file or folder the person named, where she may read, is read before she
+            // answers instead of being left for the model to decide to look. Not when they
+            // asked for her agents: the file is then theirs to read.
+            if (!delegationRequested && toolLoop->Registry().Find("read_file") != nullptr &&
+                toolLoop->Registry().Find("list_dir") != nullptr)
+            {
+                // The folders they pointed at a few messages back are where "notes.txt in
+                // there" is looked for.
+                std::vector<std::string> earlier;
+                for (auto said = promptContext.rbegin(); said != promptContext.rend() && earlier.size() < 4; ++said)
+                    if (said->role == "user" && !said->content.empty())
+                        earlier.push_back(said->content);
+                toolLoop->SetOpeningCalls(agents::OpeningFileCalls(policyInput, permissions.approvedRoots, earlier));
+            }
+            // "Use your agents" starts them. The model is asked first, since it can say
+            // what "that file" is; if its reply ends without the hand-off, the person's own
+            // request is handed over as it stands. Left to the model alone, a live 9B made
+            // the call in 8 tries of 13.
+            if (delegationRequested && toolLoop->Registry().Find("delegate_task") != nullptr)
+                toolLoop->SetRequiredCall(agents::RequestedDelegationCall(policyInput));
+        }
     }
     const bool modelSearches = toolLoop && toolLoop->Registry().Find("web_search") != nullptr;
     const bool modelRecalls = toolLoop && toolLoop->Registry().Find("recall_history") != nullptr;

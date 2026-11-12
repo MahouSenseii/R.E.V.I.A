@@ -739,6 +739,39 @@ bool IsCommandSurfaceExecutable(const std::string& executableName)
     return std::find(shells.begin(), shells.end(), lowered) != shells.end();
 }
 
+bool IsScriptHostExecutable(const std::string& executableName)
+{
+    if (IsCommandSurfaceExecutable(executableName))
+        return true;
+    std::string lowered = executableName;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+        [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    // git is here for `-c alias.x=!command` and its hooks and helpers: its arguments
+    // can name a command to run just as an interpreter's can.
+    static const std::vector<std::string> hosts = {"node.exe", "perl.exe", "ruby.exe", "py.exe", "pyw.exe", "java.exe", "javaw.exe",
+        "jshell.exe", "php.exe", "deno.exe", "bun.exe", "lua.exe", "tclsh.exe", "git.exe"};
+    if (std::find(hosts.begin(), hosts.end(), lowered) != hosts.end())
+        return true;
+    // python3.exe, python3.12.exe, pythonw3.13.exe, pypy3.exe: every versioned name.
+    return lowered.ends_with(".exe") && (lowered.starts_with("python") || lowered.starts_with("pypy"));
+}
+
+bool IsBatchScript(const std::filesystem::path& executable)
+{
+    std::string name = PathToUtf8(executable.filename());
+    std::transform(name.begin(), name.end(), name.begin(),
+        [](const unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    // Windows ignores trailing dots and spaces in a file name, so "run.cmd." is run.cmd.
+    while (!name.empty() && (name.back() == '.' || name.back() == ' '))
+        name.pop_back();
+    return name.ends_with(".bat") || name.ends_with(".cmd");
+}
+
+bool IsUnsafeBatchArgument(const std::string_view argument)
+{
+    return argument.find_first_of("\"%&|<>^!()\r\n") != std::string_view::npos;
+}
+
 std::string NewActionId()
 {
     static std::atomic<std::uint64_t> counter{1};
