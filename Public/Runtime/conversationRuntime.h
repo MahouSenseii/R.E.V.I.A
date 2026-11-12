@@ -198,6 +198,10 @@ public:
     [[nodiscard]] bool EarlierSpeakerWithheld() const { return earlierSpeakerWithheld.load(); }
     [[nodiscard]] bool WithheldBeforeTheirName() const { return withheldBeforeTheirName.load(); }
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
+    // Captured when a private turn starts: whether the conversation that turn belongs to
+    // is still the current one. It outlives the turn, so the turn's memory classification
+    // survives the next message. Without it the turn's delivery admission is used.
+    void SetMemoryAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
     void SetInvestigationExecutorFactory(InvestigationExecutorFactory factory);
 
@@ -381,6 +385,7 @@ private:
     logger& log;
     StateHandler setState;
     std::function<std::function<bool()>()> privateAdmissionFactory;
+    std::function<std::function<bool()>()> memoryAdmissionFactory;
     InvestigationExecutorFactory investigationExecutorFactory;
     ResponseLatency responseLatency;
     RuntimeEventBus::SubscriptionId latencySubscription = 0;

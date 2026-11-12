@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Agents/memoryAgent.h"
+#include "Agents/turnCoordinator.h"
 #include "Core/runtimePath.h"
 #include "Initiative/curiosityJournal.h"
 #include "Learning/selfAssessment.h"
@@ -796,8 +797,8 @@ void TestPreemptedClassificationIsRetriedThenGivenUp()
         events = agent.DrainEvents();
         if (events.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    Check(attempts.load() == 3,
-        "A preempted evaluation was not retried exactly twice before giving up: saw " +
+    Check(attempts.load() == 7,
+        "A preempted evaluation was not retried exactly six times before giving up: saw " +
         std::to_string(attempts.load()) + " attempts.");
     Check(events.size() == 1 && events.front().decision.bPreempted,
         "Giving up on a preempted evaluation did not report it.");
@@ -895,6 +896,127 @@ void TestClassificationWaitsForTheVoiceButNeverLosesTheTurn()
     const auto stopping = Clock::now();
     agent.Stop();
     Check(Clock::now() - stopping < 500ms && attempts.load() == 2, "Stopping waited on, or ran, a turn held back for the voice.");
+}
+
+// A quick reply preempts the previous turn's classification. The retry waits for that
+// reply to finish, however long the first attempt had already been held back: tried while
+// the reply was still running, it lost again and the memory went with it.
+void TestAPreemptedClassificationWaitsOutTheTurnThatInterruptedIt()
+{
+    using namespace std::chrono_literals;
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    ScopedTestDirectory directory;
+    MemoryAgent agent((directory.root / "memory.db").string());
+    std::atomic<int> attempts{0};
+    std::atomic<bool> answering{false};
+    revia::agents::MemoryAgentTestAccess::SetEvaluator(agent,
+        [&](const std::string&, const std::string&)
+        {
+            memoryDecision decision;
+            decision.bSuccess = true;
+            if (++attempts == 1)
+            {
+                // The person spoke again: the next turn takes the model.
+                answering.store(true);
+                decision.bPreempted = true;
+                return decision;
+            }
+            decision.bShouldRemember = true;
+            decision.category = "fact";
+            decision.summary = "The user replied quickly.";
+            return decision;
+        });
+    std::atomic<bool> speaking{true};
+    revia::agents::MemoryDeferral deferral;
+    deferral.busy = [&] { return speaking.load() || answering.load(); };
+    deferral.settle = 20ms;
+    deferral.maximum = 400ms;
+    deferral.recheck = 10ms;
+    agent.SetDeferral(deferral);
+
+    agent.Submit(router, "a turn answered before it was classified", "", revia::agents::ResponseProvenance::NormalGeneration);
+    // Held back for the voice for most of its maximum, then interrupted at once.
+    std::this_thread::sleep_for(300ms);
+    speaking.store(false);
+    // Past the maximum counted from when the turn was first queued, inside the one
+    // counted from the interruption.
+    std::this_thread::sleep_for(250ms);
+    Check(attempts.load() == 1, "A preempted classification was retried while the turn that interrupted it was still running.");
+    answering.store(false);
+    std::vector<revia::agents::MemoryAgentEvent> events;
+    for (int attempt = 0; attempt < 400 && events.empty(); ++attempt)
+    {
+        events = agent.DrainEvents();
+        if (events.empty())
+            std::this_thread::sleep_for(5ms);
+    }
+    Check(attempts.load() == 2 && events.size() == 1 && events.front().decision.bShouldRemember,
+        "A turn whose classification was interrupted by a quick reply lost its memory.");
+    agent.Stop();
+}
+
+// A turn's own admission ends when the next message starts. Its reply is already
+// delivered by then, so what it leaves to remember answers to the conversation instead:
+// kept while that is current, dropped once it is not.
+void TestATurnsMemoryAnswersToTheConversationNotTheTurn()
+{
+    using namespace std::chrono_literals;
+    messageRouter router;
+    ConfigurePlaceholderRouter(router);
+    ScopedTestDirectory directory;
+    revia::agents::TurnCoordinator coordinator((directory.root / "memory.db").string());
+    std::atomic<bool> turnCurrent{true};
+    std::atomic<bool> conversationCurrent{true};
+    std::atomic<bool> clearDuringEvaluation{false};
+    revia::agents::MemoryAgentTestAccess::SetEvaluator(coordinator.Memory(),
+        [&](const std::string&, const std::string&)
+        {
+            // The next message arrives while this one is being classified.
+            turnCurrent.store(false);
+            if (clearDuringEvaluation.load())
+                conversationCurrent.store(false);
+            memoryDecision decision;
+            decision.bSuccess = true;
+            decision.bShouldRemember = true;
+            decision.category = "identity";
+            decision.summary = "The user's name is Rosa.";
+            return decision;
+        });
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = false;
+    const auto run = [&](const std::uint64_t turnId)
+    {
+        turnCurrent.store(true);
+        const std::string input = "My name is Rosa.";
+        return coordinator.Execute(router, input, {{"user", input}}, filters, {}, true,
+            revia::agents::ResponseProvenance::NormalGeneration, turnId, {}, {}, {}, revia::llm::PrivateMemoryAccess::ProfileSetting,
+            [&] { return turnCurrent.load(); }, {}, nullptr, [&] { return conversationCurrent.load(); });
+    };
+    const auto awaitEvents = [&](const std::chrono::milliseconds limit)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        std::vector<revia::agents::MemoryAgentEvent> drained;
+        while (drained.empty() && std::chrono::steady_clock::now() < deadline)
+        {
+            drained = coordinator.DrainMemoryEvents();
+            if (drained.empty())
+                std::this_thread::sleep_for(5ms);
+        }
+        return drained;
+    };
+
+    const auto kept = run(1);
+    Check(kept.response.bSuccess && kept.memoryQueued, "The fixture reply did not queue its memory classification.");
+    const auto events = awaitEvents(3s);
+    Check(events.size() == 1 && events.front().decision.bShouldRemember,
+        "A turn's memory was dropped because the next message started before it was classified.");
+
+    clearDuringEvaluation.store(true);
+    const auto cleared = run(2);
+    Check(cleared.memoryQueued && awaitEvents(500ms).empty(),
+        "A turn's memory was kept after the conversation it belonged to was no longer current.");
+    coordinator.Memory().Stop();
 }
 
 // Exercises the documented production default (maximumPendingEvents == 512) directly,
@@ -1500,6 +1622,8 @@ void RunAuditFindingsTests()
     TestEventPriorityClassificationMatchesWhatMustNeverBeLostSilently();
     TestPreemptedClassificationIsRetriedThenGivenUp();
     TestClassificationWaitsForTheVoiceButNeverLosesTheTurn();
+    TestAPreemptedClassificationWaitsOutTheTurnThatInterruptedIt();
+    TestATurnsMemoryAnswersToTheConversationNotTheTurn();
     TestEventQueueNeverExceedsTheDocumentedDefaultBoundUnderSustainedPressure();
     TestEventOverflowPreservesCriticalAndImportantEventsOverLowValueOnes();
 

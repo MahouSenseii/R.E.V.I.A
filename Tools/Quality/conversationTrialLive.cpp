@@ -2,8 +2,10 @@
 #include "Memory/longTermMemory.h"
 #include "observedLocalModel.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -72,6 +74,11 @@ void WaitForQuiet(ReviaSession& session, const revia::quality::ObservedLocalMode
     const std::chrono::seconds limit)
 {
     const auto deadline = std::chrono::steady_clock::now() + limit;
+    // Three seconds is longer than a small model's memory evaluation and shorter than a
+    // 27B's, whose turn then looked settled while the evaluation was still running. A
+    // trial of a slow model sets REVIA_TRIAL_QUIET_SECONDS.
+    const char* configured = std::getenv("REVIA_TRIAL_QUIET_SECONDS");
+    const auto quiet = std::chrono::seconds(std::clamp(configured ? std::atoi(configured) : 3, 1, 60));
     std::size_t seen = 0;
     auto quietSince = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() < deadline)
@@ -83,7 +90,7 @@ void WaitForQuiet(ReviaSession& session, const revia::quality::ObservedLocalMode
             seen = requests;
             quietSince = std::chrono::steady_clock::now();
         }
-        else if (std::chrono::steady_clock::now() - quietSince >= 3s)
+        else if (std::chrono::steady_clock::now() - quietSince >= quiet)
         {
             return;
         }

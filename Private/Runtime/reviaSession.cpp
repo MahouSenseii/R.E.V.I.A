@@ -561,9 +561,10 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     // Memory classification shares the GPU with the voice. Waiting while she speaks keeps
-    // it off the first phrase of the reply; the deferral's maximum keeps the memory.
+    // it off the first phrase of the reply; the deferral's maximum keeps the memory. It
+    // waits out a turn in progress too: started then, it only loses to the reply.
     agents::MemoryDeferral memoryDeferral;
-    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech(); };
+    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech() || busy.load(); };
     turnCoordinator.Memory().SetDeferral(std::move(memoryDeferral));
     appLogger.SetSink(
         [this](const std::string& line)
@@ -585,6 +586,20 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                 return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
                        audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
                        current.revision == audience.revision;
+            };
+        });
+    conversationRuntime.SetMemoryAdmissionFactory(
+        [this]
+        {
+            const auto captured = Stamp();
+            const auto audience = Audience();
+            const auto epoch = conversationEpoch.load();
+            return [this, captured, audience, epoch]
+            {
+                const auto current = Audience();
+                return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
+                       audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
+                       current.revision == audience.revision && conversationEpoch.load() == epoch;
             };
         });
     conversationRuntime.SetSavedFileContextProvider([this] { return CurrentSavedFileContext(); });

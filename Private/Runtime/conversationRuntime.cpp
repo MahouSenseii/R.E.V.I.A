@@ -1252,6 +1252,11 @@ void ConversationRuntime::SetPrivateAdmissionFactory(std::function<std::function
     privateAdmissionFactory = std::move(factory);
 }
 
+void ConversationRuntime::SetMemoryAdmissionFactory(std::function<std::function<bool()>()> factory)
+{
+    memoryAdmissionFactory = std::move(factory);
+}
+
 void ConversationRuntime::SetInvestigationExecutorFactory(InvestigationExecutorFactory factory)
 {
     investigationExecutorFactory = std::move(factory);
@@ -1275,6 +1280,18 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!turnPolicy.deliveryAdmission)
             turnPolicy.deliveryAdmission = [] { return false; };
+    }
+    std::function<bool()> memoryAdmission;
+    if (!turnPolicy.publicAudience && memoryAdmissionFactory)
+    {
+        try
+        {
+            memoryAdmission = memoryAdmissionFactory();
+        }
+        catch (...)
+        {
+            memoryAdmission = [] { return false; };
+        }
     }
     struct SourceAdmission
     {
@@ -2491,7 +2508,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         turnResult = coordinator.Execute(router, policyInput, promptContext, filters, filterContext, evaluateMemory, provenance,
             currentTurn, stopToken, onDelta, answerDecision,
             turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied : llm::PrivateMemoryAccess::ProfileSetting,
-            turnPolicy.deliveryAdmission, turnPolicy.memoryScope, toolLoop ? &*toolLoop : nullptr);
+            turnPolicy.deliveryAdmission, turnPolicy.memoryScope, toolLoop ? &*toolLoop : nullptr, memoryAdmission);
         if (reasoningRelay)
         {
             // Not left for a later request, and the last thought is shown.

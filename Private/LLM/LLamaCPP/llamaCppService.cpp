@@ -3217,7 +3217,9 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
             return false;
         }
 
-        if (stopToken.stop_requested() || preemptionToken.stop_requested() || InterruptedNativeCompletion(result.terminal))
+        // An answer that arrived whole is kept even when the person spoke as it finished:
+        // the work is done, and discarding it only meant asking again.
+        if (stopToken.stop_requested() || InterruptedNativeCompletion(result.terminal))
         {
             verdict.bPreempted = preemptionToken.stop_requested();
             verdict.reason = stopToken.stop_requested() ? "Memory evaluation was cancelled."
