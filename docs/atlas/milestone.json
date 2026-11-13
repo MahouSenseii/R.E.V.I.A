@@ -363,7 +363,7 @@
       "date": "2026-11-12",
       "area": "Tests",
       "tried": "Treating single failures under a parallel run as regressions.",
-      "result": "Three tests fail now and then during a parallel run and pass every time alone: the delegation tests once (a task record that could not be saved), the memory reranker test once (a connection aborted on Windows), and the browser-ownership test in 2 of 4 full runs, where it hangs with no output until its 45-second limit. None was caused by the change under test. The browser test is not clashing with the other browser tests: the three passed together 3 times in 3.",
+      "result": "Three tests fail now and then during a parallel run and pass every time alone: the delegation tests once (a task record that could not be saved), the memory reranker test once (a connection aborted on Windows), and the browser-ownership test in 2 of 4 full runs, where it hangs with no output until its 45-second limit. None was caused by the change under test. The browser test is not clashing with the other browser tests: the three passed together 3 times in 3. On GitHub, the cognition campaign receipts test failed in one of two runs of the same commit; the other run passed all eight jobs.",
       "retry": "Rerun the one test alone before investigating. Still unexplained: what the browser-ownership test waits on during a full run, and the reranker test’s connection race."
     },
     {
