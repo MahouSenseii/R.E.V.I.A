@@ -1594,6 +1594,34 @@ void TestWorkersYieldToTheConversation()
     Check(fixture.backend.MostRepeatedWorker() >= 2, "No worker asked again after yielding to the conversation.");
 }
 
+// A person talking quickly leaves only moments between her turns. A worker that tried
+// again in one lost to the next message, and after four such losses the task failed
+// although nothing was wrong with it. It waits for a pause instead, then finishes.
+void TestWorkersWaitForAPauseInTheConversation()
+{
+    SessionFixture fixture("delegation-quick-talk", 1);
+    fixture.backend.HoldWorkers();
+    fixture.backend.SetChat(
+        [](const Json& wire)
+        {
+            if (ToolMessages(wire).empty() && Offers(wire, "delegate_task"))
+                return std::vector<Json>{Call(0, "d", "delegate_task", {{"objective", "Check the fixture port."}, {"reason", "Separate check."}}, true)};
+            return std::vector<Json>{Text(ToolMessages(wire).empty() ? "Mm-hm." : "Okay, handing that to my agents.")};
+        });
+    Check(fixture.Say("Use your agents to check the fixture port.").succeeded, "The delegating turn failed on one slot.");
+    Check(fixture.backend.WaitForHeldWorkers(1, 10s), "No worker reached the model.");
+    const auto before = fixture.backend.Requests(DelegationBackend::Kind::Worker).size();
+    for (int message = 1; message <= 6; ++message)
+        Check(fixture.Say("And another thing, number " + std::to_string(message) + ".").succeeded,
+            "A quick message during the work failed.");
+    const auto during = fixture.backend.Requests(DelegationBackend::Kind::Worker).size() - before;
+    Check(during <= 1 && fixture.Status() == DelegatedTaskStatus::Working,
+        "Workers kept trying between quick messages (" + std::to_string(during) + " tries), or the task ended; " + fixture.Describe());
+    fixture.backend.ReleaseWorkers();
+    const bool settled = fixture.SettlesAs(DelegatedTaskStatus::Reported);
+    Check(settled, "Workers interrupted by quick messages did not finish once the conversation paused; " + fixture.Describe());
+}
+
 // A run that spends its budget before the acceptance check can never be accepted; it is
 // reported as not established instead of waiting in review forever.
 void TestSpentBudgetIsReportedAsNotEstablished()
@@ -2050,6 +2078,7 @@ void RunDelegationTests()
     TestHandoffKeepsExistingUtf8AndInputBounds();
     TestGoalTasksKeepTheReply();
     TestWorkersYieldToTheConversation();
+    TestWorkersWaitForAPauseInTheConversation();
     TestSpentBudgetIsReportedAsNotEstablished();
     TestOutcomeStaysOutOfAnotherChat();
     TestTaskCommandCancelsAWaitingReport();

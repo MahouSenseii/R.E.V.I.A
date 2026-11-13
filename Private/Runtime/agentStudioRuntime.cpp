@@ -25,7 +25,14 @@ namespace
 nlohmann::json EvidenceReferences(const std::vector<agents::ArtifactReference>& references);
 
 // Background tries a provider call may lose to the conversation before the attempt fails.
-constexpr unsigned MaximumProviderYields = 3;
+// Each one is a charged provider call, so the workflow's call budget still bounds them.
+constexpr unsigned MaximumProviderYields = 6;
+// How long the conversation must have been quiet before a worker tries the model while
+// a turn is running or just after losing to one. A person talking quickly leaves well
+// under a second between her reply and their next message; a try started in that moment
+// lost to the next turn, and a live 9B hand-off failed after four such losses in nine
+// seconds although nothing was wrong with the work.
+constexpr auto QuietBeforeProviderTry = std::chrono::milliseconds(1000);
 
 // One spelling per file, so a listing's "D:/a/b.h" and a read of "D:\a\B.h" are the same file.
 std::string FileKey(const std::string& utf8)
@@ -405,9 +412,28 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
         // still a reserved, charged provider call, and one that keeps losing gives up rather
         // than starving the conversation or spending the budget unseen.
         bool yieldedOut = false;
+        // Waits for a pause in the conversation: no turn running, for QuietBeforeProviderTry.
+        // Only reached while a turn is running or after losing to one, so a worker on an idle
+        // PC is never delayed.
+        const auto awaitPause = [&]()
+        {
+            auto quietSince = std::chrono::steady_clock::now();
+            while (!stop.stop_requested() && Admits(request.stamp))
+            {
+                if (busy.load())
+                    quietSince = std::chrono::steady_clock::now();
+                else if (std::chrono::steady_clock::now() - quietSince >= QuietBeforeProviderTry)
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        };
         const auto review = [&](const std::string& prompt, const std::string& input, const std::string& schema)
         {
             std::optional<responseOutput> answered;
+            // Started while her turn is running, a try only loses to it: the hand-off itself
+            // is made from inside the delegating turn.
+            if (busy.load())
+                awaitPause();
             for (unsigned tries = 1; reserve(agents::WorkflowWorkKind::Provider); ++tries)
             {
                 answered = router.ReviewCode(prompt, input, schema, stop);
@@ -418,9 +444,9 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     break;
                 // Her turn makes several requests, and the scheduler frees the slot between
                 // them. A try taken in such a gap only lost again to the turn's next request,
-                // so one turn could use up every yield. The next try waits for the turn to end.
-                while (busy.load() && !stop.stop_requested() && Admits(request.stamp))
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                // so one turn could use up every yield. The next try waits for the turn to end,
+                // and for the pause after it, not the moment before the person's next message.
+                awaitPause();
             }
             return answered;
         };
