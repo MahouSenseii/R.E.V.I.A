@@ -25,7 +25,7 @@ test('research reports the finished comparison and closeout without overclaiming
   assert.equal(r.saved_responses,32);
   assert.equal(r.integration,'None');
   assert.equal(r.candidate,'None');
-  assert.equal(r.local_studies,'STATE-011–020');
+  assert.equal(r.local_studies,'STATE-011–019');
   assert.equal(r.proposed_study,'None');
   const page=read('research.html');
   assert.match(page,/963\/1,008/);

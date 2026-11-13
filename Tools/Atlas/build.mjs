@@ -13,6 +13,9 @@ const e=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('
 const link=(href,label,cls='')=>'<a class="'+cls+'" href="'+e(href)+'">'+label+'</a>';
 const pill=(text,tone='neutral')=>'<span class="pill '+tone+'">'+e(text)+'</span>';
 const detail=text=>'<details data-technical><summary>Detail &amp; evidence scope</summary><p>'+e(text)+'</p></details>';
+// Every new update says how someone else can repeat it: what is needed, the commands, what to expect.
+// `source` names the commit and folder that hold the scripts, so the link keeps working after the branch is gone.
+const reproduce=(steps,source)=>steps&&steps.length?'<details data-technical><summary>How to reproduce</summary><ul>'+steps.map(x=>'<li>'+e(x)+'</li>').join('')+(source?'<li>'+link(repo+'/tree/'+source.commit+'/'+source.path,'Scripts, summaries and the full guide: '+source.path+' at '+source.commit.slice(0,7)+' ↗')+'</li>':'')+'</ul></details>':'';
 // The Atlas tracks what was done and what happened. The full dated records and the
 // earlier milestone snapshot are not copied into each update; they stay in the
 // repository at this commit, and the pages link to it.
@@ -58,7 +61,7 @@ function foot(){
 function changeRows(){
   return changes.map(c=>'<article class="update searchable" data-search="'+e(['Revia',c.pr,c.title,c.summary,c.detail,c.next].join(' '))+'">'+
     '<div class="update-ref">'+pill('Merged','positive')+link(repo+'/pull/'+c.pr,'PR #'+c.pr)+'</div><div class="update-body"><h3>'+e(c.title)+'</h3><p>'+e(c.summary)+'</p>'+
-    detail(c.detail)+'<p class="next-line"><strong>Next</strong> '+e(c.next)+'</p></div></article>').join('');
+    detail(c.detail)+reproduce(c.reproduce,c.source)+'<p class="next-line"><strong>Next</strong> '+e(c.next)+'</p></div></article>').join('');
 }
 function capabilityRows(){
   const groups=new Map();
@@ -74,7 +77,7 @@ function capabilityRows(){
 function reviewRows(){
   return inReview.items.map(c=>'<article class="update searchable" data-search="'+e(['Revia',inReview.pr,c.title,c.summary,c.detail,c.next].join(' '))+'">'+
     '<div class="update-ref">'+pill('In review')+link(repo+'/pull/'+inReview.pr,'PR #'+inReview.pr)+'</div><div class="update-body"><h3>'+e(c.title)+'</h3><p>'+e(c.summary)+'</p>'+
-    detail(c.detail)+'<p class="next-line"><strong>Next</strong> '+e(c.next)+'</p></div></article>').join('');
+    detail(c.detail)+reproduce(c.reproduce,c.source)+'<p class="next-line"><strong>Next</strong> '+e(c.next)+'</p></div></article>').join('');
 }
 function ruledOutRows(){
   return '<div class="issue-list">'+ruledOut.map((x,i)=>'<article class="issue searchable" data-search="'+e([x.area,x.tried,x.result,x.retry].join(' '))+'"><span class="issue-number">'+two(i+1)+'</span><div><p class="small-label">'+e(x.area)+' <span>· '+e(x.date)+'</span></p><h3>'+e(x.tried)+'</h3><p>'+e(x.result)+'</p><p class="next-line"><strong>Try again?</strong> '+e(x.retry)+'</p></div></article>').join('')+'</div>';
@@ -118,7 +121,7 @@ let index=head('Project overview')+
   foot();
 
 function studyCards(){
-  return studies.map(s=>'<article class="study searchable" id="'+s.id+'-current" data-search="'+e([s.id,s.tag,s.name,s.summary,s.detail,s.next].join(' '))+'"><div class="study-meta"><span>'+e(s.id.toUpperCase())+'</span>'+pill(s.tag,s.tone)+'</div><h3>'+e(s.name)+'</h3><p class="study-summary">'+e(s.summary)+'</p>'+detail(s.detail)+'<p class="study-limit">'+e(s.limit)+'</p><p class="next-line"><strong>Next</strong> '+e(s.next)+'</p></article>').join('');
+  return studies.map(s=>'<article class="study searchable" id="'+s.id+'-current" data-search="'+e([s.id,s.tag,s.name,s.summary,s.detail,s.next].join(' '))+'"><div class="study-meta"><span>'+e(s.id.toUpperCase())+'</span>'+pill(s.tag,s.tone)+'</div><h3>'+e(s.name)+'</h3><p class="study-summary">'+e(s.summary)+'</p>'+detail(s.detail)+reproduce(s.reproduce,s.source)+'<p class="study-limit">'+e(s.limit)+'</p><p class="next-line"><strong>Next</strong> '+e(s.next)+'</p></article>').join('');
 }
 let research=head('RNL research',true)+
   '<section class="research-hero" id="research-overview"><p class="eyebrow"><span class="gold-diamond"></span> THE RESEARCH NOTEBOOK</p><h1>RNL, <em>with context.</em></h1><p class="hero-lead">Promising ideas.<br>Evidence before integration.</p><p class="hero-description">A research track exploring recurrent neural memory and exact reuse. Positive results, failed approaches and open questions belong in the same record.</p>'+
@@ -129,13 +132,13 @@ let research=head('RNL research',true)+
   '<div class="comparison-notice" id="comparison-status"><div>'+pill('Earlier study closeout','neutral')+'<h2>RNL tied a lookup table,<br>then fell short of a good store.</h2></div><div><p>COMPARE-001 finished: RNL and exact lookup answered 32/32, Qwen 0.8B 17/32. STATE-017 then trained RNL against a compact keyed store on harder synthetic memory: on development data it stayed 7–32 points below at every memory size, and a learned name matcher in front of a store had at most about 2.5 points of room.</p><p>These are development results for the designs tried, not proof that RNL cannot work. The sealed test set was never opened. Candidate for Revia: none.</p>'+
   detail('COMPARE-001: all 46 outputs sealed before grading; the original 34 LLM files were reused unchanged. Its first stop was traced to a disk census inside the log-reading thread. STATE-017: 63 trained models, three seeds each, CPU only, about 6 CPU-hours per run; rules frozen before run 2. No upload is active.')+'</div></div>'+
   search('Find a study, result or limitation')+
-  section('latest-findings','01 / LATEST LOCAL STUDIES','What the newer studies found.','Positive, negative and stopping results are shown together. Detailed methods, frozen artifacts, checkpoints and traces for STATE-011–020 remain local and unpublished.', '<div class="study-grid">'+studyCards()+'</div>')+
+  section('latest-findings','01 / LATEST LOCAL STUDIES','What the newer studies found.','Positive, negative and stopping results are shown together. Detailed methods, frozen artifacts, checkpoints and traces for STATE-011–019 remain local and unpublished. From STATE-020 each study’s scripts, summaries and reproduction steps are published with it.', '<div class="study-grid">'+studyCards()+'</div>')+
   section('published-findings','02 / EARLIER WORK','What the public source supports.','The pinned public research branch contains methods and results through STATE-010. Atlas summaries of later studies do not make their full evidence public.',
     '<div class="public-findings">'+publicFindings.map(x=>'<article class="finding searchable" data-search="'+e([x.name,x.summary,x.detail].join(' '))+'"><h3>'+e(x.name)+'</h3><p>'+e(x.summary)+'</p>'+detail(x.detail)+'</article>').join('')+'</div><p class="section-end">'+link(repo+'/tree/'+researchPin+'/research/rnl','Pinned public research source ↗')+'</p>')+
   section('research-handoff','03 / REPRODUCIBILITY &amp; NEXT STEPS','Know which evidence you have.','A readable summary is a starting point. Reproducing the latest studies also needs their exact artifacts.', '<div class="boundary-grid"><article><p class="eyebrow">PUBLIC</p><h3>Code through STATE-010</h3><p>Use the pinned branch revision and its method, lock and config references. A moving branch head is not the same source identity.</p>'+
-    link(repo+'/tree/'+researchPin+'/research/rnl','aac6f161 · research/rnl ↗')+'</article><article><p class="eyebrow">LOCAL · UNPUBLISHED</p><h3>Studies 011–020 and the comparison</h3><p>Source deltas, per-example predictions, traces, frozen snapshots, the 63 STATE-017 checkpoints and the full comparison seal are held locally. This website does not supply them.</p></article></div>'+
+    link(repo+'/tree/'+researchPin+'/research/rnl','aac6f161 · research/rnl ↗')+'</article><article><p class="eyebrow">PUBLIC · RUNNABLE</p><h3>STATE-020 onward</h3><p>Scripts, result summaries and a step-by-step guide are published with each study. Open “How to reproduce” on its card.</p></article><article><p class="eyebrow">LOCAL · UNPUBLISHED</p><h3>Studies 011–019 and the comparison</h3><p>Source deltas, per-example predictions, traces, frozen snapshots, the 63 STATE-017 checkpoints and the full comparison seal are held locally. This website does not supply them.</p></article></div>'+
     '<details data-technical><summary>What a reproducible, reviewed handoff needs</summary><ul><li>Exact method/config/source/test deltas and all positive and negative results.</li><li>Fixture generators, seeds, evaluation definitions and per-example predictions/traces.</li><li>Three frozen delta snapshots, tensor inventory, original hashes and lineage.</li><li>The comparison fixture/parser, 32 retained requests/responses and completed 46-output seal.</li><li>An inventory mapping symbolic artifact IDs to sanitized filenames and export hashes.</li></ul><p>Raw local logs/manifests can contain private paths and process metadata. The exact export inventory and destination need review before any upload. A summary alone does not reproduce these studies.</p></details>'+
-    '<div class="next-research"><span class="gold-diamond"></span><div><h3>Improve incrementally; keep the evidence bounded.</h3><p>The earlier STATE-017 closeout remains valid for those designs. Current regression checks and scoped improvements do not erase its negative findings. No new training, sealed-test evaluation, normal-app integration or publication is claimed by this checkpoint.</p></div></div>')+
+    '<div class="next-research"><span class="gold-diamond"></span><div><h3>Improve incrementally; keep the evidence bounded.</h3><p>The earlier STATE-017 closeout remains valid for those designs and its sealed test is still unopened. STATE-020 trained new toy models and publishes its scripts; nothing from it is in the app.</p></div></div>')+
   foot();
 
 const record={
