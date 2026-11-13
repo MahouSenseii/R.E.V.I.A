@@ -8280,6 +8280,8 @@ void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
         "A 32K context with a q8_0 KV cache did not reach llama-server.");
     Check(valueOf("--flash-attn") == "on",
         "A quantized V cache was launched without forcing flash attention, which llama.cpp requires for it.");
+    Check(valueOf("--checkpoint-min-step") == "512",
+        "The chat server was launched with llama.cpp's default checkpoint spacing, so a turn after a tool use re-reads the whole chat.");
 
     settings.kvCacheType.clear();
     const auto plain = BuildLlamaServerArguments(settings, false, "", "");
@@ -8290,6 +8292,7 @@ void TestServerArgumentsQuantizeTheKvCacheWithFlashAttention()
     const auto embedding = BuildLlamaServerArguments(settings, true, "mean", "none");
     Check(std::find(embedding.begin(), embedding.end(), "--embedding") != embedding.end() &&
               std::find(embedding.begin(), embedding.end(), "--flash-attn") == embedding.end() &&
+              std::find(embedding.begin(), embedding.end(), "--checkpoint-min-step") == embedding.end() &&
               std::find(embedding.begin(), embedding.end(), "--jinja") == embedding.end(),
         "The embedding server received chat-only launch flags.");
     Check(std::find(plain.begin(), plain.end(), "--jinja") != plain.end(),
