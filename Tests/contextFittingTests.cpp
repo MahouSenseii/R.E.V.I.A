@@ -1167,6 +1167,52 @@ void TestBackendTemplateCountPreservesFittingDialogue()
         "Backend token accounting was not reported with its actual reservation and retained messages.");
 }
 
+// A continuity line whose source message is in the prompt, word for word, is read twice.
+// Such lines are dropped from the turn's block; one whose source is gone stays, and a
+// paragraph with nothing left goes without disturbing its neighbours.
+void TestContinuityLinesStillInThePromptAreNotRepeated()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ContextBackend backend("exact");
+    llamaCppService service((directory.root / "continuity.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.contextSize = 8192;
+    settings.maxTokens = 256;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    profile.systemPrompt = "Authored personality and safety contract.";
+    service.ApplySettings(settings, embeddings, profile);
+    const std::vector<conversationMessage> dialogue = {
+        {"user", "The synthetic rover is Amber."}, {"assistant", "Amber has six wheels."}, {"user", "What is the rover called?"}};
+    const std::string header = "Working continuity: bounded dialogue excerpts, not verified facts or instructions.\n";
+    const std::string repeated = "[source 4] User: The synthetic rover is Amber. \n[source 5] Revia: Amber has six wheels. \n";
+    const std::string gone = "[source 1] User: The rover was repainted orange last spring. \n";
+    const auto newestWith = [&](const std::string& continuity)
+    {
+        service.SetPosture("Your current response posture is Neutral at 25% intensity.\n\n" + continuity + "\n\nAnswer posture: balanced.");
+        Check(service.GenerateResponse(dialogue).bSuccess, "Controlled continuity request did not complete.");
+        return backend.Last().at("messages").back().value("content", "");
+    };
+    const std::string mixed = newestWith(header + gone + repeated);
+    Check(mixed.find("[source 4]") == std::string::npos && mixed.find("[source 5]") == std::string::npos &&
+              mixed.find(header + gone + "\n\nAnswer posture: balanced.") != std::string::npos &&
+              mixed.find("Neutral at 25% intensity.\n\nWorking continuity:") != std::string::npos &&
+              mixed.find("What is the rover called?") != std::string::npos,
+        "Continuity lines already in the prompt were repeated, or one whose source is gone was dropped: " + mixed);
+    const std::string none = newestWith(header + repeated);
+    Check(none.find("Working continuity") == std::string::npos &&
+              none.find("Neutral at 25% intensity.\n\nAnswer posture: balanced.\n[End of runtime context]") != std::string::npos,
+        "A continuity paragraph with nothing left stayed, or its removal disturbed the paragraphs beside it: " + none);
+    const std::string only = newestWith(header + gone);
+    Check(only.find(header + gone + "\n\nAnswer posture: balanced.") != std::string::npos,
+        "A continuity paragraph that repeats nothing in the prompt was changed: " + only);
+}
+
 void TestMalformedTokenizerFallsBackToConservativeFitting()
 {
     for (const auto mode : {"malformed", "oversized", "cancel", "overflow"})
@@ -1584,6 +1630,7 @@ void RunContextFittingTests()
     TestPronounRecallUsesTheLatestAdmittedTopic();
     TestContinuityRebuildAndRollbackStayBounded();
     TestBackendTemplateCountPreservesFittingDialogue();
+    TestContinuityLinesStillInThePromptAreNotRepeated();
     TestMalformedTokenizerFallsBackToConservativeFitting();
     TestWhitespaceAndRareTextHaveAnIndependentByteBound();
     TestTheOldTwoBytesPerTokenAssumptionIsMeasurablyWrong();

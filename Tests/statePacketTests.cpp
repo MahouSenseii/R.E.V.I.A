@@ -181,6 +181,26 @@ void TestTheLeakFilterStillCoversWhatThePacketSupplies()
     Check(!ordinary.blocked, "An ordinary reply was blocked as a prompt leak.");
 }
 
+// How to speak from a feeling is the same every turn, so a caller may keep it as standing
+// text. The feeling still comes with its own sentence, and the guidance loses nothing.
+void TestFeelingsGuidanceCanStandApartFromTheFeeling()
+{
+    ReviaStatePacket packet = BasePacket();
+    packet.emotion[Emotion::Anger] = 0.6F;
+    const std::string whole = RenderStatePacket(packet);
+    packet.feelingsGuidanceStanding = true;
+    const std::string feeling = RenderStatePacket(packet);
+    const std::string guidance = revia::identity::RenderFeelingsGuidance();
+    Check(Contains(feeling, "Your current response posture is") && Contains(feeling, "Anger") &&
+              !Contains(feeling, "This is an internal leaning") && feeling.size() < whole.size(),
+        "With the guidance kept as standing text, the feeling was lost or the guidance was still repeated beside it.");
+    Check(Contains(guidance, "This is an internal leaning, not a script.") && Contains(guidance, "never the user's state") &&
+              Contains(guidance, "Where a reason is given there,") && !Contains(guidance, "given above") &&
+              Contains(guidance, "responsible for keeping you alive."),
+        "The standing feelings guidance dropped a sentence, or still points above itself for the reason.");
+    Check(Contains(whole, "Where a reason is given above,"), "The guidance rendered beside the feeling no longer points at it.");
+}
+
 void TestTheLegacyPostureSentenceIsPreserved()
 {
     // The hard filter's leak detector keys on this exact phrase, and the deterministic
@@ -362,6 +382,7 @@ void RunStatePacketTests()
     TestCalmRendersAsCalmRatherThanAsNoise();
     TestTheLeakFilterStillCoversWhatThePacketSupplies();
     TestTheLegacyPostureSentenceIsPreserved();
+    TestFeelingsGuidanceCanStandApartFromTheFeeling();
     std::cout << "One state packet renders deterministically, omits what it does not "
                  "know, and stays covered by the leak filter.\n";
 }

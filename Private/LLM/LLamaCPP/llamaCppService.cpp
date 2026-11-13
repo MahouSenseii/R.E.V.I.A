@@ -1,3 +1,4 @@
+#include "Core/conversationContext.h"
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
 #include "LLM/backendTypes.h"
@@ -286,6 +287,90 @@ namespace
     }
     constexpr int ContextReserveTokens = 384;
     constexpr std::size_t RecentDialogueMessages = 2;
+
+    // The continuity paragraph repeats lines of earlier dialogue. When the message a line
+    // came from is itself in the prompt, word for word, the line is read twice: about 190
+    // tokens a turn in an 18-turn chat. Those lines are dropped from the newest message's
+    // block, and the paragraph with them when none is left. A line whose source is no
+    // longer in the prompt, or was shortened there, stays.
+    void DropRepeatedContinuity(json& messages)
+    {
+        namespace markers = revia::identity::markers;
+        if (!messages.is_array() || messages.size() < 3)
+            return;
+        const auto isUser = [](const json& message)
+        { return message.is_object() && message.value("role", std::string{}) == "user" && message.contains("content") && message["content"].is_string(); };
+        const auto newestUser = std::find_if(messages.rbegin(), messages.rend(), isUser);
+        if (newestUser == messages.rend())
+            return;
+        auto& newest = (*newestUser)["content"].get_ref<std::string&>();
+        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
+        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
+        if (newest.rfind(open, 0) != 0)
+            return;
+        const std::size_t blockEnd = newest.find(close, open.size());
+        if (blockEnd == std::string::npos)
+            return;
+        // The paragraph opens the block or follows a blank line inside it.
+        const std::string lead = std::string(conversationContext::ContinuityLead);
+        std::size_t paragraph = std::string::npos;
+        if (newest.compare(open.size(), lead.size(), lead) == 0)
+            paragraph = open.size();
+        else if (const std::size_t found = newest.find("\n\n" + lead, open.size()); found != std::string::npos && found < blockEnd)
+            paragraph = found + 2;
+        if (paragraph == std::string::npos)
+            return;
+        std::size_t end = newest.find("\n\n", paragraph);
+        if (end == std::string::npos || end > blockEnd)
+            end = blockEnd;
+        std::string history;
+        for (const auto& message : messages)
+            if (&message != &*newestUser && message.is_object() && message.value("role", std::string{}) != "system" &&
+                message.contains("content") && message["content"].is_string())
+                history += message["content"].get_ref<const std::string&>() + '\n';
+        std::string kept;
+        bool anyLine = false;
+        bool header = true;
+        for (std::size_t at = paragraph; at < end;)
+        {
+            const std::size_t lineEnd = std::min(newest.find('\n', at), end);
+            const std::string line = newest.substr(at, lineEnd - at);
+            at = lineEnd + 1;
+            bool repeated = false;
+            if (!header)
+            {
+                // "[source 12] User: what they said"
+                const std::size_t said = line.find(": ");
+                if (line.rfind("[source ", 0) == 0 && said != std::string::npos)
+                {
+                    std::string text = line.substr(said + 2);
+                    while (!text.empty() && (text.back() == ' ' || text.back() == '\r'))
+                        text.pop_back();
+                    repeated = !text.empty() && history.find(text) != std::string::npos;
+                }
+                anyLine = anyLine || !repeated;
+            }
+            header = false;
+            if (!repeated)
+                kept += (kept.empty() ? "" : "\n") + line;
+        }
+        if (anyLine)
+        {
+            newest.replace(paragraph, end - paragraph, kept);
+            return;
+        }
+        // Nothing left to say: the paragraph goes, with its own closing newline and the
+        // blank line that set it off from its neighbour.
+        std::size_t removeEnd = end;
+        if (removeEnd < blockEnd && newest[removeEnd] == '\n' && (removeEnd + 1 == blockEnd || newest.compare(removeEnd + 1, 2, "\n\n") == 0))
+            ++removeEnd;
+        if (paragraph > open.size())
+            newest.erase(paragraph - 2, removeEnd - (paragraph - 2));
+        else if (removeEnd < blockEnd)
+            newest.erase(paragraph, removeEnd + 2 - paragraph);
+        else
+            newest.erase(0, blockEnd + close.size());
+    }
 
     // Standing text rides at the start of the first user message, which a prompt that has
     // to be compacted may drop or cut. Before compaction it is moved to the head of the
@@ -1764,7 +1849,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         sourceExplanation = activeSourceExplanation;
     }
 
-    const auto priorityParagraphs = CaptureTurnPriorityParagraphs(posture);
+    // Standing text can hold the answer posture, which compaction must still keep.
+    const auto priorityParagraphs = CaptureTurnPriorityParagraphs(standing.empty() ? posture : standing + "\n\n" + posture);
     // Pictures attached to this message. An endpoint started without a projector would
     // reject them, so they are left out with a note the model must pass on instead.
     std::vector<conversationImage> turnImages;
@@ -1874,12 +1960,18 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                                                 static_cast<std::size_t>(contextTokens)))
                                           : 0;
 
+    // Compaction drops history, and with it the messages the continuity lines repeat, so
+    // it starts from the messages as they were built.
+    const json withEveryExcerpt = messages;
+    if (bStablePromptPrefix)
+        DropRepeatedContinuity(messages);
     const json originalMessages = messages;
     auto measured = CountBackendPrompt(
         host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions, frameResponseFormat);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
+        messages = withEveryExcerpt;
         if (bStablePromptPrefix)
             InlineStandingContext(messages, standing);
         messages = BoundMessagesForContext(messages, contextTokens, responseTokens + fittingReserve, priorityParagraphs);

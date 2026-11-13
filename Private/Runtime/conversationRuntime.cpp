@@ -915,6 +915,9 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
     {
         packet.runtime.turnFactsOnly = true;
         *outStanding = identity::RenderRuntimeKnowledge({filters.bAiReviewEnabled, runtimeFacts.DescribeSettings() + " " + DescribeBody()});
+        // How to speak from a feeling never changes; the feeling itself stays in the turn.
+        packet.feelingsGuidanceStanding = true;
+        *outStanding += "\n\n" + identity::RenderFeelingsGuidance();
     }
     else if (!turnPolicy.publicAudience)
     {
@@ -970,7 +973,14 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
         // The profile's answer obligation, alongside the turn guidance rather than
         // inside the state packet: it is a configured preference about this
         // conversation, not a fact about who she is or what she has earned.
-        postureLine << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(profile.answerObligation);
+        // It is the profile's setting, so with standing text it is kept there: replayed
+        // 120 times each way on the 9B, answers and reply length were the same and her
+        // first word came about 40 ms sooner.
+        const std::string obligation = agents::ConversationStylePolicy::BuildAnswerObligationGuidance(profile.answerObligation);
+        if (standingKnowledge)
+            *outStanding += "\n\n" + obligation;
+        else
+            postureLine << "\n\n" << obligation;
     }
     // Runtime policy still governs every action. A greeting or personal reaction has
     // no operation to report; filling it with filter/build/command internals primed

@@ -70,55 +70,6 @@
       "summary": "“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.",
       "detail": "Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; PR #39 fixed this with whole-word matching.",
       "next": "Covered by PR #39; then rebuild and requalify the installed app."
-    },
-    {
-      "pr": 34,
-      "title": "Keep corrections grounded in what was actually said.",
-      "summary": "Quoted corrections no longer create a messenger story in the host response rules.",
-      "detail": "The merged change adjusts conversationStylePolicy.cpp and speechAttributionTests.cpp. This host-code fix does not establish that a real model will never invent history.",
-      "next": "Check the remaining model-generated false-history case in a separately reviewed real-model trial."
-    },
-    {
-      "pr": 33,
-      "title": "Accept an explicit name self-correction.",
-      "summary": "A clear correction can update the speaker name without being treated as rejected naming.",
-      "detail": "Source fix merged. The exact latest main CI includes the speech-attribution regression coverage; the installed application has not been requalified.",
-      "next": "Confirm correction and recall during a real session."
-    },
-    {
-      "pr": 32,
-      "title": "Keep ordinary recurrence from creating correction friction.",
-      "summary": "Repeated ordinary references should not be treated as repeated corrections.",
-      "detail": "The original merge encountered a retained CI failure; later main CI succeeded. Preserve the earlier failure rather than counting every historical attempt as a pass.",
-      "next": "Keep ordinary conversation and correction behavior separate in runtime checks."
-    },
-    {
-      "pr": 31,
-      "title": "Keep reassurance from becoming hostility evidence.",
-      "summary": "Reassuring language should not manufacture a hostile interaction.",
-      "detail": "Conversation host policy and its focused regression coverage are merged. This is a bounded source correction.",
-      "next": "Check reassurance with the configured model and real conversation context."
-    },
-    {
-      "pr": 30,
-      "title": "Retain a later valid name correction.",
-      "summary": "An earlier rejected name no longer hides a later valid correction.",
-      "detail": "Merged identity parsing change. A passing fixture is evidence for the tested cases, not for every possible spoken or written name.",
-      "next": "Include mixed rejection and correction examples in runtime qualification."
-    },
-    {
-      "pr": 29,
-      "title": "Ignore a nickname the speaker rejected.",
-      "summary": "A rejected nickname should not become the speaker’s accepted identity.",
-      "detail": "Merged speaker-resolution change. Real voice attribution remains a separate qualification.",
-      "next": "Check name resolution and consented voice identity together."
-    },
-    {
-      "pr": 28,
-      "title": "Separate your server from Revia’s runtime.",
-      "summary": "A question about your own server should not be answered as Revia’s service status.",
-      "detail": "Merged ownership/context clarification. It does not change deployment or install a model server.",
-      "next": "Keep user-owned infrastructure questions in their stated context."
     }
   ],
   "research_findings": [
@@ -128,7 +79,7 @@
       "tone": "positive",
       "name": "A small model with a memory store beat a large one that held everything in context.",
       "summary": "Qwen3.5-0.8B filing notes into a store answered 88.6% of questions in 685 MiB of VRAM; the 9B with the whole history in its context answered 44.7% in 5,480 MiB. With the store, the 4B and 9B reached 94.7% and 94.5%.",
-      "detail": "STATE-018, 12 November 2026, the first step toward the owner’s goal for RNL: a model structure that is smarter, remembers better and needs less VRAM. It measures the two plain ways a local model can remember, so a new structure has a number to beat. Same people-and-facts task as STATE-017 with updates, corrections, misspelled names and aliases; 80 development histories, 640 questions; the sealed test stayed closed and nothing was trained. In context: 0.8B 69.5%, 4B 59.8%, 9B 44.7%. Filing each note into the unlimited keyed store, one model call per note: 88.6%, 94.7%, 94.5%. A rule-based extractor with the same store scored 640/640. In context the 0.8B answered with an old value 112 times; the 4B and 9B almost never did, and instead declined 242 and 346 times, mostly when the name was misspelled or an alias. On exactly spelled names context still gave 75%, 85% and 83% against 96%, 99% and 100% with the store. From 8 to 64 facts every model lost 11–22 points in context and at most 2 with the store. The store’s remaining errors were the model’s filing: aliases 55–82% correct, and 37–120 notes per run filed unusably. The same model needed almost the same VRAM either way; the saving comes from being able to use a smaller model. Filing cost 23–57 minutes for the 80 histories against 1–5 minutes to answer from context.",
+      "detail": "STATE-018, 12 November 2026, the first step toward the owner’s goal for RNL: a model structure that is smarter, remembers better and needs less VRAM. It measures the two plain ways a local model can remember, so a new structure has a number to beat. Same people-and-facts task as STATE-017 with updates, corrections, misspelled names and aliases; 80 development histories, 640 questions; the sealed test stayed closed and nothing was trained. In context: 0.8B 69.5%, 4B 59.8%, 9B 44.7%. Filing each note into the unlimited keyed store, one model call per note: 88.6%, 94.7%, 94.5%. A rule-based extractor with the same store scored 640/640. In context the 0.8B answered with an old value 112 times; the 4B and 9B almost never did, and instead declined 242 and 346 times, mostly when the name was misspelled or an alias. On exactly spelled names context still gave 75%, 85% and 83% against 96%, 99% and 100% with the store. From 8 to 64 facts every model lost 11–22 points in context and at most 2 with the store. The store’s remaining errors were the model’s filing: aliases 55–82% correct, and 37–120 notes per run filed unusably. The same model needed almost the same VRAM either way; the saving comes from being able to use a smaller model. Filing cost 23–57 minutes for the 80 histories against 1–5 minutes to answer from context. A follow-up (STATE-018b) told the in-context models that a name may be misspelled or a nickname: the 4B rose from 59.8% to 71.7%, the 0.8B stayed at 69.4% and the 9B at 46.1%, still answering “unknown” to over half the questions, some with exactly spelled names. The best in-context score stays below the smallest model with a store.",
       "limit": "Local study · development data only · one prompt per arm, one run · synthetic task · the context prompt may make larger models decline misspelled names",
       "next": "This is the baseline, not a new structure: an explicit store beside an unchanged model. A learned part would have to help where the store’s gaps are, aliases and filing on small models, at the small model’s VRAM. No such training has been run."
     },
@@ -295,10 +246,10 @@
         "next": "Decide the token budget for runs that use tools; try a change that spans more than one file; the reviewer still accepts about a third of runs whose test never ran."
       },
       {
-        "title": "She no longer re-reads her unchanged settings on every turn.",
-        "summary": "About 200 tokens of settings text that is the same from turn to turn now ride on the first message of the chat, which the model server already holds, instead of being read again each turn. Greetings and personal jabs are sent exactly as before.",
-        "detail": "Measured by replaying recorded turns straight at the model server on the 9B. Her first word took 0.52–0.56 s in a short chat and 0.84 s by turn 18, when each turn re-reads about 2,400 tokens of per-turn guidance at roughly 3,000 tokens a second. Only what is true of the single turn (answer posture, whether the screen was observed) stays in the per-turn block; internet, desktop-control and voice settings moved. On matching turns of the same conversation that removes 176–246 tokens, about 65 ms. Answers were the same in either place: 63 of 70 checks each. In the live basics conversation the whole-reply median went from 1.72 s to 1.55 s, one run each, and the replies also happened to be shorter. When a prompt must be compacted the text returns to the newest message first.",
-        "next": "The rest of the per-turn block is the remaining cost: answer-style rules (about 750 characters), feelings guidance (740) and continuity excerpts that repeat the history (about 1,000). Each needs the same checks before it moves."
+        "title": "She no longer re-reads guidance that has not changed.",
+        "summary": "Settings text, the guidance on how to speak from a feeling and her answer posture are the same from turn to turn. They now ride on the first message of the chat, which the model server already holds, and history lines she is about to read anyway are no longer repeated. Greetings and personal jabs are sent exactly as before.",
+        "detail": "Measured by replaying recorded turns straight at the model server on the 9B. Her first word took 0.52–0.56 s in a short chat and 0.84 s by turn 18, when each turn re-reads about 2,400 tokens of per-turn guidance at roughly 3,000 tokens a second. Each piece was moved alone and judged on about 120 replayed replies sent the way the app sends them: answers right, reply length, questions asked back, echoing the user. Feelings guidance, the answer posture and dropping repeated history lines each left replies unchanged; the rule against repeating the user’s wording made them worse and stays in the turn. With all kept changes, two live conversations re-read 1,045 and 1,115 tokens a turn against 1,648 and 1,587 before, prompt reading fell from 516 and 522 ms to 364 and 394 ms, and whole-reply medians from 1.83 and 1.72 s to 1.38 and 1.56 s (one run each). Replays of the last three pieces alone: first word 13–18% sooner, answers 86 of 87 against 84 of 86 and 53 of 56 against 54 of 56. Greetings re-read 750 tokens before and after. When a prompt must be compacted, everything returns to the newest message first.",
+        "next": "What is left in the per-turn block changes every turn: the feeling itself, memories, the remaining history excerpts and turn-specific rules. Further gains need a faster card or a smaller model, not more rearranging."
       }
     ]
   },
@@ -397,9 +348,16 @@
     {
       "date": "2026-11-13",
       "area": "Revia",
-      "tried": "Moving her answer-style rules out of the per-turn block as well (about 55 ms more).",
-      "result": "Answers stayed right, but the median replayed reply grew from 120 to 177 characters. Not done.",
-      "retry": "Only with a check that her replies stay as short as they are now."
+      "tried": "Moving the rule against repeating the user’s wording out of the per-turn block.",
+      "result": "Worse on about 120 replayed replies: answers right fell from 62 of 64 to 56 of 62 and replies grew by 27 characters a turn (95% interval 4 to 53). It stays in the turn.",
+      "retry": "No."
+    },
+    {
+      "date": "2026-11-13",
+      "area": "Tests",
+      "tried": "Deciding a prompt move from ten replays a turn.",
+      "result": "A first test of ten replays suggested moving the answer posture lengthened replies (median 120 to 177 characters). With about 120 paired replays the difference was 10 characters, interval −11 to 32, and the move was made.",
+      "retry": "Use paired replays of the whole conversation, 6 to 8 a turn, and report the interval."
     },
     {
       "date": "2026-11-13",
@@ -441,7 +399,7 @@
       "area": "RNL",
       "tried": "Relying on a larger model’s context window as its memory (STATE-018).",
       "result": "With the whole history in context the 4B and 9B answered 59.8% and 44.7%, below the 0.8B with a store at 88.6%, and they got worse as the history grew. Larger was not better here: the larger models declined misspelled and alias names.",
-      "retry": "Only with a prompt that allows near matches on names, to separate caution from forgetting."
+      "retry": "No. Allowing near-match names was tried (STATE-018b): 69.4%, 71.7% and 46.1%, still below the store."
     },
     {
       "date": "2026-11-06",
