@@ -173,6 +173,14 @@ int main(int argc, char** argv)
             capabilities["approvedRoots"] = script.at("approvedRoots");
             WriteJson(root / "Config/capabilities.json", capabilities);
         }
+        if (script.contains("capabilities"))
+        {
+            // A script that tests more than reading says so: these replace the shipped,
+            // locked-down values in this trial's own copy only.
+            json capabilities = ReadJson(root / "Config/capabilities.json");
+            capabilities.merge_patch(script.at("capabilities"));
+            WriteJson(root / "Config/capabilities.json", capabilities);
+        }
         std::filesystem::current_path(root);
 
         json transcript = {{"schemaVersion", 1}, {"conversations", json::array()}};
@@ -262,6 +270,40 @@ int main(int argc, char** argv)
                 record["workflow"] = Workflow(*session);
                 std::lock_guard lock(deliveredMutex);
                 record["delivered"] = delivered;
+            }
+            if (conversation.contains("agentStudio"))
+            {
+                // The owner's own Agent Studio run with permitted tools. Unlike a chat hand-off,
+                // its workers may write and run what the capabilities allow.
+                const auto& studio = conversation.at("agentStudio");
+                const auto begun = std::chrono::steady_clock::now();
+                json outcome = {{"objective", studio.at("objective")}};
+                std::string error;
+                if (!session->StartAgentWorkflow(studio.at("objective").get<std::string>(), AgentProviderMode::LocalWithTools, error))
+                    outcome["refused"] = error;
+                else
+                {
+                    const auto deadline = begun + std::chrono::seconds(studio.value("waitSeconds", 600));
+                    const auto running = [&]
+                    {
+                        const auto state = session->AgentWorkflowSnapshot().state;
+                        return state == revia::agents::WorkflowState::Running || state == revia::agents::WorkflowState::Waiting ||
+                               state == revia::agents::WorkflowState::AwaitingAcceptance;
+                    };
+                    while (running() && std::chrono::steady_clock::now() < deadline)
+                    {
+                        session->PollBackgroundEvents();
+                        std::this_thread::sleep_for(100ms);
+                    }
+                    outcome["timedOut"] = running();
+                    if (running())
+                        session->CancelAgentWorkflow();
+                }
+                outcome["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - begun).count();
+                record["agentStudio"] = outcome;
+                record["workflow"] = Workflow(*session);
+                std::cout << '[' << conversation.at("id").get<std::string>() << "] agent studio: " << record["workflow"].value("state", "") << " after "
+                          << static_cast<int>(outcome["seconds"].get<double>()) << "s\n  result: " << record["workflow"].value("result", "") << "\n";
             }
             transcript["conversations"].push_back(record);
             WriteJson(output / "transcript.json", transcript);

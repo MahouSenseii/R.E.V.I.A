@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {repo,pin,researchPin,earlierRecords,current,changes,issues,studies,publicFindings} from './data.mjs';
+import {repo,pin,researchPin,earlierRecords,current,changes,issues,studies,publicFindings,inReview,ruledOut} from './data.mjs';
 import {counts,capabilities} from './retained.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../docs/atlas');
@@ -71,6 +71,14 @@ function capabilityRows(){
         '<p>'+e(summary)+'</p>'+detail(c.implementation.summary+' Next: '+c.next_step)+'</div></article>';
     }).join('')+'</div></details>').join('')+'</div>';
 }
+function reviewRows(){
+  return inReview.items.map(c=>'<article class="update searchable" data-search="'+e(['Revia',inReview.pr,c.title,c.summary,c.detail,c.next].join(' '))+'">'+
+    '<div class="update-ref">'+pill('In review')+link(repo+'/pull/'+inReview.pr,'PR #'+inReview.pr)+'</div><div class="update-body"><h3>'+e(c.title)+'</h3><p>'+e(c.summary)+'</p>'+
+    detail(c.detail)+'<p class="next-line"><strong>Next</strong> '+e(c.next)+'</p></div></article>').join('');
+}
+function ruledOutRows(){
+  return '<div class="issue-list">'+ruledOut.map((x,i)=>'<article class="issue searchable" data-search="'+e([x.area,x.tried,x.result,x.retry].join(' '))+'"><span class="issue-number">'+two(i+1)+'</span><div><p class="small-label">'+e(x.area)+' <span>· '+e(x.date)+'</span></p><h3>'+e(x.tried)+'</h3><p>'+e(x.result)+'</p><p class="next-line"><strong>Try again?</strong> '+e(x.retry)+'</p></div></article>').join('')+'</div>';
+}
 function issueRows(){
   return '<div class="issue-list">'+issues.map((x,i)=>'<article class="issue searchable" data-search="'+e([x.area,x.title,x.summary,x.detail,x.next].join(' '))+'"><span class="issue-number">'+two(i+1)+'</span><div><p class="small-label">'+e(x.area)+' <span>· '+e(x.status)+'</span></p><h3>'+e(x.title)+'</h3><p>'+e(x.summary)+'</p>'+detail(x.detail)+'<p class="next-line"><strong>Next</strong> '+e(x.next)+'</p></div></article>').join('')+'</div>';
 }
@@ -90,6 +98,7 @@ let index=head('Project overview')+
   section('memory-observation','7 NOVEMBER 2026 / FOCUSED FOLLOW-UP','Completion tracking and a narrow candidate guard passed.','Observation check: 0.836 seconds. The candidate guard passed four new rejections, 13 controls and nine existing functions, then the fresh native batch.',
     '<div class="evidence-panel"><p>A participant memory candidate is rejected before save when its value is absent from raw current input. Observation checks distinguish active work from an idle queue and retain correct behavior when admission is revoked.</p>'+detail('Narrow containment only. Quoted/context-only inputs and rapid-chat admission remain limitations; no general grounding or truthful-save guarantee. The new updater passed 80 synthetic controls: one success and 79 expected HOLDs, with 20,137 independent checks. Separately, two current/legacy offscreen UI loaders passed with nonfatal missing staged-font warnings. They prove construction/loading and clean exit, not parser acceptance or physical UI/audio. The two-EXE update completed at 02:14:56 UTC on 8 November; independent postcheck passed. Backups and displaced originals remain; helpers, runtime files and shortcut are unchanged. The normal app was not launched. Config/memory were not inspected or written by the fixed program-only update.')+'</div>')+
   search('Find a change, capability or open issue')+
+  (inReview.items.length?section('in-review','IN REVIEW / '+e(inReview.as_of),'Done and measured, not merged yet.',count(inReview.items.length)+' changes are on PR #'+inReview.pr+'. They are not in the retained main revision or the installed app, and their measurements are small live samples.',reviewRows()):'')+
   section('revia','01 / REVIA PROGRESS','Earlier merged changes, plainly.',count(changes.length)+' merged fixes are retained through PR #'+current.source_pr+'. Each record keeps the source change separate from what still needs checking.',changeRows()+
     '<p class="section-end">'+link(earlier,'Earlier repairs, tooling and retained failures ↗')+'</p>')+
   section('systems','02 / CAPABILITIES','What Revia is built to do.','The source contains 20 capability areas. These describe the implementation; live use and release readiness have their own evidence.',capabilityRows())+
@@ -100,6 +109,7 @@ let index=head('Project overview')+
     link(repo+'/actions/runs/'+current.pages.previous_failure.run,'Earlier cancelled run ↗')+'<p class="muted">The '+link(repo+'/actions/runs/'+current.pages.previous_failure.preceding_successful_run,'preceding historical run')+' also succeeded.</p></details></article></div>'+
     '<details data-technical><summary>Metric definitions and historical counts</summary><p>The '+ci.passed+' pass / '+ci.optional_skips+' skip result belongs to the source-pinned CI run above. It is not a new local test run, a capability score or a performance measurement. The older 153-registration controlled checkpoint is kept as the counts in the JSON snapshot and in full in the earlier records. Test discovery is not test completion.</p></details>')+
   section('open-work','04 / OPEN WORK','The unfinished work stays visible.','The update is independently verified, not launched. Reply-quality and physical-workflow limits remain visible.',issueRows())+
+  section('ruled-out','TRIED AND SETTLED','Read this before checking something again.','Each entry is something that was tried and failed, or was decided against, with what would make it worth another look.',ruledOutRows())+
   section('handoff','05 / PICK UP THE THREAD','A clear start for the next AI.','Begin with the verified state, then follow the evidence before running anything.', '<div class="handoff-panel"><div><p class="eyebrow">START HERE</p><h3>Understand first.<br>Continue deliberately.</h3><p>Read the handoff, check the current GitHub head against the pinned revision, and inspect the relevant source. Preserve research artifacts and saved responses; distinguish old studies from current regression checks.</p>'+
     link(repo+'/blob/'+pin+'/README.md','Retained repository README','text-link')+'</div><ol class="handoff-steps"><li><span>01</span><div><strong>Current local candidate</strong><p>Base c5ef5599 plus uncommitted changes. Fresh native 128/128; exact acceptance/restart passed; replies partial. Normal update independently verified, not launched.</p></div></li><li><span>02</span><div><strong>Research boundary</strong><p>182 Python cases passed, plus separately scoped audits and helpers. No training or normal-app integration is established by these checks.</p></div></li><li><span>03</span><div><strong>Next useful check</strong><p>Keep verified update receipts and reply-quality limits visible; retain the exact scope of each result.</p></div></li></ol></div>'+
     '<div class="handoff-links">'+link('milestone.json','Read the structured snapshot ↓')+link('research.html#research-handoff','RNL handoff &amp; evidence boundary →')+
@@ -123,7 +133,7 @@ let research=head('RNL research',true)+
   section('published-findings','02 / EARLIER WORK','What the public source supports.','The pinned public research branch contains methods and results through STATE-010. Atlas summaries of later studies do not make their full evidence public.',
     '<div class="public-findings">'+publicFindings.map(x=>'<article class="finding searchable" data-search="'+e([x.name,x.summary,x.detail].join(' '))+'"><h3>'+e(x.name)+'</h3><p>'+e(x.summary)+'</p>'+detail(x.detail)+'</article>').join('')+'</div><p class="section-end">'+link(repo+'/tree/'+researchPin+'/research/rnl','Pinned public research source ↗')+'</p>')+
   section('research-handoff','03 / REPRODUCIBILITY &amp; NEXT STEPS','Know which evidence you have.','A readable summary is a starting point. Reproducing the latest studies also needs their exact artifacts.', '<div class="boundary-grid"><article><p class="eyebrow">PUBLIC</p><h3>Code through STATE-010</h3><p>Use the pinned branch revision and its method, lock and config references. A moving branch head is not the same source identity.</p>'+
-    link(repo+'/tree/'+researchPin+'/research/rnl','aac6f161 · research/rnl ↗')+'</article><article><p class="eyebrow">LOCAL · UNPUBLISHED</p><h3>Studies 011–017 and the comparison</h3><p>Source deltas, per-example predictions, traces, frozen snapshots, the 63 STATE-017 checkpoints and the full comparison seal are held locally. This website does not supply them.</p></article></div>'+
+    link(repo+'/tree/'+researchPin+'/research/rnl','aac6f161 · research/rnl ↗')+'</article><article><p class="eyebrow">LOCAL · UNPUBLISHED</p><h3>Studies 011–018 and the comparison</h3><p>Source deltas, per-example predictions, traces, frozen snapshots, the 63 STATE-017 checkpoints and the full comparison seal are held locally. This website does not supply them.</p></article></div>'+
     '<details data-technical><summary>What a reproducible, reviewed handoff needs</summary><ul><li>Exact method/config/source/test deltas and all positive and negative results.</li><li>Fixture generators, seeds, evaluation definitions and per-example predictions/traces.</li><li>Three frozen delta snapshots, tensor inventory, original hashes and lineage.</li><li>The comparison fixture/parser, 32 retained requests/responses and completed 46-output seal.</li><li>An inventory mapping symbolic artifact IDs to sanitized filenames and export hashes.</li></ul><p>Raw local logs/manifests can contain private paths and process metadata. The exact export inventory and destination need review before any upload. A summary alone does not reproduce these studies.</p></details>'+
     '<div class="next-research"><span class="gold-diamond"></span><div><h3>Improve incrementally; keep the evidence bounded.</h3><p>The earlier STATE-017 closeout remains valid for those designs. Current regression checks and scoped improvements do not erase its negative findings. No new training, sealed-test evaluation, normal-app integration or publication is claimed by this checkpoint.</p></div></div>')+
   foot();
@@ -144,6 +154,8 @@ const record={
   changes,
   research_findings:studies,
   open_work:issues,
+  in_review:inReview,
+  ruled_out:ruledOut,
   earlier_records:{commit:earlierRecords,url:earlier,scope:'The full dated records and the complete 2026-11-03 milestone snapshot were published up to this commit and remain in the repository history. They are not repeated in this file.'}
 };
 write('index.html',index);

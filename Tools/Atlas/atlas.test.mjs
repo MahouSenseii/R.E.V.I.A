@@ -25,7 +25,7 @@ test('research reports the finished comparison and closeout without overclaiming
   assert.equal(r.saved_responses,32);
   assert.equal(r.integration,'None');
   assert.equal(r.candidate,'None');
-  assert.equal(r.local_studies,'STATE-011–017');
+  assert.equal(r.local_studies,'STATE-011–018');
   assert.equal(r.proposed_study,'None');
   const page=read('research.html');
   assert.match(page,/963\/1,008/);
@@ -183,4 +183,17 @@ test('November 8 installation and permitted checks retain historical scope and l
   assert.match(read('index.html'),/one durable acceptance receipt and no pending proposal/);
   assert.doesNotMatch(read('index.html'),/observation-only real-model replay is pending|actual-model replay is pending/);
   assert.match(read('research.html'),/182\/182/);
+});
+test('work in review and settled checks say what happened and what to do next',()=>{
+  const j=record(),page=read('index.html');
+  assert.ok(Number.isInteger(j.in_review.pr));
+  for(const x of j.in_review.items) for(const k of ['title','summary','detail','next']) assert.ok(x[k]&&!/[A-Z]{4,}_[A-Z]{4,}/.test(x[k]),'in review: '+k);
+  assert.equal(page.includes('id="in-review"'),j.in_review.items.length>0);
+  assert.ok(j.ruled_out.length>0);
+  for(const x of j.ruled_out){
+    for(const k of ['date','area','tried','result','retry']) assert.ok(x[k],'settled: '+k);
+    assert.match(x.date,/^\d{4}-\d{2}-\d{2}$/);
+  }
+  assert.ok(page.includes('id="ruled-out"'));
+  assert.equal((page.match(/<strong>Try again\?<\/strong>/g)||[]).length,j.ruled_out.length);
 });

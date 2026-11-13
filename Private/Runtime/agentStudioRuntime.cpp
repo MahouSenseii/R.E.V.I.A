@@ -34,6 +34,38 @@ constexpr unsigned MaximumProviderYields = 6;
 // seconds although nothing was wrong with the work.
 constexpr auto QuietBeforeProviderTry = std::chrono::milliseconds(1000);
 
+// Whether any host receipt records a file this worker wrote.
+bool WroteAFile(const nlohmann::json& receipts)
+{
+    return std::any_of(receipts.begin(), receipts.end(), [](const nlohmann::json& receipt)
+        { return receipt.is_object() && receipt.value("action", std::string{}) == "write_text_file" && receipt.value("succeeded", false); });
+}
+
+// Whether the owner's own words name a program they have approved, by its path or its file name.
+bool NamesAnApprovedProgram(const std::string& input, const std::vector<std::filesystem::path>& approved)
+{
+    const auto fold = [](std::string text)
+    {
+        std::replace(text.begin(), text.end(), '\\', '/');
+        std::transform(text.begin(), text.end(), text.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return text;
+    };
+    const std::string said = fold(input);
+    return std::any_of(approved.begin(), approved.end(), [&](const std::filesystem::path& executable)
+        {
+            const auto name = fold(actions::PathToUtf8(executable.filename()));
+            return !name.empty() && (said.find(fold(actions::PathToUtf8(executable))) != std::string::npos || said.find(name) != std::string::npos);
+        });
+}
+
+// Whether this worker has asked the host to run a program, whatever came of it: a refused
+// or failed run is still its answer, and asking again would only spend the tool budget.
+bool AskedToRunAProgram(const nlohmann::json& receipts)
+{
+    return std::any_of(receipts.begin(), receipts.end(), [](const nlohmann::json& receipt)
+        { return receipt.is_object() && receipt.value("action", std::string{}) == "execute_process"; });
+}
+
 // One spelling per file, so a listing's "D:/a/b.h" and a read of "D:\a\B.h" are the same file.
 std::string FileKey(const std::string& utf8)
 {
@@ -499,14 +531,38 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             // the file it was asked about 20 times in 20.
             const bool somewhereToLook = !scope.settings.approvedRoots.empty();
             const auto firstToolSchema = somewhereToLook ? agents::WorkerToolSchema(allowWrites, allowProcess, false) : toolSchema;
+            // The owner named a program they have approved, so they asked for it to be run. Until this
+            // worker has asked the host to run one, its step may not answer tool:null. Asked to
+            // confirm a fix by running its test, a live 9B read the file and stopped in 20 of 20
+            // replays; told nothing had been run, it ran the test in 10 of 20; with stopping also
+            // left out of what the step may answer, in 18 of 20, and read the test first in the rest.
+            const bool ownerNamedAProgram = allowProcess && NamesAnApprovedProgram(request.node.inputText, scope.settings.process.approvedExecutables);
+            const auto actingToolSchema = agents::WorkerToolSchema(allowWrites, allowProcess, false);
             for (unsigned index = 0; index < agents::MaximumWorkerToolsPerAttempt; ++index)
             {
                 // Said by the host from its own receipts. Without it the pinned 4B chose tool:null
                 // with no receipt at all in 5 of 10 replays of a live first step, ending a file
                 // review before any file was opened; with it, in 1 of 10.
                 const bool nothingRun = material["toolReceipts"].empty();
+                // Also from the host's own receipts, and placed after the material. A worker allowed
+                // to write that had read the file it was asked to fix stopped there in 9 of 20
+                // replays of a live 9B step sent as the app sends it, and its write-up then described
+                // a change nobody had made. The same words ahead of the instructions left 9 of 20
+                // stopping; after the material, 4 of 20; with the carry-out objective as well, 0 of 20.
+                const bool nothingWritten = allowWrites && !WroteAFile(material["toolReceipts"]);
+                const std::string writeNote =
+                    !nothingRun && nothingWritten
+                        ? "\n\nHost note: no file has been written by this worker yet. If the objective asks for a change to a file, "
+                          "the next action is that write: tool:null leaves every file as it is."
+                        : "";
+                // For the worker that may run programs the note works ahead of the instructions and
+                // not after the material, where 20 of 20 replays still stopped.
+                const bool noProgramRun = allowProcess && !AskedToRunAProgram(material["toolReceipts"]);
                 const std::string progress =
-                    !nothingRun        ? ""
+                    !nothingRun && noProgramRun
+                        ? "No program has been run by this worker yet: if the input asks for a program or a test to be run, run "
+                          "it now, because tool:null leaves it un-run. "
+                    : !nothingRun      ? ""
                     : somewhereToLook ? "No host tool has run for this worker yet, so it has no evidence: choose the first action that "
                                         "will get some. "
                                       : "No host tool has run for this worker yet, so it has no evidence: tool:null now ends the work "
@@ -523,7 +579,8 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     "unavailable; pathDigests identifies the full request but cannot be used as a path. "
                     "Writes require a prior read's exact contentDigest or missing for a new file. Never invent a digest. "
                     "Only the host can report execution; returned tools remain subject to current authority.",
-                    material.dump() + UnreadListedFilesNote(material["toolReceipts"]), nothingRun ? firstToolSchema : toolSchema);
+                    material.dump() + UnreadListedFilesNote(material["toolReceipts"]) + writeNote,
+                    nothingRun ? firstToolSchema : noProgramRun && ownerNamedAProgram ? actingToolSchema : toolSchema);
                 if (!proposal || !usagePersisted)
                     return result;
                 std::optional<actions::ActionRequest> action;
@@ -598,7 +655,38 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             // a review had to be run; with this note, in 4 of 8. The reviewer still checks it.
             deliverableNote = "\n\nHost note: verified means every claim in this deliverable rests on content in a succeeded host "
                               "receipt; it does not require running or testing anything.";
+            // The approach worker edits; only the verification worker after it may run programs.
+            // Given an objective that ends "then run the test", a live 9B that had fixed the file
+            // called its own work unverified because no test had run, and the run paused before
+            // the worker that runs it: verified in 5 of 10 replays of that write-up with the note
+            // above, 10 of 10 with this one. Only for a worker that did write: one that had only
+            // read the file called itself verified in 10 of 10 with it, having changed nothing.
+            const bool wrote = WroteAFile(material["toolReceipts"]);
+            if (wrote && request.node.id == "analysis" && scope.settings.process.enabled && scope.settings.process.allowTaskExecution)
+                deliverableNote =
+                    "\n\nHost note: verified is about this worker's own part only: true when every claim in this deliverable rests "
+                    "on content in a succeeded host receipt. This worker has no tool that runs programs, so running a program or a "
+                    "test is not its part; the verification worker that follows does that. List such checks as proposed steps, and "
+                    "do not set verified false because of them.";
+            else if (allowWrites && !wrote)
+                // Said because the write-up otherwise described the intended change as made: with
+                // it, 0 of 10 replays claimed a change or called an unmade fix verified.
+                deliverableNote += " No host receipt shows a file written by this worker: do not say that anything was changed, "
+                                   "fixed or written.";
+            if (allowProcess && !AskedToRunAProgram(material["toolReceipts"]))
+                deliverableNote += " No host receipt shows a program run by this worker: do not say that a test or program was "
+                                   "run, passed or failed.";
         }
+        // The reviewer and the acceptance check read several workers' write-ups, and took one
+        // worker's "the test was not run by this worker" for the state of the whole run. On a live
+        // run whose test had passed under a host receipt, a 9B reviewer called it verified in 8 of
+        // 20 replays; told this, in 20 of 20. On a run whose test was never run it said verified
+        // no more often than before (7 of 20 against 10). Only where a program can have been run.
+        if (mode == AgentProviderMode::LocalWithTools && request.node.role != agents::WorkflowRole::Worker && capturedScope &&
+            capturedScope->settings.process.enabled && capturedScope->settings.process.allowTaskExecution)
+            deliverableNote = "\n\nHost note: each worker's deliverable speaks only for that worker. Where one says it did not run a "
+                              "test, and another worker's host receipt shows the test was run, the test was run. Judge verified from "
+                              "the host receipts as a whole.";
         const std::string schema = DeliverableSchema(request.node.deliverableContract, request.prerequisiteReferences).dump();
         const auto answered = review(instructions, material.dump() + deliverableNote, schema);
         if (!answered || !usagePersisted)
@@ -767,6 +855,22 @@ bool ReviaSession::LaunchAgentWorkflow(const std::string& id, const std::string&
                                         "tools; report what is confirmed, what is not covered and what would settle it"
                                       : "Verify the approach worker's completed work using its exact artifact and bounded tools; report "
                                         "constraints, risks and acceptance evidence";
+        // With the owner's own grants a tools run is how she edits and tests, and the two workers
+        // are asked to do that work rather than describe it. "Develop a concise approach" was
+        // answered with an approach: a live 9B that could write stopped after reading in 9 of 20
+        // replays, and in 4 of 20 with this objective.
+        const auto granted = actionRuntime.Settings();
+        if (!options.investigation && !options.readOnlyTools)
+        {
+            const auto analysis = std::find_if(spec.nodes.begin(), spec.nodes.end(), [](const auto& node) { return node.id == "analysis"; });
+            if (granted.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite)
+                analysis->objective =
+                    "Carry out the supplied objective with the permitted tools, changing only what it asks for, then report what was done";
+            if (granted.process.enabled && granted.process.allowTaskExecution)
+                verification->objective = "Check the approach worker's completed work against the input with the permitted tools, running "
+                                          "the program or test the input names when it names one; report constraints, risks and "
+                                          "acceptance evidence";
+        }
         verification->deliverableContract.requireAllPrerequisites = true;
         const auto path = companionPaths.Resolve("RuntimeData/Agents/tool-scope.json");
         const auto scope = LoadWorkerScope(path);

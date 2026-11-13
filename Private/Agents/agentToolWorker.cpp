@@ -5,6 +5,7 @@
 #include "Planning/structuredActionParser.h"
 
 #include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <set>
 
@@ -112,6 +113,29 @@ bool ParseWorkerToolResponse(const std::string& response, const bool allowWrites
             for (const auto& argument : request.process.arguments)
                 if (argument.size() > 1024 || argument.find('\0') != std::string::npos || !utf8::IsValid(argument))
                     return false;
+            // The program is named once, by `executable`. A live 9B also repeated it as the first
+            // argument in 13 of 13 replayed runs, as a command line would, so Python was handed its
+            // own executable as the script to run and the test never started. Naming the program
+            // again is never a real argument to it, so the repeat is dropped.
+            if (!request.process.arguments.empty())
+            {
+                const auto same = [](std::string a, std::string b)
+                {
+                    const auto fold = [](std::string& text)
+                    {
+                        std::replace(text.begin(), text.end(), '\\', '/');
+                        std::transform(text.begin(), text.end(), text.begin(),
+                            [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    };
+                    fold(a);
+                    fold(b);
+                    return a == b;
+                };
+                const auto& first = request.process.arguments.front();
+                if (same(first, actions::PathToUtf8(request.process.executable)) ||
+                    same(first, actions::PathToUtf8(request.process.executable.filename())))
+                    request.process.arguments.erase(request.process.arguments.begin());
+            }
         }
         else if (!validPath(request.source))
             return false;
@@ -119,6 +143,21 @@ bool ParseWorkerToolResponse(const std::string& response, const bool allowWrites
             (!Digest(request.expectedDigest) || request.value.size() > 8192 || request.value.find('\0') != std::string::npos ||
                 !utf8::IsValid(request.value)))
             return false;
+        if (type == actions::ActionType::WriteTextFile && request.expectedDigest.size() == 64)
+        {
+            // A read's receipt ends its output with the file's digest line. Rewriting a file from
+            // that output, a live 9B copied the line into the new content in 8 of 19 replayed
+            // writes, and the file no longer parsed. The line is the host's, never the file's: it
+            // is the digest of the very content being replaced, which the worker has just quoted.
+            const std::string echoed = "sha256:" + request.expectedDigest;
+            auto& content = request.value;
+            std::size_t end = content.size();
+            while (end > 0 && (content[end - 1] == '\n' || content[end - 1] == '\r'))
+                --end;
+            if (end >= echoed.size() && content.compare(end - echoed.size(), echoed.size(), echoed) == 0 &&
+                (end == echoed.size() || content[end - echoed.size() - 1] == '\n'))
+                content.erase(end - echoed.size());
+        }
         request.requestedBy = "agent-workflow";
         outAction = std::move(request);
         outError.clear();
@@ -165,6 +204,18 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
         receipt["timedOut"] = process.timedOut;
         receipt["cancelled"] = process.cancelled;
     }
+    // What the host wrote. The receipt otherwise carried only the new file's hash, and a
+    // worker asked whether its change was established could not tell from a hash: a live 9B
+    // fixed the bug it was given, then reported the fix as unverified because no receipt
+    // showed the new content, and the run paused before its test was ever run.
+    std::string written;
+    if (request.type == actions::ActionType::WriteTextFile && outcome.Succeeded())
+    {
+        written = BoundedText(request.value, 8192);
+        receipt["written"] = written;
+        if (written.size() < request.value.size())
+            receipt["truncated"] = true;
+    }
     auto encoded = receipt.dump();
     while (encoded.size() > WorkerToolOutputReservation && !output.empty())
     {
@@ -178,6 +229,13 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
     {
         message = utf8::Prefix(message, message.size() / 2);
         receipt["message"] = message;
+        receipt["truncated"] = true;
+        encoded = receipt.dump();
+    }
+    while (encoded.size() > WorkerToolOutputReservation && !written.empty())
+    {
+        written = utf8::Prefix(written, written.size() / 2);
+        receipt["written"] = written;
         receipt["truncated"] = true;
         encoded = receipt.dump();
     }

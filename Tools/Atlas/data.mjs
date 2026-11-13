@@ -15,7 +15,7 @@ export const current={
   research:{
     public_source_commit:researchPin,
     public_source_through:'STATE-010',
-    local_studies:'STATE-011–017',
+    local_studies:'STATE-011–018',
     proposed_study:'None',
     comparison_complete:true,
     graded:true,
@@ -155,6 +155,10 @@ export const issues=[
 ];
 
 export const studies=[
+  {id:'state-018',tag:'Baseline · no training',tone:'positive',name:'A small model with a memory store beat a large one that held everything in context.',
+    summary:'Qwen3.5-0.8B filing notes into a store answered 88.6% of questions in 685 MiB of VRAM; the 9B with the whole history in its context answered 44.7% in 5,480 MiB. With the store, the 4B and 9B reached 94.7% and 94.5%.',
+    detail:'STATE-018, 12 November 2026, the first step toward the owner’s goal for RNL: a model structure that is smarter, remembers better and needs less VRAM. It measures the two plain ways a local model can remember, so a new structure has a number to beat. Same people-and-facts task as STATE-017 with updates, corrections, misspelled names and aliases; 80 development histories, 640 questions; the sealed test stayed closed and nothing was trained. In context: 0.8B 69.5%, 4B 59.8%, 9B 44.7%. Filing each note into the unlimited keyed store, one model call per note: 88.6%, 94.7%, 94.5%. A rule-based extractor with the same store scored 640/640. In context the 0.8B answered with an old value 112 times; the 4B and 9B almost never did, and instead declined 242 and 346 times, mostly when the name was misspelled or an alias. On exactly spelled names context still gave 75%, 85% and 83% against 96%, 99% and 100% with the store. From 8 to 64 facts every model lost 11–22 points in context and at most 2 with the store. The store’s remaining errors were the model’s filing: aliases 55–82% correct, and 37–120 notes per run filed unusably. The same model needed almost the same VRAM either way; the saving comes from being able to use a smaller model. Filing cost 23–57 minutes for the 80 histories against 1–5 minutes to answer from context.',
+    limit:'Local study · development data only · one prompt per arm, one run · synthetic task · the context prompt may make larger models decline misspelled names',next:'This is the baseline, not a new structure: an explicit store beside an unchanged model. A learned part would have to help where the store’s gaps are, aliases and filing on small models, at the small model’s VRAM. No such training has been run.'},
   {id:'hybrid-check',tag:'Stopping estimate',tone:'neutral',name:'A learned name matcher had little room over a good store.',
     summary:'With a fairly tuned fuzzy store, a perfect name matcher would add only about 2.5 points on harder misspellings, and no memory or speed saving was available.',
     detail:'Pre-check before any training: a learned name-matching part in front of an explicit replace-on-write store. On 400 new development histories with three-letter typos, truncations, dropped vowels, sound-alikes and swapped halves (tuned on half, scored on the other half), the strong fuzzy store scored 97.5% with unlimited memory and 76.0% / 91.2% / 97.5% at 128 / 256 / 512 floats. A perfect matcher using the same stored names would score 100% / 78.7% / 93.6% / 100%, so the most any matcher could add was +2.3 to +2.8 points (paired 95% intervals within +1.6 to +3.6). A first baseline skipped character similarity under a budget although it already stored the names, which wrongly suggested 17–21 points of room; the corrected baseline is the one reported. Most remaining errors are typos equally close to another real name, or an artificial swapped-halves pattern a simple rule would fix. Stored names cost about 2 floats each, so a learned key cannot save memory here.',
@@ -202,4 +206,82 @@ export const publicFindings=[
   {id:'cache-contract',name:'The cache must preserve the full computation contract.',
     summary:'Keying by selected expert and every input bit preserved 280 tested steps. A shortcut did not.',
     detail:'RNL-002 retained routing, activation and recurrent updates every time. The first supplied toy cache changed behavior, so skipped work could not count as an equivalent speed improvement.'}
+];
+
+// Work on an open pull request: done and measured, not merged, not in the installed app.
+// When it merges, move these into `changes` and empty this list.
+export const inReview={pr:50,as_of:'2026-11-12',items:[
+  {title:'Text that has to be copied exactly is copied exactly.',
+    summary:'File paths, phone numbers and search results came back altered because the repetition sampler penalised copying. It is now relaxed for turns that carry exact text and off for structured replies.',
+    detail:'Found by replaying recorded requests against the Qwen3.5-9B with different sampler settings. A named path was copied correctly in 0 of 28 replies before and 9 of 10 after; a number from a search result 0 of 28 and 10 of 10; a stored phone number 0 of 18 and 18 of 18; recall across turns 0 of 8 and 8 of 8. Jokes and ordinary chat keep the stronger setting. Small samples, one model.',
+    next:'Watch for repeated phrasing in long chats now that the brake is lighter on some turns.'},
+  {title:'A file you name is read before she answers.',
+    summary:'She described files she had not opened. Full paths inside approved folders are now read by the host before the model’s first step.',
+    detail:'A wording change to the tool description was tried first and changed nothing. With the host reading first, 4 of 4 live file questions were answered from the real content. Bare file names resolve against recently named folders, then a single approved folder.',
+    next:'Check file names that match in more than one approved folder.'},
+  {title:'Agents start when asked, look before answering, and finish while you talk.',
+    summary:'“Use your agents” always starts the task, a worker’s first step must open something, write-ups validate, and workers wait for a pause in the conversation instead of failing.',
+    detail:'Replays on the 9B: a worker’s first step chose to do nothing in 20 of 20 before and read the file in 20 of 20 after; every write-up failed its schema in 10 of 10 before and passed in 10 of 10 after; the hand-off started in 8 of 13 before and 10 of 10 after. Live: 4 of 4 runs verified on an idle PC. On a busy PC 2 of 6 failed because a worker retried in the moment between messages and lost to the next one; with a one-second pause rule 3 of 3 were verified, and chat replies stayed near two seconds.',
+    next:'Repeat on more kinds of task; these were all one small bug hunt.'},
+  {title:'A quick reply no longer costs the previous turn its memory.',
+    summary:'A memory check still running when the next message arrived was thrown away. It now belongs to the conversation, not the single turn, and waits out the reply that interrupted it.',
+    detail:'Seen with the Qwen3.5-27B, whose memory check takes three to five seconds: with messages three seconds apart it saved 0 of 2 facts before and 2 of 2 after, and recalled both after a restart. Two causes, fixed separately: retries ran against the same reply that had interrupted them, and the turn’s permission ended when the next message started. A dropped check is now logged. A check still waiting when the app closes is still lost.',
+    next:'Decide whether waiting checks should be finished or saved at shutdown.'},
+  {title:'An agent run can fix a file, run its test and sign the work off.',
+    summary:'With permission to write and to run an approved program, her agents now edit the file, run the test themselves and accept the result. Before, both trial runs stopped as unverified after a correct fix.',
+    detail:'Agent Studio runs on the 9B, in a scratch copy of a small buggy project with one failing test. Five causes were found and fixed one at a time, each measured by replaying the recorded step 20 times the way the app sends it. A write’s receipt showed only a hash, so the worker could not tell what it had written. A worker allowed to write stopped after reading in 9 of 20; asked to carry the task out and told after its material that nothing was written yet, 0 of 20. In 8 of 19 writes the model copied the digest line from the read result into the file; the host now strips it. Asked to run the test, the checking worker stopped in 20 of 20; when the owner’s request names an approved program it may not stop before trying, and it ran the test in 18 of 20. Every run repeated the program as its own first argument, which the host now drops. The reviewer and the acceptance check called a run whose test had passed verified in 8 and 9 of 20; told that each write-up speaks only for its own worker, 20 of 20, and no more often than before on a run whose test never ran (7 of 20 against 10). On the final build, five live runs: the file was fixed and the agents’ own test run passed in 5 of 5, and 4 of 5 were accepted in 41–61 s. The fifth used up the run’s 20,000-token budget before the acceptance check and waited for the owner. Running Python also needs the interpreter permission, not only an approved executable.',
+    next:'Decide the token budget for runs that use tools; try a change that spans more than one file; the reviewer still accepts about a third of runs whose test never ran.'}
+]};
+
+// Tried and settled. Read this before repeating a check. Each entry says what was tried,
+// what happened, and what would make it worth trying again.
+export const ruledOut=[
+  {date:'2026-11-12',area:'Revia',tried:'Qwen3.5-27B as the main model.',
+    result:'It fits across both graphics cards and answered every test question correctly, but replies took 5.8–6.4 s against about 2.4 s on the 9B, the small fast model had to move to the CPU, and a delegated task took 199 s against about 60 s. Not switched: fast replies come first.',
+    retry:'Only with faster hardware, or if slower replies become acceptable.'},
+  {date:'2026-11-12',area:'Revia',tried:'More retries alone to keep a memory when the next message arrives quickly.',
+    result:'Raising the retry limit and waiting for the reply to finish still dropped both facts that should have been saved. The real cause was the turn’s permission ending when the next message started.',
+    retry:'No. Fixed by the conversation-level permission on PR #50.'},
+  {date:'2026-11-12',area:'Revia',tried:'Letting a worker retry the moment her reply ends.',
+    result:'With quick messages the retry lost to the next message, and four losses ended the task: 2 of 6 live runs failed on a busy PC.',
+    retry:'No. Replaced by waiting for a one-second pause.'},
+  {date:'2026-11-11',area:'Revia',tried:'Forcing a tool call with the server’s required-tool setting.',
+    result:'Unreliable on the local llama.cpp server: ignored in one replay, and in another the reply ran to the token limit.',
+    retry:'Only after a llama.cpp update that changes this behaviour. The host now makes the required call itself.'},
+  {date:'2026-11-11',area:'Revia',tried:'Rewording the file tool’s description so the model reads a named file.',
+    result:'No effect: 28 of 30 replays called the tool with either wording, and the misses stayed.',
+    retry:'No. The host reads named files first.'},
+  {date:'2026-11-11',area:'Revia',tried:'Repairing mangled file paths after the model replied.',
+    result:'Abandoned once the cause was found: the repetition sampler was corrupting any copied text, not only paths.',
+    retry:'No.'},
+  {date:'2026-11-11',area:'Revia',tried:'The repetition sampler at full strength on every request.',
+    result:'It stops loops in ordinary chat but corrupts text that must be copied: 0 of 28 exact copies of a path.',
+    retry:'Do not turn it back on for turns that carry exact text, tool results or structured output.'},
+  {date:'2026-11-12',area:'Revia',tried:'Asking the agents from chat to edit files or run programs.',
+    result:'Not a bug: a chat hand-off is read-only by design, whatever else is allowed. Editing and running tests belong to an Agent Studio run.',
+    retry:'A design decision for the owner, not a check to repeat.'},
+  {date:'2026-11-12',area:'Tests',tried:'Treating single failures under a parallel run as regressions.',
+    result:'Three tests fail now and then during a parallel run and pass every time alone: the delegation tests once (a task record that could not be saved), the memory reranker test once (a connection aborted on Windows), and the browser-ownership test in 2 of 4 full runs, where it hangs with no output until its 45-second limit. None was caused by the change under test. The browser test is not clashing with the other browser tests: the three passed together 3 times in 3.',
+    retry:'Rerun the one test alone before investigating. Still unexplained: what the browser-ownership test waits on during a full run, and the reranker test’s connection race.'},
+  {date:'2026-11-12',area:'Tests',tried:'Reading “time to first word” from the live conversation tool.',
+    result:'Its recording proxy hands each reply over all at once, so the first-token figure it logs (1.1–1.5 s) is really the whole reply. Replayed straight at the model server, the 9B’s first word in a short chat takes about 0.56 s: 0.23 s re-reading the per-turn guidance, 0.16 s starting the repetition sampler, the rest reading the last exchange. An older record shows 0.41 s. This week’s fixes did not change it (1.20 s before, 1.16 s after, same tool).',
+    retry:'Measure first-word time by direct replay, or make the proxy stream. The guidance re-read and sampler start-up are the two places to win time.'},
+  {date:'2026-11-12',area:'Revia',tried:'Telling a coding worker to judge only “its own part” whether or not it had edited anything.',
+    result:'A worker that had only read the file then called itself verified in 10 of 10 replays and sometimes described a change nobody had made. The note is now chosen from the host’s own receipts: one wording after a successful write, another when nothing was written.',
+    retry:'No.'},
+  {date:'2026-11-12',area:'Tests',tried:'Judging a wording change by replaying one recorded request with fixed seeds.',
+    result:'It overstated the gain: a note measured at 18 of 20 that way gave 11 of 20 when the step was replayed as the app sends it (the previous step first, no fixed seed), and 2 of 5 live runs. Where a host note sits also matters and cannot be assumed: the “nothing written yet” note worked after the worker’s material and not ahead of its instructions, and the “nothing run yet” note the other way round (0 of 20 after the material).',
+    retry:'Use the as-sent replay, 20 tries, and confirm with live runs before keeping a wording.'},
+  {date:'2026-11-12',area:'Revia',tried:'Running a Python test from an agent run with only process permission switched on.',
+    result:'Refused by policy: script interpreters such as Python need their own permission as well as an approved executable. Not a bug.',
+    retry:'Turn on the interpreter permission for the folder being worked on; do not look for a fault.'},
+  {date:'2026-11-12',area:'RNL',tried:'Relying on a larger model’s context window as its memory (STATE-018).',
+    result:'With the whole history in context the 4B and 9B answered 59.8% and 44.7%, below the 0.8B with a store at 88.6%, and they got worse as the history grew. Larger was not better here: the larger models declined misspelled and alias names.',
+    retry:'Only with a prompt that allows near matches on names, to separate caution from forgetting.'},
+  {date:'2026-11-06',area:'RNL',tried:'Two trained RNL memory layouts against a compact keyed store (STATE-017).',
+    result:'7–32 points below the store at every memory size from 64 to 512 floats, three seeds each; doubling training added under one point.',
+    retry:'Not these two layouts. Other layouts, alias mechanisms and tasks are untested.'},
+  {date:'2026-11-06',area:'RNL',tried:'A learned name matcher in front of a store.',
+    result:'A perfect matcher could add at most about 2.5 points over spelling distance, with no memory or speed saving. Stopped before training.',
+    retry:'Only on tasks where names cannot be matched by spelling.'}
 ];
