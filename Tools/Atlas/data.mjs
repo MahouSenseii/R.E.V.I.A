@@ -84,18 +84,6 @@ export const changes=[
     summary:'A delegated task that ends unverified now tells you what the workers read and found, instead of “nothing established” or an invented bug.',
     detail:'A worker that calls its own work unverified ends the run, and its deliverable used to be discarded. Revia’s report then got only a stage list: replaying the live report turn, 6 of 8 replies said “nothing established” and 2 invented bugs nobody had found. The workflow now keeps that deliverable beside the attempt, never as an accepted or reviewed result, and only when it meets the node’s deliverable contract; a review found the first version checked only the hash, and a valid hash over missing or broken sections is now dropped (regression failed before, passes after). The report relays it as the worker’s own unconfirmed claims, with the host receipts as the only facts: 8 of 8 replays relayed what the workers found, and none invented a finding. Verification, review and acceptance are unchanged.',
     next:'Repeat the live delegated runs on more tasks; decide whether an unverified worker should get one bounded retry.'},
-  {pr:41,title:'Keep the right person, file their plans, reach the agents.',
-    summary:'“I meant Mari, not Jo” and “hey, it’s Mari” now find the right person, her own trip is recalled after a restart, and “use your agents” reaches them.',
-    detail:'Found in live multi-turn conversations with the SHA-pinned Qwen3.5-4B through the production session, at the shipped 32K context. A name correction left later facts filed under the rejected name. A returning person was never recognised after a restart. The memory selector filed a speaker’s own plans and pets as unattributed, so a private chat never recalled them (0/6 → 6/6 in replays of the captured request). A request for the agents reached them in 2/10 replays (10/10 after). With no agent reachable, she described a review nobody ran. Workers stopped before opening a file (5/10 → 1/10) or after one of two files (the second was then read 10/10). Each fix has a regression that failed before it. After a restart, live recall now returns the name, tea, instrument and March trip. The installed app is unchanged.',
-    next:'Rebuild and requalify the installed app; repeat the live trials over more conversations.'},
-  {pr:39,title:'Match grounding repairs on whole words.',
-    summary:'Harmless words such as “creating” or “relying on” no longer cost a check-in or name reply its sentence.',
-    detail:'PR37’s phrase lists matched parts of words (“eating” inside “creating”, “come over” inside “become overly”, “my bad” inside “my badge”), so harmless sentences in check-ins and first-time name statements could be dropped. The lists now match whole words and phrases. Regressions cover every reported example and confirm that real bodily and mix-up claims are still removed. The installed app is unchanged.',
-    next:'Rebuild and requalify the installed app; widen the fixed-prompt check to more history-shaped turns.'},
-  {pr:37,title:'Keep casual check-ins and stated names grounded.',
-    summary:'“What are you up to?” no longer invents a body or offscreen life, and “my name is X, not Y” no longer invents a mix-up nobody had.',
-    detail:'Merged change to conversationStylePolicy.cpp, with conversationGuidanceTests.cpp regressions built from actual replies. Turn guidance plus sentence-level repair; streaming is kept because a repair never withdraws an already released sentence. Measured through the conversation runtime with the SHA-pinned Qwen3.5-4B on three fixed prompts, four passes each: 5/12 before, 12/12 after on CPU, 11/12 on the RTX 5070, where the miss was reply length. Repair still does much of the work, the gates match phrases, and the installed app is unchanged. A post-merge review found the phrase lists matched parts of words (“eating” inside “creating”, “lying on” inside “relying on”), which could drop harmless sentences from these two turn types; PR #39 fixed this with whole-word matching.',
-    next:'Covered by PR #39; then rebuild and requalify the installed app.'}
 ];
 
 export const issues=[
@@ -127,10 +115,19 @@ export const issues=[
 ];
 
 export const studies=[
+  {id:'state-021',tag:'Cue-free routing · small trained model',tone:'positive',name:'The model found the topic by itself and matched the fully loaded model with 37% loaded.',
+    summary:'No cue words and no turn markers. A small planner that learns only by predicting the upcoming words found all 16 topics. The routed model scored 97.7% with 37% of its parameters loaded; a fully loaded ordinary model 97.5%; conventional every-token routing reached 96–97% on two seeds and stalled at 69% on the third, with 99.9% loaded. It does not answer better; it loads less.',
+    detail:'STATE-021, 13 November 2026. 16 topics; a name is two syllables and fits 1.88 topics on average, so the topic has to be worked out from the names asked so far and can change without notice; 196,608 random facts; seeds 11–13, 24,000 steps. The planner is a separate 78,000-parameter reader trained first, alone, to predict the next 8 tokens through one of 16 guesses; it sees no topic label and no answer, and the route is a fixed function of its guess. One topic, one unannounced switch, a change every two questions: routed 97.7%, 95.4%, 82.0% with 36.6%, 47.9%, 60.9% loaded; ordinary fully loaded 97.5%, 95.3%, 83.6%; every-token routing 97.3%, 68.8% and 96.4% on its three seeds for one topic; ordinary models of 0.74M and 0.55M 67.6% and 61.1%. The best any reader could do is 67.4% on a first question, 96.9% on the second and 99.7% on the third; the routed model scored 66.8%, 96.3% and 99.8%. On a first question whose name fits one topic it was right 100% and 99.6% sure; with two possible topics, right 48.5% and 67% sure.',
+    limit:'Scripts published · toy model, random facts · parameters counted as needed, not actually unloaded · three seeds; planner variants on one pilot seed',next:'Real language, and loading measured for real, are the open steps.',
+    source:{commit:'648e8cb',path:'research/rnl/state-021'},
+    reproduce:['Needs Python 3.12, PyTorch 2.11 with CUDA and one NVIDIA card. There is no data to fetch: the task is generated from a fixed seed.',
+      'Headline comparison: run run_find.py with --arm guess, --arm dense and --arm fast, each with --steps 24000 for seeds 11, 12 and 13; then summarize.py on the folder, and ceiling.py for the best-possible figures. run_all.sh runs every reported run.',
+      'Expect the routed model at 97.6–97.7% with about 36.6% of its parameters loaded for a one-topic conversation, the ordinary model at 97.5–97.6%, and each planner log to say 16 of 16 guesses in use. Last digits can differ between graphics cards.',
+      'About 12 minutes a run on an RTX 5070.']},
   {id:'state-020',tag:'First routing test · small trained model',tone:'positive',name:'With a quarter of its parameters loaded, a routed model matched the whole one.',
     summary:'Planning the route once per turn, a small model needed 26.7% of its parameters for a one-topic conversation and answered 100.0%. An ordinary model the size of that loaded part, trained equally long, answered 63.8%. Routing every token kept everything loaded.',
     detail:'STATE-020, 13 November 2026, the first test of the owner’s idea for RNL: only the parameters on a route are loaded, and slow signals pick the route. A 1.88M-parameter transformer with 16 experts per block, 2 in use; 200,704 random facts in 16 topics, each turn opening with its topic’s cue words; seeds 11–13, settings tuned on a separate seed. A planner reads the opening words and holds the route for the turn. At 24,000 steps: 100.0% on every seed with 26.7% loaded for one topic, 36.3% across one switch and 48.2% when taking turns; an ordinary 0.50M model gave 63.8% (61.7–66.2). At 6,000 steps: 90.3% (88.3–92.6), the whole ordinary model 96.2%, the small one 32.2%. With 32 topics and 32 experts the loaded part stayed 0.52M (14.9%) at 91.8%; an ordinary 1.89M model gave 74.2%, and the routed model left at 16 experts 67–73% (two seeds). A topic change brings in about 5.5 experts; this PC copies 6–13 GB a second onto its cards. The router’s own weights needed no training: what was learned is that different openings of one topic give the same route.',
-    limit:'Scripts published · toy model, random facts · topics announced by cue words, turn starts given · parameters counted as needed, not actually unloaded · three seeds',next:'Open problem: finding the topic signal in real text. Both routers that had to find it themselves failed. Not tried on a pretrained model.',
+    limit:'Scripts published · toy model, random facts · topics announced by cue words, turn starts given · parameters counted as needed, not actually unloaded · three seeds',next:'STATE-021 removes the cue words and the turn markers.',
     source:{commit:'92d50e8',path:'research/rnl/state-020'},
     reproduce:['Needs Python 3.12, PyTorch 2.11 with CUDA and one NVIDIA card. There is no data to fetch: the task is generated from a fixed seed.',
       'Headline comparison: run run_routes.py with --arm turn --noise 0 --steps 24000, and with --arm dense --experts 2 --steps 24000, each for seeds 11, 12 and 13; then summarize.py on the folder. run_all.sh runs all 59 runs of the study.',
@@ -152,30 +149,10 @@ export const studies=[
     summary:'On development data, RNL stayed 7–32 points below a compact keyed store at every memory size tested; a diagnosed layout fix closed only part of the gap.',
     detail:'STATE-017: a synthetic memory task with people’s facts, updates, corrections, misspellings, aliases and overload, every system reading the same text through one extractor. Budgets of 64–512 floats per conversation, three seeds each, CPU only. Run 1 (36 models) was 17–32 points below the matched store; ideal storage with its own learned addresses reached only 44–73%, so the layout, not the training, was the limit. Run 2 (27 models, rules frozen in advance) gave each attribute its own name-addressed block: +7–11 points over run 1, still 7–24 below the store on every seed, every paired interval below zero. Twice the training added under 1 point. Remaining failures: aliases (about 50% against 84% for exact names), many facts, older facts fading under later writes. The sealed test was never opened.',
     limit:'Local study · development data only · detailed source, checkpoints and traces unpublished',next:'Closed under its stop rule. It does not show that RNL cannot work; other layouts, alias mechanisms, tasks and budgets are untested.'},
-  {id:'state-016',tag:'Positive synthetic result',tone:'positive',name:'Separate addresses recovered the retained errors.',
-    summary:'Fixed separate slots answered all 1,008 questions correctly, while the original and sham controls each answered 970.',
-    detail:'STATE-016: 1,008/1,008 versus 970/1,008; 38 rescues and no new errors. Three frozen seeds, four supplied keys, eight values. No training updates. This isolates a useful memory-address intervention on this task; it does not establish general routing, language understanding or equal-capacity training.',
-    limit:'Local study · detailed source and traces unpublished',next:'STATE-017 then tested trained RNL against a simple store; see above.'},
-  {id:'state-015',tag:'Negative result',tone:'negative',name:'The alternative reader made recall worse.',
-    summary:'Changing only the reader recovered three answers but broke ten others.',
-    detail:'STATE-015: 963/1,008 correct versus the original 970/1,008. The fixed reader used the same frozen saved state; three seeds, zero training updates. This negative result limits the proposed reader change and does not erase the earlier memory finding.',
-    limit:'Local study · detailed source and traces unpublished',next:'Keep this result alongside the positive separate-slot result.'},
-  {id:'state-014',tag:'Diagnostic finding',tone:'neutral',name:'Errors appeared during later unrelated writes.',
-    summary:'Older facts were correct just after their updates; some became wrong after other keys were written.',
-    detail:'STATE-014: all older targets were correct at both update checkpoints. By the final checkpoint, 10/504 older answers were wrong after four unrelated writes and 32/504 after sixteen. This identifies an interval, not the cause of the failure.',
-    limit:'Local trace audit · no training or quality improvement',next:'Test causes without treating the interval as a proven explanation.'},
-  {id:'state-013',tag:'Diagnostic finding',tone:'neutral',name:'Older facts accounted for most retained errors.',
-    summary:'At eight and sixteen unrelated writes, 32 of 38 wrong answers concerned the older requested fact.',
-    detail:'STATE-013 re-read saved errors. Some predictions repeated the queried key’s prior value. No retained wrong answer matched the partner fact or final unrelated write. This is saved-error analysis, not a new model run.',
-    limit:'Local analysis · task-specific error pattern',next:'Use the pattern to guide bounded interventions.'},
-  {id:'state-012',tag:'Robustness limit',tone:'neutral',name:'More unrelated writes exposed a weaker margin.',
-    summary:'Frozen learned memory scored 998/1,008 after four writes and 970/1,008 after eight or sixteen.',
-    detail:'STATE-012 reused matched families over three seeds without training. All sixteen-write screens passed, but the weaker seeds sat exactly on the complete-group threshold. One seed remained perfect.',
-    limit:'Local inference-only audit · three seeds',next:'Preserve both the high recall and the narrow reliability margin.'},
-  {id:'state-011',tag:'Positive synthetic result',tone:'positive',name:'A different learned-memory recipe recalled more facts.',
-    summary:'Learned memory answered 4,009/4,032 correctly; the fresh GRU answered 1,035. Exact lookup solved the task.',
-    detail:'STATE-011: 985/1,008 complete four-question groups versus zero for GRU; exact lookup 100%. Four supplied keys/eight values. Unequal whole recipes: 153 versus 4,968 parameters and 32 state floats. Learned optimization took 88.65s versus 57.70s for GRU, so no speed advantage was established.',
-    limit:'Local trained study · unequal recipes, known keys',next:'A synthetic memory finding remains separate from any Revia or LLM benefit.'}
+  {id:'state-011-016',tag:'Earlier local studies',tone:'neutral',name:'Six earlier synthetic memory studies, kept as one entry.',
+    summary:'A learned memory recalled 4,009 of 4,032 facts where a fresh GRU recalled 1,035 (STATE-011). It lost ground as unrelated writes were added, 998/1,008 then 970/1,008 (012), mostly on older facts (013, 014). A different reader made it worse, 963/1,008 (015); separate slots fixed it, 1,008/1,008 (016).',
+    detail:'Synthetic recall with four supplied keys and eight values, three seeds. STATE-011 compared unequal recipes and showed no speed advantage. STATE-012 to 014 are inference-only audits of saved models: older facts became wrong after later unrelated writes (10/504 after four writes, 32/504 after sixteen). STATE-015 changed only the reader: 963/1,008 against 970/1,008. STATE-016 used fixed separate slots: 1,008/1,008 against 970/1,008, 38 rescues and no new errors. None establishes general routing, language understanding or a benefit to Revia. The six full cards are in the Atlas at commit 6c72d7d.',
+    limit:'Local studies · detailed source and traces unpublished',next:'STATE-017 then tested trained RNL against a simple store; see above.'}
 ];
 
 export const publicFindings=[
@@ -276,6 +253,12 @@ export const ruledOut=[
   {date:'2026-11-13',area:'Revia',tried:'Skipping the token count Revia asks the server for before each reply.',
     result:'It costs 13 ms in the app. The 90 ms seen earlier was the test tool’s recording proxy.',
     retry:'No.'},
+  {date:'2026-11-13',area:'RNL',tried:'Reading half-length pilot runs as results (STATE-021).',
+    result:'At 12,000 steps the routed model led the fully loaded one, 97.7% to 95.7%, and every-token routing sat at 69%. At 24,000 steps the routed and fully loaded models tie at 97.5–97.7%, and every-token routing reached 96–97% on two seeds of three.',
+    retry:'No. Compare only at full training length.'},
+  {date:'2026-11-13',area:'RNL',tried:'Switching on a second route while the planner is unsure, and planners with no push to use all their guesses or with twice as many guesses as topics (STATE-021).',
+    result:'The second route gave no gain: the uncertainty is in the question, not in what is loaded. With no push the planner collapsed to one guess; with 32 guesses and a strong push it split every topic in two (95.9% with 45% loaded, pilot).',
+    retry:'Use spare guesses with a weak push. A second route only where the planner is weaker than the information allows.'},
   {date:'2026-11-13',area:'RNL',tried:'Choosing a route for every token, the usual mixture-of-experts way, to load less (STATE-020).',
     result:'72.8% against 90.3% for a route planned once per turn, and one conversation touched 15.96 of 16 experts per block. It saves arithmetic, not memory.',
     retry:'No.'},
@@ -313,3 +296,23 @@ export const ruledOut=[
     result:'A perfect matcher could add at most about 2.5 points over spelling distance, with no memory or speed saving. Stopped before training.',
     retry:'Only on tasks where names cannot be matched by spelling.'}
 ];
+
+// Plain statements for someone new to RNL. Each rests on a published study; nothing private is summarised here.
+export const rnlToday={as_of:'13 November 2026',
+  shown:['A routed model answered 100.0% with 26.7% of its parameters loaded for a one-topic conversation; an ordinary model the size of that loaded part answered 63.8% (STATE-020).',
+    'Twice the knowledge with twice the experts left the loaded part the same size, at 91.8% (STATE-020).',
+    'With no cue words and no turn markers, a small planner found the topic by itself, and the routed model matched a fully loaded one, 97.7% against 97.5%, with 37% loaded (STATE-021).',
+    'It knows when it is guessing: 99.6% sure on a clear first question, 67% sure when the name fits two topics (STATE-021).'],
+  notShown:['Real language. Both studies use random facts on a model of about 2 million parameters.',
+    'Real memory or speed savings. Parameters were counted as needed; nothing was unloaded and no response time was measured.',
+    'Better answers. The routed model ties a fully loaded model of the same size, and conventional every-token routing reached that level on two seeds of three, with everything loaded.',
+    'Learning over time, or pathways reused across skills.',
+    'An independent rerun. The scripts are public; nobody else has run them yet.']};
+export const rnlMilestones=[
+  {title:'Find the topic without help: three seeds, against ordinary models and conventional expert routing, with topic switches and ambiguous questions.',status:'Done on a toy task (STATE-021)'},
+  {title:'Learning over time: add knowledge or pathways and measure what happens to earlier skills.',status:'In progress · nothing published yet'},
+  {title:'A small real-language experiment against models given the same training.',status:'In progress · nothing published yet'},
+  {title:'Actual loading: GPU memory, RAM, storage, response speed and quality with parts really loaded and unloaded, against existing offloading.',status:'In progress · nothing published yet'},
+  {title:'Reproducible: code, commands, sizes, seeds, baselines, results and failures for every study.',status:'From STATE-020 onward · earlier studies are summaries only'},
+  {title:'Evidence for a small research pilot: the five above together, with a repeatable advantage on real language and measured memory.',status:'Not reached'},
+  {title:'Evidence for training a much larger model.',status:'Later · not started'}];
