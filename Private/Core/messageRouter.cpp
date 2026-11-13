@@ -294,16 +294,16 @@ void messageRouter::SetReasoningHandler(ReasoningHandler handler)
     pendingReasoning = std::move(handler);
 }
 
-void messageRouter::SetPosture(std::string posture)
+void messageRouter::SetPosture(std::string posture, std::string standing)
 {
     {
         std::lock_guard lock(reasoningMutex);
         pendingReasoning = {};
         pendingCloud.reset();
     }
-    llm.SetPosture(posture);
-    if (fastConfigured) fastLlm.SetPosture(posture);
-    if (expertConfigured) expertLlm.SetPosture(std::move(posture));
+    llm.SetPosture(posture, standing);
+    if (fastConfigured) fastLlm.SetPosture(posture, standing);
+    if (expertConfigured) expertLlm.SetPosture(std::move(posture), std::move(standing));
 }
 
 std::string messageRouter::RelatedMemories(

@@ -392,44 +392,82 @@ std::string GroundedInternetReply(const ResponseFilterContext& context)
 
 std::string ResponseFilterContext::Describe() const
 {
-    std::string description = "Answer posture is ";
-    description += answerObligation == AnswerObligationMode::Reliable         ? "reliable"
-                   : answerObligation == AnswerObligationMode::CharacterFirst ? "character first"
-                                                                              : "balanced";
-    description += ". ";
-    if (privateHistoryExcluded)
-        description += "Earlier private history is excluded. No access does not establish that it never existed. ";
+    return DescribeParts(true, true);
+}
+
+std::string ResponseFilterContext::DescribeTurn() const
+{
+    return DescribeParts(true, false);
+}
+
+std::string ResponseFilterContext::DescribeSettings() const
+{
+    return DescribeParts(false, true);
+}
+
+// One description with its sentences in one order, so a half can never say something the
+// whole does not. With both halves asked for, the text is exactly what Describe() always gave.
+std::string ResponseFilterContext::DescribeParts(const bool turnFacts, const bool settings) const
+{
+    // A half leaves gaps where the other half's sentences stood.
+    const auto tidy = [turnFacts, settings](std::string text)
+    {
+        if (turnFacts && settings)
+            return text;
+        for (auto gap = text.find("  "); gap != std::string::npos; gap = text.find("  "))
+            text.erase(gap, 1);
+        const auto first = text.find_first_not_of(' ');
+        if (first == std::string::npos)
+            return std::string{};
+        return text.substr(first, text.find_last_not_of(' ') - first + 1);
+    };
+    std::string description;
+    if (turnFacts)
+    {
+        description = "Answer posture is ";
+        description += answerObligation == AnswerObligationMode::Reliable         ? "reliable"
+                       : answerObligation == AnswerObligationMode::CharacterFirst ? "character first"
+                                                                                  : "balanced";
+        description += ". ";
+        if (privateHistoryExcluded)
+            description += "Earlier private history is excluded. No access does not establish that it never existed. ";
+    }
     if (!internetStateKnown)
     {
-        return description + "Internet permission state is unavailable; do not claim that it is on or off.";
+        if (settings)
+            description += "Internet permission state is unavailable; do not claim that it is on or off.";
+        return tidy(std::move(description));
     }
-    description += "Internet access is ";
-    description += internetEnabled ? "enabled" : "disabled";
-    description += ". ";
-    if (internetEnabled)
+    if (settings)
     {
-        description += automaticInternetLookup
-            ? "Automatic bounded lookup is enabled. "
-            : "Lookup runs only for explicit requests. ";
-        if (visibleBrowser)
+        description += "Internet access is ";
+        description += internetEnabled ? "enabled" : "disabled";
+        description += ". ";
+        if (internetEnabled)
         {
-            description += "A dedicated visible browser profile is enabled. Autonomous "
-                "research is ";
-            description += autonomousInternetResearch ? "enabled. " : "disabled. ";
+            description += automaticInternetLookup
+                ? "Automatic bounded lookup is enabled. "
+                : "Lookup runs only for explicit requests. ";
+            if (visibleBrowser)
+            {
+                description += "A dedicated visible browser profile is enabled. Autonomous "
+                    "research is ";
+                description += autonomousInternetResearch ? "enabled. " : "disabled. ";
+            }
+            description += "The provider is " + internetProvider +
+                "; there is no unrestricted personal-browser access, live feed, or dark-web access.";
         }
-        description += "The provider is " + internetProvider +
-            "; there is no unrestricted personal-browser access, live feed, or dark-web access.";
+        else
+        {
+            description += "No internet lookup can run.";
+        }
     }
-    else
-    {
-        description += "No internet lookup can run.";
-    }
-    if (screenObservationAvailable)
+    if (turnFacts && screenObservationAvailable)
     {
         description += " A current local screen observation is available for this turn; "
             "do not claim that the screens are invisible.";
     }
-    else
+    else if (turnFacts)
     {
         // The other half of the same sentence, and the half that was missing. Saying
         // only the first taught her that claiming sight is always the safe answer.
@@ -438,14 +476,14 @@ std::string ResponseFilterContext::Describe() const
                        "are looking at, watching, or can see anything on it, and do not describe "
                        "what is there.";
     }
-    if (desktopStateKnown && !AnyDesktopHands())
+    if (settings && desktopStateKnown && !AnyDesktopHands())
     {
         description += " Desktop control is off: pointer, keyboard and application launch are all disabled in settings. "
                        "Native desktop clicks, keystrokes and app launches are unavailable. This limits desktop interaction, "
                        "not composing replies in this chat. If asked for one of those desktop actions, explain that its "
                        "permission is off.";
     }
-    else if (desktopStateKnown)
+    else if (settings && desktopStateKnown)
     {
         // Hands on is not the same as this reply having hands. A request the action path
         // recognised never reaches this prompt; one that did reach it was not recognised,
@@ -457,7 +495,7 @@ std::string ResponseFilterContext::Describe() const
                        "'open Notepad' or 'type hello in Notepad'. If this message asks for one in other words, do not say "
                        "it is done or under way; say they can ask for it that way.";
     }
-    return description;
+    return tidy(std::move(description));
 }
 
 HardFilterResult ResponseFilter::ApplyHard(

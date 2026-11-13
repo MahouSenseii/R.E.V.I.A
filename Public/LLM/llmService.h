@@ -29,7 +29,7 @@ public:
     void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
     bool IsBackendAvailable(std::stop_token stopToken = {}) const;
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
-    void SetPosture(std::string posture);
+    void SetPosture(std::string posture, std::string standing = {});
     void SetReplyNote(std::string note);
     // Applies to local source explanations until SetPosture resets the turn state.
     void SetSourceExplanation(bool enabled);

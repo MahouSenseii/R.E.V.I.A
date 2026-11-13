@@ -321,8 +321,12 @@ private:
     // the live speech state. Shared by the turn posture and the self-inquiry so the two
     // cannot describe her body differently.
     [[nodiscard]] std::string DescribeBody() const;
+    // With `outStanding`, the settings half of her runtime self-knowledge is written there
+    // instead of into the returned posture, for the caller to hand over as standing text.
+    // It is left empty on a public turn and on a brief social one, which is sent without
+    // runtime details at all.
     [[nodiscard]] std::string BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
-        const aiProfile& profile, bool llmAvailable, const TurnPolicy& turnPolicy) const;
+        const aiProfile& profile, bool llmAvailable, const TurnPolicy& turnPolicy, std::string* outStanding = nullptr) const;
     // Runs one bounded deliberation when the router already judged this turn hard,
     // publishes the questions so they are visible in chat, and returns what she worked
     // out. Returns an empty result whenever the gate stays shut, and a failed pass is

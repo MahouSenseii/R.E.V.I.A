@@ -5323,6 +5323,66 @@ void TestPostureReachesTheModel()
                   std::string::npos,
         "The reply note did not land after the newest user message: " + lastUser);
 
+    // Standing text only changes with a setting. With a stable prefix it opens the first
+    // user message, which is history the backend's cache already holds, and stays out of
+    // the block that is re-read every turn; the system message is the same with or
+    // without it, so a turn sent without any (a greeting) keeps the cached prefix.
+    const std::string standing = "Runtime self-knowledge (ground truth; fixture): desktop control is off.";
+    const std::vector<conversationMessage> longer = {{"user", "first thing I said"}, {"assistant", "first thing she said"},
+        {"user", "what do you make of this?"}};
+    const auto build = [&](const std::vector<conversationMessage>& messages, const std::string& turnPosture, const std::string& text,
+                           const bool stable = true)
+    {
+        return builder.BuildMessages(profile, messages, {}, "", nullptr, turnPosture, nullptr, revia::llm::PrivateMemoryAccess::ProfileSetting,
+            "", stable, {}, text);
+    };
+    const nlohmann::json cached = build(longer, posture, standing);
+    const std::string opening = "[Revia runtime context]\n" + standing + "\n[End of runtime context]\n\nfirst thing I said";
+    const std::string cachedTurn = cached.back()["content"].get<std::string>();
+    Check(cached.size() == 4 && cached[1]["content"] == opening && cachedTurn.find("desktop control is off") == std::string::npos &&
+              cachedTurn.find("Curious at 66%") != std::string::npos &&
+              cached[0]["content"].get<std::string>().find("desktop control is off") == std::string::npos,
+        "Standing text did not open the first user message, or was repeated in the system message or the turn's own block.");
+    const nlohmann::json nextTurn = build(longer, "Your current response posture is Irritated at 80% intensity.", standing);
+    Check(nextTurn[0] == cached[0] && nextTurn[1] == cached[1] && nextTurn[2] == cached[2],
+        "A different posture changed the messages before the newest one, so the backend's cache would be thrown away every turn.");
+    Check(build(longer, posture, "")[0] == cached[0] && build(longer, posture, "")[1]["content"] == "first thing I said",
+        "A turn sent without standing text has a different system message, or still carries the text.");
+    const std::string only = build(context, posture, standing).back()["content"].get<std::string>();
+    Check(only.rfind("[Revia runtime context]\n" + standing + "\n\n", 0) == 0 && only.find("Curious at 66%") != std::string::npos &&
+              only.find("[Revia runtime context]", 1) == std::string::npos,
+        "With one message, the standing text and the turn's own context did not share a single opening block: " + only);
+    const nlohmann::json inline_ = build(context, posture, standing, false);
+    const std::string inlineSystem = inline_[0]["content"].get<std::string>();
+    Check(inlineSystem.find(standing) != std::string::npos && inlineSystem.find(standing) < inlineSystem.find("Curious at 66%"),
+        "Without a stable prefix the standing text was lost from the prompt.");
+
+    {
+        // The two halves of the runtime description say, between them, exactly what the whole says.
+        revia::agents::ResponseFilterContext facts;
+        facts.internetStateKnown = facts.desktopStateKnown = true;
+        facts.internetEnabled = facts.automaticInternetLookup = true;
+        facts.internetProvider = "duckduckgo";
+        facts.privateHistoryExcluded = true;
+        const std::string whole = facts.Describe(), turn = facts.DescribeTurn(), settings = facts.DescribeSettings();
+        Check(turn.rfind("Answer posture is ", 0) == 0 && turn.find("Earlier private history is excluded.") != std::string::npos &&
+                  turn.find("No screen observation was taken this turn.") != std::string::npos && turn.find("Internet") == std::string::npos &&
+                  turn.find("Desktop control") == std::string::npos && turn.find("  ") == std::string::npos && turn.back() == '.',
+            "The turn half of the runtime description is missing a turn fact or carries a setting: " + turn);
+        Check(settings.rfind("Internet access is enabled.", 0) == 0 && settings.find("The provider is duckduckgo;") != std::string::npos &&
+                  settings.find("Desktop control is off:") != std::string::npos && settings.find("Answer posture") == std::string::npos &&
+                  settings.find("screen observation") == std::string::npos && settings.find("  ") == std::string::npos,
+            "The settings half of the runtime description is missing a setting or carries a turn fact: " + settings);
+        Check(whole.size() == turn.size() + settings.size() + 1, "The halves of the runtime description do not add up to the whole.");
+        facts.screenObservationAvailable = true;
+        Check(facts.DescribeSettings() == settings && facts.DescribeTurn() != turn,
+            "A screen observation, which belongs to one turn, changed the settings half.");
+        revia::agents::ResponseFilterContext unknown;
+        Check(unknown.DescribeSettings() == "Internet permission state is unavailable; do not claim that it is on or off." &&
+                  unknown.DescribeTurn() == "Answer posture is balanced." && unknown.Describe() == unknown.DescribeTurn() + " " + unknown.DescribeSettings(),
+            "An unknown internet state was not described the same way by the halves and the whole.");
+    }
+
     memoryDecision privateMemory;
     privateMemory.bSuccess = true;
     privateMemory.bShouldRemember = true;

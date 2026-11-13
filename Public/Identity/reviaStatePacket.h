@@ -39,6 +39,9 @@ struct RuntimeSelfKnowledge
     bool aiReviewEnabled = true;
     // Rendered verbatim. Built by the runtime from real capability state.
     std::string capabilityDescription;
+    // The description holds only what is true of this turn; the settings half is standing
+    // text the caller renders with RenderRuntimeKnowledge and keeps out of the turn block.
+    bool turnFactsOnly = false;
 };
 
 // Runtime-assembled canonical state rendered identically for every model tier.
@@ -87,5 +90,7 @@ struct ReviaStatePacket
 
 // Deterministically renders only meaningful packet sections, identically across model tiers.
 [[nodiscard]] std::string RenderStatePacket(const ReviaStatePacket& packet, bool includeRuntimeDetails = true);
+// The runtime self-knowledge paragraph alone, exactly as RenderStatePacket ends with it.
+[[nodiscard]] std::string RenderRuntimeKnowledge(const RuntimeSelfKnowledge& knowledge);
 
 } // namespace revia::identity

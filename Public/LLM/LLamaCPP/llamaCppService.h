@@ -39,7 +39,8 @@ public:
     // Revia's own response posture for the next turn, already formatted. Stored rather
     // than threaded through every call because it changes per turn while the rest of the
     // request shape does not.
-    void SetPosture(std::string posture);
+    // `standing` is the part of the turn's guidance that only changes with a setting.
+    void SetPosture(std::string posture, std::string standing = {});
     void SetReplyNote(std::string note);
     // Applies to source explanations until SetPosture resets the turn state.
     void SetSourceExplanation(bool enabled);
@@ -143,6 +144,7 @@ private:
     aiProfile activeProfile;
     mutable std::mutex postureMutex;
     std::string activePosture;
+    std::string activeStanding;
     std::string activeReplyNote;
     bool activeSourceExplanation = false;
     mutable revia::llm::InferenceScheduler inferenceScheduler;

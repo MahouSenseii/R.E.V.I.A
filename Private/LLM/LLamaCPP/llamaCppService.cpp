@@ -287,6 +287,36 @@ namespace
     constexpr int ContextReserveTokens = 384;
     constexpr std::size_t RecentDialogueMessages = 2;
 
+    // Standing text rides at the start of the first user message, which a prompt that has
+    // to be compacted may drop or cut. Before compaction it is moved to the head of the
+    // newest message's runtime block, where it was before it was cached and where the
+    // compaction already knows how to keep what matters.
+    void InlineStandingContext(json& messages, const std::string& standing)
+    {
+        namespace markers = revia::identity::markers;
+        if (standing.empty() || !messages.is_array())
+            return;
+        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
+        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
+        const std::string text = revia::llm::NeutralizeTurnContextMarkers(standing);
+        const auto isUser = [](const json& message)
+        { return message.is_object() && message.value("role", std::string{}) == "user" && message.contains("content") && message["content"].is_string(); };
+        const auto firstUser = std::find_if(messages.begin(), messages.end(), isUser);
+        const auto newestUser = std::find_if(messages.rbegin(), messages.rend(), isUser);
+        if (firstUser == messages.end() || &*firstUser == &*newestUser)
+            return;
+        auto& carried = (*firstUser)["content"].get_ref<std::string&>();
+        const std::string block = open + text + close;
+        if (carried.rfind(block, 0) != 0)
+            return;
+        carried.erase(0, block.size());
+        auto& newest = (*newestUser)["content"].get_ref<std::string&>();
+        if (newest.rfind(open, 0) == 0)
+            newest.insert(open.size(), text + "\n\n");
+        else
+            newest.insert(0, block);
+    }
+
     std::size_t NewestTurnAllowance(const std::string& content, const std::size_t remaining)
     {
         namespace markers = revia::identity::markers;
@@ -1723,11 +1753,13 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
 
     std::string posture;
+    std::string standing;
     std::string replyNote;
     bool sourceExplanation = false;
     {
         std::lock_guard postureLock(postureMutex);
         posture = activePosture;
+        standing = activeStanding;
         replyNote = activeReplyNote;
         sourceExplanation = activeSourceExplanation;
     }
@@ -1784,7 +1816,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     json requestBody;
     json messages =
         builder.BuildMessages(activeProfile, context, queryEmbedding.values, queryEmbedding.bSuccess ? queryEmbedding.model : "",
-            &output.timings, posture, &output.promptSections, memoryAccess, replyNote, bStablePromptPrefix, stopToken);
+            &output.timings, posture, &output.promptSections, memoryAccess, replyNote, bStablePromptPrefix, stopToken, standing);
     const auto inputMessageCount = messages.size();
     bool omittedVideoHistory = false;
     if (currentVideoInspection && messages.size() > 2 && messages.front().value("role", "") == "system" &&
@@ -1848,6 +1880,8 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
+        if (bStablePromptPrefix)
+            InlineStandingContext(messages, standing);
         messages = BoundMessagesForContext(messages, contextTokens, responseTokens + fittingReserve, priorityParagraphs);
         if (measured && !messages.empty())
         {
@@ -2393,10 +2427,11 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     return output;
 }
 
-void llamaCppService::SetPosture(std::string posture)
+void llamaCppService::SetPosture(std::string posture, std::string standing)
 {
     std::lock_guard postureLock(postureMutex);
     activePosture = std::move(posture);
+    activeStanding = std::move(standing);
     // A note belongs to the turn its posture was set for. Cleared here so a turn that
     // sets a posture and no note cannot inherit the previous turn's conclusion.
     activeReplyNote.clear();

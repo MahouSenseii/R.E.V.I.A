@@ -826,8 +826,10 @@ void ConversationRuntime::SetDeliveredReplyObserver(DeliveredReplyObserver obser
 }
 
 std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
-    const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy) const
+    const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy, std::string* outStanding) const
 {
+    if (outStanding)
+        outStanding->clear();
     const agents::ConversationStylePolicy conversationStyle;
     const emotion::EmotionSnapshot current = emotions.Current();
     const responseFilterSettings filters = filterSettingsProvider ? filterSettingsProvider() : responseFilterSettings{};
@@ -899,11 +901,22 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
         packet.reminders = std::move(autonomy.reminders);
     }
     packet.runtime.aiReviewEnabled = filters.bAiReviewEnabled;
+    // The settings half is the same every turn until a setting changes, so the caller that
+    // asked for it keeps it in the cached part of the prompt and only this turn's facts are
+    // rendered here. Never on a brief social turn: that one is sent with no runtime details,
+    // because with them a greeting or a jab was answered by explaining herself as software.
+    const bool standingKnowledge = outStanding && !turnPolicy.publicAudience && turnPolicy.evaluationBlocks.statePacket &&
+                                   !agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput);
     packet.runtime.capabilityDescription = turnPolicy.publicAudience
                                                ? "This public turn can only converse; private local capabilities and context "
                                                  "are unavailable."
-                                               : runtimeFacts.Describe();
-    if (!turnPolicy.publicAudience)
+                                               : standingKnowledge ? runtimeFacts.DescribeTurn() : runtimeFacts.Describe();
+    if (standingKnowledge)
+    {
+        packet.runtime.turnFactsOnly = true;
+        *outStanding = identity::RenderRuntimeKnowledge({filters.bAiReviewEnabled, runtimeFacts.DescribeSettings() + " " + DescribeBody()});
+    }
+    else if (!turnPolicy.publicAudience)
     {
         // What she is made of, every private turn. Without it a question about her own
         // voice was answered from the model's prior -- "I don't have a voice, that's your
@@ -2064,15 +2077,21 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     agents::SelfInquiryResult inquiry;
     // Kept so a backend that turns tools down can be answered as if they were never offered.
     std::string turnPosture;
+    // The part of the posture that only changes with a setting; sent with every posture
+    // this turn sets, so the reply's prompt keeps it where the backend caches it.
+    std::string standingContext;
     std::string plainReplyNote;
     bool arithmeticGrounded = false;
     if (!proactive)
     {
         // Inquiry keeps the full conversational posture. Factual image inspection omits it only from the final answer request.
-        const std::string basePosture = BuildTurnPosture(policyInput, promptContext, profile, llmAvailable, turnPolicy);
+        const std::string basePosture = BuildTurnPosture(policyInput, promptContext, profile, llmAvailable, turnPolicy, &standingContext);
+        // Her own deliberation builds its prompts apart from the reply's, so it is given
+        // the standing text with the rest.
+        const std::string inquiryPosture = standingContext.empty() ? basePosture : basePosture + "\n\n" + standingContext;
         if (turnPolicy.allowSelfInquiry)
         {
-            inquiry = RunSelfInquiry(policyInput, promptContext, basePosture, routeDecision, llmAvailable && !reflex.matched, currentTurn,
+            inquiry = RunSelfInquiry(policyInput, promptContext, inquiryPosture, routeDecision, llmAvailable && !reflex.matched, currentTurn,
                 stopToken, turnPolicy.audienceRevision);
         }
         if (!admitted())
@@ -2102,7 +2121,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                                                    ? investigationExecutorFactory(admitted, stopToken)
                                                    : agents::CheckExecutor{};
         const InvestigationSummary investigated =
-            RunInvestigation(inquiry, policyInput, basePosture, currentTurn, stopToken, executor, admitted, turnPolicy.audienceRevision);
+            RunInvestigation(inquiry, policyInput, inquiryPosture, currentTurn, stopToken, executor, admitted, turnPolicy.audienceRevision);
         if (!investigated.promptBlock.empty())
         {
             postureLine << "\n\n" << investigated.promptBlock;
@@ -2176,7 +2195,10 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         if (!admitted())
             return revoked();
         turnPosture = postureLine.str();
-        router.SetPosture(turnPosture);
+        // A factual image inspection answers without the posture, and so without this.
+        if (factualImageInspection)
+            standingContext.clear();
+        router.SetPosture(turnPosture, standingContext);
         router.SetSourceExplanation(sourceExplanation);
         std::string replyNote = inquiry.ReplyNote();
         if (!arithmetic.empty())
@@ -2498,7 +2520,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                         posture += "\n\n" + internetGrounding;
                     if (!admitted())
                         return;
-                    router.SetPosture(std::move(posture));
+                    router.SetPosture(std::move(posture), standingContext);
                     router.SetSourceExplanation(sourceExplanation);
                     router.SetReplyNote(std::move(note));
                     if (reasoningRelay)
