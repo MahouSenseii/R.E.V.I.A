@@ -13,8 +13,7 @@ run() {   # run <set> <steps> "<seeds>" <name> <arguments for run_find.py ...>
   done
 }
 
-# Main comparison: 24,000 steps, seeds 11 to 13. (When this was published the oracle and guess32weak runs at three
-# seeds were still in progress; the README reports those two from the pilot seed.)
+# Main comparison: 24,000 steps, seeds 11 to 13.
 run main 24000 "11 12 13" guess16     --arm guess
 run main 24000 "11 12 13" dense16     --arm dense
 run main 24000 "11 12 13" dense4      --arm dense --experts 4

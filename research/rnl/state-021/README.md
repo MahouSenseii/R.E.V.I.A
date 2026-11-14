@@ -105,11 +105,15 @@ AdamW, learning rate 0.001 with 300 warm-up steps and a cosine fall to 5%, batch
 |---|---|---|---|---|---|
 | Routed, planner finds the topic | 2.01M | 36.6% / 47.9% / 60.9% | 97.7% (97.6–97.7) | 95.4% (95.3–95.6) | 82.0% (81.8–82.2) |
 | Ordinary, everything loaded | 1.93M | 100% | 97.5% (97.5–97.6) | 95.3% (95.2–95.3) | 83.6% (83.3–84.1) |
+| Routed, planner given 32 guesses and a weak push | 2.02M | 36.5% / 47.7% / 60.9% | 97.6% (97.6–97.7) | 95.2% (95.1–95.3) | 81.4% (81.1–81.5) |
 | Routed, route chosen every token | 1.93M | 99.9% | 87.5% (68.8–97.3) | 85.6% (68.6–95.0) | 77.9% (68.3–82.8) |
+| Routed, told the true topic (an upper bound, not a method) | 1.93M | 28.3% / 37.9% / 37.9% | 100.0% | 100.0% | 100.0% |
 | Ordinary, 4 experts' worth | 0.74M | 100% | 67.6% (67.5–67.7) | 67.7% (67.6–67.8) | 67.7% (67.6–67.9) |
 | Ordinary, 2 experts' worth | 0.55M | 100% | 61.1% (60.9–61.4) | 61.2% (60.8–61.9) | 61.3% (60.4–62.0) |
 
 The routed model with the planner ties the fully loaded ordinary model on one topic and one switch. When the topic changes every two questions the ordinary model is 1.6 points ahead, and the routed model needs 61% of its parameters.
+
+Given 32 guesses and only a weak push to use them (`--guesses 32 --even 0.1`), the planner settled on 16 of them on all three seeds and scored the same as with 16, so it does not have to be told how many topics there are.
 
 Every-token routing was uneven: seeds 11 and 13 reached 97.3% and 96.4% on one topic, while seed 12 stayed at 68.8%, the level of a reader that ignores the rest of the conversation. In all three a single conversation touched 15.98 of the 16 experts in every block, and the route changed at 96% of tokens.
 
@@ -179,7 +183,7 @@ Both are sure when the question is clear and much less sure when it is not, thou
 - **Real language.** The facts are random and the topics are sets of syllables. Real text does not come in 16 clean topics.
 - **Better answers.** The routed model ties a fully loaded model of the same size. It does not beat it, and when the topic changes every two questions it is slightly behind.
 - **Real paging.** Parameters were counted as needed or not needed. Nothing was actually unloaded, and no speed was measured.
-- **A robust planner.** It needs its number of guesses and its push set sensibly. The variants with 32 guesses, the told-the-topic bound and the running-average router rest on one pilot seed at half length; three-seed runs of the first two had been started but were not finished when this was published.
+- **A robust planner.** With no push it collapses to one guess, and with spare guesses and a strong push it splits topics. Spare guesses with a weak push worked on three seeds. The strong-push variant and the running-average router rest on one pilot seed at half length.
 - **Frequent topic changes.** With a change every two questions the loaded share rises to 61%.
 - **One task, one model shape, three seeds.**
 
