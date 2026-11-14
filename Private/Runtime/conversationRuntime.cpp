@@ -20,6 +20,7 @@
 #include "Agents/replyFormat.h"
 #include "Agents/replyFragmenter.h"
 #include "Agents/reasoningRelay.h"
+#include "Agents/chatTools.h"
 #include "Agents/toolLoop.h"
 #include "Memory/conversationRecall.h"
 #include "Emotion/stimulusBuilder.h"
@@ -825,8 +826,10 @@ void ConversationRuntime::SetDeliveredReplyObserver(DeliveredReplyObserver obser
 }
 
 std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
-    const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy) const
+    const aiProfile& profile, const bool llmAvailable, const TurnPolicy& turnPolicy, std::string* outStanding) const
 {
+    if (outStanding)
+        outStanding->clear();
     const agents::ConversationStylePolicy conversationStyle;
     const emotion::EmotionSnapshot current = emotions.Current();
     const responseFilterSettings filters = filterSettingsProvider ? filterSettingsProvider() : responseFilterSettings{};
@@ -898,11 +901,25 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
         packet.reminders = std::move(autonomy.reminders);
     }
     packet.runtime.aiReviewEnabled = filters.bAiReviewEnabled;
+    // The settings half is the same every turn until a setting changes, so the caller that
+    // asked for it keeps it in the cached part of the prompt and only this turn's facts are
+    // rendered here. Never on a brief social turn: that one is sent with no runtime details,
+    // because with them a greeting or a jab was answered by explaining herself as software.
+    const bool standingKnowledge = outStanding && !turnPolicy.publicAudience && turnPolicy.evaluationBlocks.statePacket &&
+                                   !agents::ConversationStylePolicy::IsBriefSocialTurn(policyInput);
     packet.runtime.capabilityDescription = turnPolicy.publicAudience
                                                ? "This public turn can only converse; private local capabilities and context "
                                                  "are unavailable."
-                                               : runtimeFacts.Describe();
-    if (!turnPolicy.publicAudience)
+                                               : standingKnowledge ? runtimeFacts.DescribeTurn() : runtimeFacts.Describe();
+    if (standingKnowledge)
+    {
+        packet.runtime.turnFactsOnly = true;
+        *outStanding = identity::RenderRuntimeKnowledge({filters.bAiReviewEnabled, runtimeFacts.DescribeSettings() + " " + DescribeBody()});
+        // How to speak from a feeling never changes; the feeling itself stays in the turn.
+        packet.feelingsGuidanceStanding = true;
+        *outStanding += "\n\n" + identity::RenderFeelingsGuidance();
+    }
+    else if (!turnPolicy.publicAudience)
     {
         // What she is made of, every private turn. Without it a question about her own
         // voice was answered from the model's prior -- "I don't have a voice, that's your
@@ -956,7 +973,14 @@ std::string ConversationRuntime::BuildTurnPosture(const std::string& policyInput
         // The profile's answer obligation, alongside the turn guidance rather than
         // inside the state packet: it is a configured preference about this
         // conversation, not a fact about who she is or what she has earned.
-        postureLine << "\n\n" << agents::ConversationStylePolicy::BuildAnswerObligationGuidance(profile.answerObligation);
+        // It is the profile's setting, so with standing text it is kept there: replayed
+        // 120 times each way on the 9B, answers and reply length were the same and her
+        // first word came about 40 ms sooner.
+        const std::string obligation = agents::ConversationStylePolicy::BuildAnswerObligationGuidance(profile.answerObligation);
+        if (standingKnowledge)
+            *outStanding += "\n\n" + obligation;
+        else
+            postureLine << "\n\n" << obligation;
     }
     // Runtime policy still governs every action. A greeting or personal reaction has
     // no operation to report; filling it with filter/build/command internals primed
@@ -1251,6 +1275,11 @@ void ConversationRuntime::SetPrivateAdmissionFactory(std::function<std::function
     privateAdmissionFactory = std::move(factory);
 }
 
+void ConversationRuntime::SetMemoryAdmissionFactory(std::function<std::function<bool()>()> factory)
+{
+    memoryAdmissionFactory = std::move(factory);
+}
+
 void ConversationRuntime::SetInvestigationExecutorFactory(InvestigationExecutorFactory factory)
 {
     investigationExecutorFactory = std::move(factory);
@@ -1274,6 +1303,18 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         }
         if (!turnPolicy.deliveryAdmission)
             turnPolicy.deliveryAdmission = [] { return false; };
+    }
+    std::function<bool()> memoryAdmission;
+    if (!turnPolicy.publicAudience && memoryAdmissionFactory)
+    {
+        try
+        {
+            memoryAdmission = memoryAdmissionFactory();
+        }
+        catch (...)
+        {
+            memoryAdmission = [] { return false; };
+        }
     }
     struct SourceAdmission
     {
@@ -1770,7 +1811,29 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
             }
         }
         if (!registry.Empty())
+        {
             toolLoop.emplace(std::move(registry));
+            // A file or folder the person named, where she may read, is read before she
+            // answers instead of being left for the model to decide to look. Not when they
+            // asked for her agents: the file is then theirs to read.
+            if (!delegationRequested && toolLoop->Registry().Find("read_file") != nullptr &&
+                toolLoop->Registry().Find("list_dir") != nullptr)
+            {
+                // The folders they pointed at a few messages back are where "notes.txt in
+                // there" is looked for.
+                std::vector<std::string> earlier;
+                for (auto said = promptContext.rbegin(); said != promptContext.rend() && earlier.size() < 4; ++said)
+                    if (said->role == "user" && !said->content.empty())
+                        earlier.push_back(said->content);
+                toolLoop->SetOpeningCalls(agents::OpeningFileCalls(policyInput, permissions.approvedRoots, earlier));
+            }
+            // "Use your agents" starts them. The model is asked first, since it can say
+            // what "that file" is; if its reply ends without the hand-off, the person's own
+            // request is handed over as it stands. Left to the model alone, a live 9B made
+            // the call in 8 tries of 13.
+            if (delegationRequested && toolLoop->Registry().Find("delegate_task") != nullptr)
+                toolLoop->SetRequiredCall(agents::RequestedDelegationCall(policyInput));
+        }
     }
     const bool modelSearches = toolLoop && toolLoop->Registry().Find("web_search") != nullptr;
     const bool modelRecalls = toolLoop && toolLoop->Registry().Find("recall_history") != nullptr;
@@ -2024,15 +2087,21 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
     agents::SelfInquiryResult inquiry;
     // Kept so a backend that turns tools down can be answered as if they were never offered.
     std::string turnPosture;
+    // The part of the posture that only changes with a setting; sent with every posture
+    // this turn sets, so the reply's prompt keeps it where the backend caches it.
+    std::string standingContext;
     std::string plainReplyNote;
     bool arithmeticGrounded = false;
     if (!proactive)
     {
         // Inquiry keeps the full conversational posture. Factual image inspection omits it only from the final answer request.
-        const std::string basePosture = BuildTurnPosture(policyInput, promptContext, profile, llmAvailable, turnPolicy);
+        const std::string basePosture = BuildTurnPosture(policyInput, promptContext, profile, llmAvailable, turnPolicy, &standingContext);
+        // Her own deliberation builds its prompts apart from the reply's, so it is given
+        // the standing text with the rest.
+        const std::string inquiryPosture = standingContext.empty() ? basePosture : basePosture + "\n\n" + standingContext;
         if (turnPolicy.allowSelfInquiry)
         {
-            inquiry = RunSelfInquiry(policyInput, promptContext, basePosture, routeDecision, llmAvailable && !reflex.matched, currentTurn,
+            inquiry = RunSelfInquiry(policyInput, promptContext, inquiryPosture, routeDecision, llmAvailable && !reflex.matched, currentTurn,
                 stopToken, turnPolicy.audienceRevision);
         }
         if (!admitted())
@@ -2062,7 +2131,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                                                    ? investigationExecutorFactory(admitted, stopToken)
                                                    : agents::CheckExecutor{};
         const InvestigationSummary investigated =
-            RunInvestigation(inquiry, policyInput, basePosture, currentTurn, stopToken, executor, admitted, turnPolicy.audienceRevision);
+            RunInvestigation(inquiry, policyInput, inquiryPosture, currentTurn, stopToken, executor, admitted, turnPolicy.audienceRevision);
         if (!investigated.promptBlock.empty())
         {
             postureLine << "\n\n" << investigated.promptBlock;
@@ -2136,7 +2205,10 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         if (!admitted())
             return revoked();
         turnPosture = postureLine.str();
-        router.SetPosture(turnPosture);
+        // A factual image inspection answers without the posture, and so without this.
+        if (factualImageInspection)
+            standingContext.clear();
+        router.SetPosture(turnPosture, standingContext);
         router.SetSourceExplanation(sourceExplanation);
         std::string replyNote = inquiry.ReplyNote();
         if (!arithmetic.empty())
@@ -2458,7 +2530,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
                         posture += "\n\n" + internetGrounding;
                     if (!admitted())
                         return;
-                    router.SetPosture(std::move(posture));
+                    router.SetPosture(std::move(posture), standingContext);
                     router.SetSourceExplanation(sourceExplanation);
                     router.SetReplyNote(std::move(note));
                     if (reasoningRelay)
@@ -2468,7 +2540,7 @@ SessionResult ConversationRuntime::Generate(const std::string& policyInput, cons
         turnResult = coordinator.Execute(router, policyInput, promptContext, filters, filterContext, evaluateMemory, provenance,
             currentTurn, stopToken, onDelta, answerDecision,
             turnPolicy.publicAudience ? llm::PrivateMemoryAccess::Denied : llm::PrivateMemoryAccess::ProfileSetting,
-            turnPolicy.deliveryAdmission, turnPolicy.memoryScope, toolLoop ? &*toolLoop : nullptr);
+            turnPolicy.deliveryAdmission, turnPolicy.memoryScope, toolLoop ? &*toolLoop : nullptr, memoryAdmission);
         if (reasoningRelay)
         {
             // Not left for a later request, and the last thought is shown.

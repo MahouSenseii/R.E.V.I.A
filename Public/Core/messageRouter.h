@@ -47,7 +47,7 @@ public:
         revia::llm::PrivateMemoryAccess memoryAccess = revia::llm::PrivateMemoryAccess::ProfileSetting,
         const revia::llm::ToolExchange* tools = nullptr) const;
     // SetPosture clears the reasoning handler with the rest of the turn's state.
-    void SetPosture(std::string posture);
+    void SetPosture(std::string posture, std::string standing = {});
     using ReasoningHandler = llmService::ReasoningHandler;
     // Receives this turn's thinking as it streams. Used by the next RouteMessage only.
     void SetReasoningHandler(ReasoningHandler handler);

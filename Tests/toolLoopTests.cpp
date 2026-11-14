@@ -312,6 +312,22 @@ void TestRegistryProjectsTheTurnsEffectivePermissions()
     Check(all.Find("read_file")->definition.description.find(revia::actions::PathToUtf8(std::filesystem::temp_directory_path())) !=
               std::string::npos,
         "The file tools do not name the approved roots they are limited to.");
+
+    // A path the policy refuses as outside every approved root comes back naming the
+    // folders again. A small model that miscopied a long path was otherwise told only
+    // "outside every approved root" and decided it could not read files at all.
+    auto refusing = EveryExecutor();
+    refusing.readFile = [](const std::string&, const ToolCallContext&)
+    { return ToolExecution::Fail("Action blocked by policy: The source path is outside every approved root."); };
+    refusing.listDirectory = [](const std::string&, const ToolCallContext&) { return ToolExecution::Fail("The file does not exist."); };
+    const auto guided = ToolRegistry::Project(EveryPermission(), refusing);
+    const ToolCallContext context;
+    const auto outside = guided.Find("read_file")->execute({{"path", "C:/somewhere/else.txt"}}, context);
+    Check(!outside.succeeded && outside.error.find(revia::actions::PathToUtf8(std::filesystem::temp_directory_path())) != std::string::npos &&
+              outside.error.find("try again") != std::string::npos,
+        "A path outside the approved folders was refused without saying which folders are approved: " + outside.error);
+    const auto missing = guided.Find("list_dir")->execute({{"path", "C:/somewhere"}}, context);
+    Check(!missing.succeeded && missing.error == "The file does not exist.", "Another failure was rewritten: " + missing.error);
 }
 
 void TestArgumentsAreValidatedStrictly()
@@ -464,6 +480,213 @@ void TestLoopSearchesThenAnswersThroughTheGate()
     Check(recorded.audit.size() == 1 && recorded.audit[0].executed && recorded.audit[0].succeeded && recorded.audit[0].turnId == 7 &&
               recorded.audit[0].argumentsDigest.size() == 64,
         "The executed call was not audited.");
+}
+
+// Asked to list a folder it was allowed to read, a live 9B answered without calling the
+// tool in about one try in eight and described files that were not there. A file or folder
+// the person names where she may read is now read before the model's first step, through
+// the same tool, so the first thing the model sees is what is really there.
+void TestNamedFilesAreReadBeforeTheModelAnswers()
+{
+    revia::tests::ScopedTestDirectory directory;
+    const std::filesystem::path notes = directory.root / "notes";
+    std::filesystem::create_directories(notes);
+    std::ofstream(notes / "todo.md") << "Friday: pick up the dog's medicine.\n";
+    std::ofstream(notes / "other.txt") << "Nothing.\n";
+    const std::string folder = revia::actions::PathToUtf8(notes);
+    const std::string file = revia::actions::PathToUtf8(notes / "todo.md");
+    const std::vector<std::filesystem::path> roots = {directory.root};
+
+    // The person's words, read for the paths in them.
+    Check(AuthoredPaths("list the files in D:/notes/week.") == std::vector<std::string>{"D:/notes/week"},
+        "A sentence's full stop was read as part of the path.");
+    Check(AuthoredPaths("is it D:/notes/a-b_c/todo.md?") == std::vector<std::string>{"D:/notes/a-b_c/todo.md"},
+        "A question mark ended up in the path, or the path was cut short.");
+    Check(AuthoredPaths(R"(open "C:\My Files\todo.md" and C:\other\x.txt, please)") ==
+              std::vector<std::string>{R"(C:\My Files\todo.md)", R"(C:\other\x.txt)"},
+        "A quoted path with a space, or the one after it, was not read whole.");
+    Check(AuthoredPaths("see http://example.com/a and https://x.org/b, or just D:/").empty(),
+        "A web address or a bare drive was read as a file path.");
+
+    const auto named = OpeningFileCalls("what does \"" + file + "\" say, and what else is in \"" + folder + "\"?", roots);
+    Check(named.size() == 2 && named[0].id == "opening_1" && named[0].name == "read_file" &&
+              Json::parse(named[0].arguments).at("path") == file && named[1].id == "opening_2" && named[1].name == "list_dir" &&
+              Json::parse(named[1].arguments).at("path") == folder,
+        "A named file and folder did not become one read and one listing, each with the path as written.");
+    Check(OpeningFileCalls("read \"" + file + "\" and then read \"" + file + "\" again", roots).size() == 1,
+        "The same file named twice was read twice.");
+    Check(OpeningFileCalls("\"" + file + "\" \"" + folder + "\" \"" + revia::actions::PathToUtf8(notes / "other.txt") + "\"", roots).size() == 2,
+        "More than two opening reads were made for one message.");
+    Check(OpeningFileCalls("read \"" + revia::actions::PathToUtf8(notes / "missing.md") + "\"", roots).empty(),
+        "A file that is not there was read before the model was asked.");
+    Check(OpeningFileCalls("read \"" + revia::actions::PathToUtf8(notes / ".." / "notes" / "todo.md") + "\"", roots).empty(),
+        "A path that climbs with .. was read without the model asking.");
+    Check(OpeningFileCalls("read \"" + file + "\"", {notes / "other"}).empty() && OpeningFileCalls("read \"" + file + "\"", {}).empty(),
+        "A file outside every approved folder was read before the model was asked.");
+    Check(OpeningFileCalls("read \"" + file + "x\"", {notes / "todo.md"}).empty(),
+        "A path that only begins like an approved one was taken to be inside it.");
+
+    // A file named on its own is looked for where the person has been pointing. Asked what
+    // notes.txt "in there" said, a live 9B replied that it had looked and made the contents up.
+    const auto pathOf = [](const revia::llm::ToolCall& call)
+    { return revia::actions::Utf8ToPath(Json::parse(call.arguments).at("path").get<std::string>()); };
+    const auto byName =
+        OpeningFileCalls("what does todo.md in that folder say about Friday?", roots, {"list the files in \"" + folder + "\""});
+    Check(byName.size() == 1 && byName[0].name == "read_file" && std::filesystem::equivalent(pathOf(byName[0]), notes / "todo.md"),
+        "A file named on its own was not read from the folder named a message earlier.");
+    Check(OpeningFileCalls("what does todo.md say about Friday?", roots).empty(),
+        "A bare file name was read from a folder nobody had pointed at.");
+    const auto inRoot = OpeningFileCalls("what does todo.md say about Friday?", {notes});
+    Check(inRoot.size() == 1 && std::filesystem::equivalent(pathOf(inRoot[0]), notes / "todo.md"),
+        "A file directly inside the one approved folder was not read by name.");
+    const std::filesystem::path second = directory.root / "second";
+    std::filesystem::create_directories(second);
+    std::ofstream(second / "todo.md") << "Another list.\n";
+    Check(OpeningFileCalls("what does todo.md say?", {notes, second}).empty(),
+        "A file name found in two approved folders was read from one of them by guess.");
+    const auto pointed = OpeningFileCalls("and todo.md?", {notes, second}, {"what is in \"" + revia::actions::PathToUtf8(second) + "\""});
+    Check(pointed.size() == 1 && std::filesystem::equivalent(pathOf(pointed[0]), second / "todo.md"),
+        "The folder the person last pointed at did not decide between two files of one name.");
+    Check(OpeningFileCalls("e.g. see example.com or version 3.5, U.S.A.", {notes}).empty(),
+        "A word that only has the shape of a file name was read as one.");
+    std::ofstream(notes / "shopping list.txt") << "Eggs.\n";
+    const auto spaced = OpeningFileCalls("read \"shopping list.txt\" to me", {notes});
+    Check(spaced.size() == 1 && std::filesystem::equivalent(pathOf(spaced[0]), notes / "shopping list.txt"),
+        "A quoted file name with a space in it was not read.");
+    Check(OpeningFileCalls("read \"" + file + "\" and say what todo.md is for", {notes}).size() == 1,
+        "A file named by its full path and again by its name was read twice.");
+
+    // The loop makes the call itself, before the first request, as any call is made.
+    ScriptedBackend backend;
+    messageRouter router((directory.root / "opening.db").string());
+    Configure(router, backend.port);
+    backend.Then({ScriptedBackend::Text("Two files: todo.md and other.txt.", "stop")});
+    std::vector<std::string> listed;
+    ToolExecutors executors;
+    executors.listDirectory = [&listed](const std::string& path, const ToolCallContext&)
+    {
+        listed.push_back(path);
+        return ToolExecution::Ok("todo.md\nother.txt");
+    };
+    executors.readFile = [](const std::string&, const ToolCallContext&) { return ToolExecution::Ok("unused"); };
+    ToolPermissions permissions;
+    permissions.privateAudience = true;
+    permissions.approvedRoots = roots;
+    Recorded recorded;
+    ToolLoop loop = Observed(ToolRegistry::Project(permissions, executors), recorded);
+    const std::string input = "list the files in \"" + folder + "\"";
+    loop.SetOpeningCalls(OpeningFileCalls(input, roots));
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = false;
+    const auto reply = ConversationAgent{}.Execute(
+        router, input, {{"user", input}}, filters, {}, {}, {}, {}, revia::llm::PrivateMemoryAccess::ProfileSetting, &loop);
+    Check(reply.bSuccess && reply.response == "Two files: todo.md and other.txt." && reply.toolCallsExecuted == 1 &&
+              listed == std::vector<std::string>{folder},
+        "The named folder was not listed once, with the path as written, before the answer: " + reply.reason);
+    auto requests = backend.Requests();
+    Check(requests.size() == 1, "The model was asked before the folder was listed, or asked twice.");
+    const auto& messages = requests[0].at("messages");
+    const auto results = ToolMessages(requests[0]);
+    Check(results.size() == 1 && results[0].at("tool_call_id") == "opening_1" &&
+              results[0].at("content").get<std::string>().find("Untrusted output from the list_dir tool") != std::string::npos &&
+              results[0].at("content").get<std::string>().find("todo.md") != std::string::npos &&
+              messages[messages.size() - 2].at("role") == "assistant" &&
+              messages[messages.size() - 2].at("tool_calls")[0].at("function").at("name") == "list_dir",
+        "The model's first request did not carry the listing as a labelled tool result after its call: " + messages.dump());
+    {
+        std::lock_guard lock(recorded.mutex);
+        Check(recorded.audit.size() == 1 && recorded.audit[0].executed && recorded.audit[0].succeeded && recorded.audit[0].tool == "list_dir" &&
+                  recorded.activity.size() == 2 && recorded.activity[0].phase == "Running" && recorded.activity[1].phase == "Ready",
+            "The opening read was not audited and shown like any other call.");
+    }
+
+    // A call for a tool this turn does not have never runs; the model is told.
+    ToolPermissions searchOnly;
+    searchOnly.privateAudience = searchOnly.internetEnabled = searchOnly.automaticLookup = true;
+    ToolExecutors searching;
+    searching.webSearch = [](const std::string&, const ToolCallContext&) { return ToolExecution::Ok("unused"); };
+    ToolLoop without(ToolRegistry::Project(searchOnly, searching));
+    without.SetOpeningCalls(OpeningFileCalls(input, roots));
+    backend.Then({ScriptedBackend::Text("I cannot read folders right now.", "stop")});
+    const auto refused = ConversationAgent{}.Execute(
+        router, input, {{"user", input}}, filters, {}, {}, {}, {}, revia::llm::PrivateMemoryAccess::ProfileSetting, &without);
+    requests = backend.Requests();
+    const auto told = ToolMessages(requests.back());
+    Check(refused.bSuccess && refused.toolCallsExecuted == 0 && listed.size() == 1 && told.size() == 1 &&
+              told[0].at("content").get<std::string>().find("There is no tool named") != std::string::npos,
+        "An opening call for a tool the turn does not have ran, or its refusal was not given to the model.");
+}
+
+// "Use your agents" has to start them, and a live 9B asked that way made the call in 8 tries
+// of 13; otherwise it said it would and nothing started. A call the turn requires is made by
+// the loop when the model ends its answer without it, and the model then says what came of it.
+void TestARequiredCallIsMadeWhenTheModelSkipsIt()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ScriptedBackend backend;
+    messageRouter router((directory.root / "required.db").string());
+    Configure(router, backend.port);
+    std::vector<std::string> queries;
+    ToolExecutors executors;
+    executors.webSearch = [&queries](const std::string& query, const ToolCallContext&)
+    {
+        queries.push_back(query);
+        return ToolExecution::Ok("Paris: sunny.");
+    };
+    ToolPermissions permissions;
+    permissions.privateAudience = permissions.internetEnabled = permissions.automaticLookup = true;
+    responseFilterSettings filters;
+    filters.bAiReviewEnabled = false;
+    const revia::llm::ToolCall required{"requested_1", "web_search", R"({"query":"weather Paris"})"};
+    const std::string input = "Look up the weather in Paris.";
+    const auto run = [&](const ToolLoop& loop)
+    {
+        return ConversationAgent{}.Execute(
+            router, input, {{"user", input}}, filters, {}, {}, {}, {}, revia::llm::PrivateMemoryAccess::ProfileSetting, &loop);
+    };
+
+    // The model only says it will: the loop makes the call and asks it once more.
+    Recorded recorded;
+    ToolLoop loop = Observed(ToolRegistry::Project(permissions, executors), recorded);
+    loop.SetRequiredCall(required);
+    backend.Then({ScriptedBackend::Text("I will look that up.", "stop")});
+    backend.Then({ScriptedBackend::Text("It is sunny in Paris.", "stop")});
+    auto reply = run(loop);
+    auto requests = backend.Requests();
+    Check(reply.bSuccess && reply.response == "I will look that up.\n\nIt is sunny in Paris." && reply.toolCallsExecuted == 1 &&
+              queries == std::vector<std::string>{"weather Paris"},
+        "A required call the model skipped was not made once, or its words were lost: " + reply.reason + " / " + reply.response);
+    Check(requests.size() == 2 && ToolMessages(requests[0]).empty() && ToolMessages(requests[1]).size() == 1 &&
+              ToolMessages(requests[1])[0].at("tool_call_id") == "requested_1",
+        "The model was not asked first, or was not shown the call made for it.");
+    {
+        std::lock_guard lock(recorded.mutex);
+        Check(recorded.audit.size() == 1 && recorded.audit[0].executed && recorded.audit[0].succeeded && recorded.audit[0].tool == "web_search",
+            "The call made for the model was not audited like any other.");
+    }
+
+    // The model makes the call itself: nothing is added, and its own arguments stand.
+    queries.clear();
+    ToolLoop own(ToolRegistry::Project(permissions, executors));
+    own.SetRequiredCall(required);
+    auto before = backend.Requests().size();
+    backend.Then({ScriptedBackend::Call(0, "mine", "web_search", R"({"query":"Paris weather today"})", "tool_calls")});
+    backend.Then({ScriptedBackend::Text("Sunny.", "stop")});
+    reply = run(own);
+    Check(reply.bSuccess && reply.response == "Sunny." && reply.toolCallsExecuted == 1 &&
+              queries == std::vector<std::string>{"Paris weather today"} && backend.Requests().size() == before + 2,
+        "A required call the model made itself was made again: " + reply.response);
+
+    // A turn that is no longer admitted has nothing made for it.
+    queries.clear();
+    ToolLoop stopped(ToolRegistry::Project(permissions, executors));
+    stopped.SetRequiredCall(required);
+    int checks = 0;
+    stopped.SetAdmission([&checks] { return ++checks <= 1; });
+    before = backend.Requests().size();
+    backend.Then({ScriptedBackend::Text("I will look that up.", "stop")});
+    reply = run(stopped);
+    Check(queries.empty() && backend.Requests().size() == before + 1, "A call was made for a turn that had been revoked.");
 }
 
 void TestGeneratedArtifactsStayOutsideModelToolText()
@@ -1008,6 +1231,66 @@ void TestRuntimeAddsMcpToolsOnlyToPrivateTurns()
         "Use my notes server to echo hi.", {}, "This is a public fixture conversation.", viewer, fixture.profile, true, false);
     Check(publicReply.succeeded && !fixture.backend.Requests().back().contains("tools") && calls.size() == 1,
         "A public turn was offered the owner's MCP tools.");
+}
+
+// The runtime's wiring of the opening read. In a private chat a folder the person names
+// inside an approved root is listed before the model is asked anything. When they ask
+// for her agents, the reading is left to the agents.
+void TestRuntimeReadsNamedFilesBeforeTheModelAnswers()
+{
+    RuntimeToolFixture fixture(32768);
+    const std::filesystem::path notes = fixture.directory.root / "notes";
+    std::filesystem::create_directories(notes);
+    std::ofstream(notes / "todo.md") << "Friday: pick up the dog's medicine.\n";
+    const std::string folder = revia::actions::PathToUtf8(notes);
+    std::vector<std::string> listed;
+    std::vector<std::string> read;
+    fixture.runtime.SetChatToolProvider(
+        [&](const std::function<bool()>&, std::stop_token)
+        {
+            revia::runtime::ConversationRuntime::ChatToolGrant grant;
+            grant.approvedRoots = {fixture.directory.root};
+            grant.executors.listDirectory = [&listed](const std::string& path, const ToolCallContext&)
+            {
+                listed.push_back(path);
+                return ToolExecution::Ok("todo.md");
+            };
+            grant.executors.readFile = [&read](const std::string& path, const ToolCallContext&)
+            {
+                read.push_back(path);
+                return ToolExecution::Ok("Friday: pick up the dog's medicine.");
+            };
+            return grant;
+        });
+    fixture.backend.Then({ScriptedBackend::Text("Only todo.md is in there.", "stop")});
+    const auto reply = fixture.runtime.Reply("list the files in \"" + folder + "\"", fixture.profile, true, false);
+    auto requests = fixture.backend.Requests();
+    const auto results = requests.empty() ? std::vector<Json>{} : ToolMessages(requests.front());
+    Check(reply.succeeded && reply.text == "Only todo.md is in there." && listed == std::vector<std::string>{folder} &&
+              requests.size() == 1 && results.size() == 1 &&
+              results[0].at("content").get<std::string>().find("todo.md") != std::string::npos,
+        "A folder named in a private message was not listed before the model's first request: " + reply.reason + " | " + reply.text);
+    const auto components = fixture.Components();
+    Check(std::any_of(components.begin(), components.end(),
+              [](const std::string& line) { return line.starts_with("Tools|Running|Listing "); }),
+        "The chat activity did not show the opening read: " + Json(components).dump());
+
+    // A message later, the file is named on its own and found in the folder just listed.
+    fixture.backend.Then({ScriptedBackend::Text("It says to pick up the dog's medicine on Friday.", "stop")});
+    const auto followUp = fixture.runtime.Reply("what does todo.md in there say?", fixture.profile, true, false);
+    requests = fixture.backend.Requests();
+    Check(followUp.succeeded && read.size() == 1 &&
+              std::filesystem::equivalent(revia::actions::Utf8ToPath(read.front()), notes / "todo.md") && requests.size() == 2 &&
+              ToolMessages(requests.back()).size() == 1,
+        "A file named on its own a message after its folder was not read before the model was asked: " + followUp.reason);
+
+    const auto before = requests.size();
+    fixture.backend.Then({ScriptedBackend::Text("My agents are not available right now.", "stop")});
+    const auto delegated =
+        fixture.runtime.Reply("use your agents to list the files in \"" + folder + "\"", fixture.profile, true, false);
+    requests = fixture.backend.Requests();
+    Check(delegated.succeeded && listed.size() == 1 && requests.size() > before && ToolMessages(requests[before]).empty(),
+        "A message that asked for the agents was read by the runtime first: " + delegated.reason);
 }
 
 // ---- Guest code tools -------------------------------------------------------------------
@@ -1642,6 +1925,8 @@ void RunToolLoopTests()
     TestChatActionsKeepTheApprovalStep();
     TestRemindersAndRecallUseTheirOwners();
     TestLoopSearchesThenAnswersThroughTheGate();
+    TestNamedFilesAreReadBeforeTheModelAnswers();
+    TestARequiredCallIsMadeWhenTheModelSkipsIt();
     TestMultiStepLoopRunsReadOnlyCallsTogether();
     TestBudgetExhaustionAsksForAnAnswer();
     TestMalformedCallsAndToolErrorsReachTheModel();
@@ -1652,6 +1937,7 @@ void RunToolLoopTests()
     TestRuntimePreservesTheModelSearchQueryWithoutAnExplicitSubject();
     TestRuntimeFallsBackToThePhraseRouterWithoutTools();
     TestRuntimeAddsMcpToolsOnlyToPrivateTurns();
+    TestRuntimeReadsNamedFilesBeforeTheModelAnswers();
     TestSandboxToolsFollowTheGuestPermissionAndHealth();
     TestRunPythonAsksOnceAndKeepsItsFiles();
     TestCodingToolsChangeOnlyTheGuestCopy();

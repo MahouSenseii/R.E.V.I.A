@@ -21,6 +21,7 @@ Revia.EvaluationCampaignIdentity
 Revia.EvaluationCampaignRunner
 Revia.Foundation
 Revia.GuestPreparation
+Revia.GuestVmBootstrap
 Revia.IdentityFinalSave
 Revia.ImageActions
 Revia.ImageArtifact

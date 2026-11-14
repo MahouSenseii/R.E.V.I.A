@@ -42,10 +42,10 @@ void llmService::ApplyProfile(const llmSettings& settings, const aiProfile& prof
     llamaCpp.ApplyProfile(settings, profile);
 }
 
-void llmService::SetPosture(std::string posture)
+void llmService::SetPosture(std::string posture, std::string standing)
 {
     // Only the local backend assembles its own prompt; the others have nowhere to put it.
-    llamaCpp.SetPosture(std::move(posture));
+    llamaCpp.SetPosture(std::move(posture), std::move(standing));
 }
 
 void llmService::SetReplyNote(std::string note)

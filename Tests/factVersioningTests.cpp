@@ -56,6 +56,11 @@ void TestReadingThePersonsOwnWords()
     Check(ClassifyFactChange("I'm moving to Porto next month", "Porto", "Lisbon") == FactChange::Future, "A plan is never current.");
     Check(ClassifyFactChange("My Civic is green", "green", "blue") == FactChange::Statement, "A bare disagreement is not a correction.");
     Check(ClassifyFactChange("My Civic is green", "green", "") == FactChange::Statement, "A new slot is a statement.");
+    Check(ClassifyFactChange("My husband's name is Will, not Bill", "Will", "Bill") == FactChange::Correction,
+        "A name that is also a future word was read as a plan.");
+    Check(ClassifyFactChange("My partner is called Will", "Will", "") == FactChange::Statement, "The name Will made a plan.");
+    Check(ClassifyFactChange("I will move to Porto, not Lisbon", "Porto", "Lisbon") == FactChange::Future,
+        "A real plan stopped being a plan once its values were set aside.");
     Check(!FactValueInOwnWords("green", "My sister said \"my car is green, not blue\""), "A value in quoted speech is not the person's own.");
     Check(!FactValueInOwnWords("purple", "My Civic is green"), "A value the model invented is dropped.");
     Check(FactValueInOwnWords("green", "my civic is GREEN"), "Case does not matter.");
@@ -160,6 +165,40 @@ void TestPromptLookupAndReviewFirstThroughRestart()
     Check(reopened.SaveOwnerRevision(request, receipt, error), "The owner's approval must still go through the revision path: " + error);
     Check(Find(reopened.FactViews(me), "car colour", "civic")->state == FactState::Reviewed && ProposeFactCorrections(reopened, scope).empty(),
         "After approval the fact is reviewed and no longer pending.");
+}
+
+// The prompt states only the most recently touched facts. A corrected fact older than those was
+// then no longer resolved at all: a question about it retrieved the old row and the new row and
+// listed them as two equal memories.
+void TestACorrectionOutsideTheRecentFactsIsStillResolved()
+{
+    revia::tests::ScopedTestDirectory fixture;
+    longTermMemory store((fixture.root / "memory.db").string());
+    const auto scope = Scope();
+    Say(store, "My Civic is blue", "The user's Civic is blue.", "car colour", "Civic", "blue");
+    Say(store, "Sorry, my Civic is green, not blue", "The user's Civic is green.", "car colour", "Civic", "green");
+    for (int pet = 1; pet <= 14; ++pet)
+    {
+        const std::string name = "Pebble" + std::string(1, static_cast<char>('a' + pet));
+        const std::string animal = "hamster" + std::to_string(pet);
+        Say(store, "My " + animal + " is called " + name, "The user's " + animal + " is called " + name + ".", "pet name", animal, name);
+    }
+    Check(store.FactViews(ParticipantSubject(scope)).size() == 12 && !Find(store.FactViews(ParticipantSubject(scope)), "car colour", "civic"),
+        "The fixture must push the corrected fact outside the default twelve slots.");
+
+    const auto asked = store.BuildPromptBlock("what colour is my Civic", 6, {}, "", 0, &scope);
+    Check(asked.find("Current: The user's Civic is green.") != std::string::npos && asked.find("corrected this from blue") != std::string::npos,
+        "A retrieved fact outside the recent slots must still be stated as resolved: " + asked);
+    Check(asked.find("] The user's Civic is blue.") == std::string::npos && asked.find("] The user's Civic is green.") == std::string::npos,
+        "The old and the corrected value were listed as two equal memories: " + asked);
+
+    // With nothing asked, the recent facts are stated and the older one is simply not raised.
+    const auto idle = store.BuildPromptBlock("", 6, {}, "", 0, &scope);
+    Check(idle.find("] The user's Civic is blue.") == std::string::npos && idle.find("] The user's Civic is green.") == std::string::npos,
+        "An older fact's versions leaked into the recent list as separate memories: " + idle);
+    std::size_t statedFacts = 0;
+    for (std::size_t at = idle.find("- [fact: "); at != std::string::npos; at = idle.find("- [fact: ", at + 1)) ++statedFacts;
+    Check(statedFacts == 12, "Resolving every slot must not state every slot: " + std::to_string(statedFacts));
 }
 
 // Live, the original "my car is a blue Civic" got no slot; only the correction did. The correction
@@ -351,6 +390,7 @@ void RunFactVersioningTests()
     TestWhoTheFactIsAboutAndSeparateThings();
     TestFutureChangeVersusCorrection();
     TestPromptLookupAndReviewFirstThroughRestart();
+    TestACorrectionOutsideTheRecentFactsIsStillResolved();
     TestACorrectionLinksAnUnslottedOriginal();
     TestReturningToAnEarlierValue();
     TestUnrelatedOldFactsAreNotLinked();

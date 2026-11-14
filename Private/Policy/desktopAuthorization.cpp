@@ -470,7 +470,10 @@ bool AuthorizeOrExplain(const DesktopOperation operation, const TargetEvidence& 
         ApprovalPrompt prompt;
         prompt.controlName = evidence.controlName;
         prompt.application = request.application;
-        prompt.windowTitle = request.windowTitle;
+        // The title Windows reports for the window that is about to be touched, not the one
+        // the model asked for. Those differ whenever the model named only part of a title:
+        // "Settings" matches "Delete account - Settings", and the person must see the latter.
+        prompt.windowTitle = evidence.windowTitle.empty() ? request.windowTitle : evidence.windowTitle;
         prompt.reason = decision.reason;
         if (gate->Ask(prompt))
         {

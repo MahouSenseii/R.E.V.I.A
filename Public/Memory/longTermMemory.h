@@ -106,6 +106,11 @@ private:
     [[nodiscard]] sqlite3* Acquire() const;
     EmbeddingBackfillPage ReadMissingEmbeddings(const std::string& embeddingModel,
         std::size_t maxEntries, std::optional<std::int64_t> afterRowId) const;
+    // Search under a lock the caller holds exactly once. The rerank round-trip releases
+    // it, and a recursive lock taken twice would stay held by the outer level.
+    std::vector<memoryEntry> SearchLocked(std::unique_lock<std::recursive_mutex>& operationLock, const std::string& query,
+        std::size_t maxEntries, const std::vector<float>& queryEmbedding, const std::string& embeddingModel, std::int64_t nowEpoch,
+        const revia::memory::MemoryScope* scope, revia::memory::MemoryReranker* reranker, std::stop_token stopToken) const;
 
     std::string memoryPath;
     // Serializes multi-statement revision transactions with every use of this connection.

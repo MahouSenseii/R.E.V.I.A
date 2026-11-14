@@ -28,6 +28,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <stop_token>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -362,6 +363,79 @@ void TestPdfTextExtraction()
     const ExtractedText bounded = ExtractPdfText(whole, 40);
     Check(bounded.ok && bounded.truncated && bounded.text.size() <= 40 && revia::utf8::IsValid(bounded.text),
         "The PDF text limit was not applied.");
+
+    // A font written straight into the page's resources has no object number. A form on
+    // the page that selects many fonts of its own used to move every such font in memory,
+    // so the page's font, restored after the form, pointed at freed storage.
+    {
+        std::string fonts;
+        std::string selections;
+        for (int index = 2; index <= 40; ++index)
+        {
+            fonts += "/F" + std::to_string(index) + " << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> ";
+            selections += "/F" + std::to_string(index) + " 12 Tf ( ) Tj ";
+        }
+        const std::string pdf =
+            "%PDF-1.4\n"
+            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+            "3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type0 "
+            "/ToUnicode 6 0 R >> >> /XObject << /X1 5 0 R >> >> >> endobj\n"
+            "4 0 obj << >> stream\nBT /F1 12 Tf <000100020003> Tj ET /X1 Do BT <000100020003> Tj ET\nendstream\nendobj\n"
+            "5 0 obj << /Type /XObject /Subtype /Form /Resources << /Font << " + fonts + ">> >> >> stream\n"
+            "BT /F2 12 Tf (Inside the form, plain text.) Tj " + selections + "ET\nendstream\nendobj\n"
+            "6 0 obj << >> stream\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+            "3 beginbfchar <0001> <0048> <0002> <0069> <0003> <0021> endbfchar\nendstream\nendobj\n";
+        const ExtractedText read = ExtractPdfText(pdf, 1 << 20);
+        Check(read.ok && read.text.find("Inside the form, plain text.") != std::string::npos,
+            "The form's own inline font was not read: " + read.reason + "\n" + read.text);
+        const std::size_t first = read.text.find("Hi!");
+        Check(first != std::string::npos && read.text.find("Hi!", first + 3) != std::string::npos,
+            "The page's inline font was lost after the form selected fonts of its own:\n" + read.text);
+    }
+
+    // One code may stand for a short run of text, not a megabyte; and the text limit
+    // holds for every code, not only on the way into a string.
+    {
+        std::string destination;
+        for (int index = 0; index < 2000; ++index)
+            destination += "0058";
+        const std::string pdf =
+            "%PDF-1.4\n"
+            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+            "3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> >> endobj\n"
+            "4 0 obj << >> stream\nBT /F1 12 Tf (" + std::string(200000, 'A') + ") Tj ET\nendstream\nendobj\n"
+            "6 0 obj << >> stream\n1 begincodespacerange <00> <FF> endcodespacerange\n1 beginbfchar <41> <" + destination +
+            "> endbfchar\nendstream\nendobj\n"
+            "7 0 obj << /Type /Font /Subtype /Type1 /ToUnicode 6 0 R >> endobj\n";
+        const auto started = std::chrono::steady_clock::now();
+        const ExtractedText expanded = ExtractPdfText(pdf, 4096);
+        Check(expanded.ok && expanded.truncated && expanded.text.size() <= 4096 && revia::utf8::IsValid(expanded.text),
+            "A code mapped to a long text grew the extracted text past its limit: " + std::to_string(expanded.text.size()));
+        Check(std::chrono::steady_clock::now() - started < std::chrono::seconds(20), "Expanding mapped text was not bounded in time.");
+    }
+
+    // A small file built so that every trailer is read to the end of the file. The work
+    // is bounded by the file's size, so it is refused quickly instead of spinning.
+    {
+        std::string pdf = "%PDF-1.7\n";
+        for (int index = 0; index < 120000; ++index)
+            pdf += "trailer<<";
+        const auto started = std::chrono::steady_clock::now();
+        const ExtractedText stalled = ExtractPdfText(pdf, 1 << 20);
+        Check(!stalled.ok && stalled.reason.find("far more work") != std::string::npos,
+            "A PDF built to rescan itself was not refused for its work: " + stalled.reason);
+        Check(std::chrono::steady_clock::now() - started < std::chrono::seconds(30), "Rescanning trailers was not bounded in time.");
+    }
+
+    // Stopping the read ends it, and says so.
+    {
+        std::stop_source stop;
+        stop.request_stop();
+        const ExtractedText cancelled = ExtractPdfText(whole, 1 << 20, stop.get_token());
+        Check(!cancelled.ok && cancelled.reason.find("cancelled") != std::string::npos, "A stopped PDF read was not reported as cancelled.");
+    }
 }
 
 void TestDocxAndTextExtraction()

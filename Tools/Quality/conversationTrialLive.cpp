@@ -2,8 +2,10 @@
 #include "Memory/longTermMemory.h"
 #include "observedLocalModel.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -42,11 +44,11 @@ void WriteJson(const std::filesystem::path& path, const json& value)
 // Every optional host is off; memory, embeddings, identity and the archive stay on, and
 // the models are the caller's servers behind the observation proxies.
 void IsolateSettings(const std::filesystem::path& path, const int mainPort, const int fastPort, const int embeddingPort,
-    const std::string& delegation, const int mainContext)
+    const std::string& delegation, const int mainContext, const std::string& mainModel)
 {
     json settings = ReadJson(path);
     auto& llm = settings["llm"];
-    llm.update({{"host", "127.0.0.1"}, {"port", mainPort}, {"modelName", "Qwen3.5-4B-Q4_K_M.gguf"}, {"autoStartServer", false},
+    llm.update({{"host", "127.0.0.1"}, {"port", mainPort}, {"modelName", mainModel}, {"autoStartServer", false},
         {"shutdownServerOnExit", false}, {"autoTune", false}, {"visionEnabled", false}, {"contextSize", mainContext}});
     llm["cloud"]["enabled"] = false;
     auto& intelligence = settings["intelligence"];
@@ -72,6 +74,11 @@ void WaitForQuiet(ReviaSession& session, const revia::quality::ObservedLocalMode
     const std::chrono::seconds limit)
 {
     const auto deadline = std::chrono::steady_clock::now() + limit;
+    // Three seconds is longer than a small model's memory evaluation and shorter than a
+    // 27B's, whose turn then looked settled while the evaluation was still running. A
+    // trial of a slow model sets REVIA_TRIAL_QUIET_SECONDS.
+    const char* configured = std::getenv("REVIA_TRIAL_QUIET_SECONDS");
+    const auto quiet = std::chrono::seconds(std::clamp(configured ? std::atoi(configured) : 3, 1, 60));
     std::size_t seen = 0;
     auto quietSince = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() < deadline)
@@ -83,7 +90,7 @@ void WaitForQuiet(ReviaSession& session, const revia::quality::ObservedLocalMode
             seen = requests;
             quietSince = std::chrono::steady_clock::now();
         }
-        else if (std::chrono::steady_clock::now() - quietSince >= 3s)
+        else if (std::chrono::steady_clock::now() - quietSince >= quiet)
         {
             return;
         }
@@ -155,12 +162,23 @@ int main(int argc, char** argv)
             fast = std::make_unique<revia::quality::ObservedLocalModel>(fastUpstream);
         // The shipped Main context; below 16K no tool, delegate_task included, is offered at all.
         IsolateSettings(root / "Config/settings.json", main.port, fast ? fast->port : 0, embeddingPort,
-            script.value("delegation", std::string("off")), script.value("mainContext", 32768));
+            script.value("delegation", std::string("off")), script.value("mainContext", 32768),
+            // The name the Main server reports. Revia refuses a server that serves another model,
+            // so a script that tests a different Main names it here.
+            script.value("mainModel", std::string("Qwen3.5-4B-Q4_K_M.gguf")));
         if (script.contains("approvedRoots"))
         {
             // Seeded into the live permissions file on first start; workers read them only.
             json capabilities = ReadJson(root / "Config/capabilities.json");
             capabilities["approvedRoots"] = script.at("approvedRoots");
+            WriteJson(root / "Config/capabilities.json", capabilities);
+        }
+        if (script.contains("capabilities"))
+        {
+            // A script that tests more than reading says so: these replace the shipped,
+            // locked-down values in this trial's own copy only.
+            json capabilities = ReadJson(root / "Config/capabilities.json");
+            capabilities.merge_patch(script.at("capabilities"));
             WriteJson(root / "Config/capabilities.json", capabilities);
         }
         std::filesystem::current_path(root);
@@ -252,6 +270,40 @@ int main(int argc, char** argv)
                 record["workflow"] = Workflow(*session);
                 std::lock_guard lock(deliveredMutex);
                 record["delivered"] = delivered;
+            }
+            if (conversation.contains("agentStudio"))
+            {
+                // The owner's own Agent Studio run with permitted tools. Unlike a chat hand-off,
+                // its workers may write and run what the capabilities allow.
+                const auto& studio = conversation.at("agentStudio");
+                const auto begun = std::chrono::steady_clock::now();
+                json outcome = {{"objective", studio.at("objective")}};
+                std::string error;
+                if (!session->StartAgentWorkflow(studio.at("objective").get<std::string>(), AgentProviderMode::LocalWithTools, error))
+                    outcome["refused"] = error;
+                else
+                {
+                    const auto deadline = begun + std::chrono::seconds(studio.value("waitSeconds", 600));
+                    const auto running = [&]
+                    {
+                        const auto state = session->AgentWorkflowSnapshot().state;
+                        return state == revia::agents::WorkflowState::Running || state == revia::agents::WorkflowState::Waiting ||
+                               state == revia::agents::WorkflowState::AwaitingAcceptance;
+                    };
+                    while (running() && std::chrono::steady_clock::now() < deadline)
+                    {
+                        session->PollBackgroundEvents();
+                        std::this_thread::sleep_for(100ms);
+                    }
+                    outcome["timedOut"] = running();
+                    if (running())
+                        session->CancelAgentWorkflow();
+                }
+                outcome["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - begun).count();
+                record["agentStudio"] = outcome;
+                record["workflow"] = Workflow(*session);
+                std::cout << '[' << conversation.at("id").get<std::string>() << "] agent studio: " << record["workflow"].value("state", "") << " after "
+                          << static_cast<int>(outcome["seconds"].get<double>()) << "s\n  result: " << record["workflow"].value("result", "") << "\n";
             }
             transcript["conversations"].push_back(record);
             WriteJson(output / "transcript.json", transcript);

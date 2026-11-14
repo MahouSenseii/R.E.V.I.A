@@ -129,6 +129,53 @@ void TestProcessExecution()
 #endif
 }
 
+// The allowlist names a file, not what the file is. A batch file is run by cmd.exe and a
+// script host runs whatever its arguments name, so neither is covered by being listed.
+void TestScriptHostsAndBatchFiles()
+{
+    for (const std::string host : {"py.exe", "PYW.EXE", "java.exe", "javaw.exe", "git.exe", "python3.exe", "Python3.12.exe", "pythonw3.13.exe",
+             "pypy3.exe", "node.exe", "perl.exe", "ruby.exe", "cmd.exe", "powershell.exe"})
+        tests::Check(actions::IsScriptHostExecutable(host), host + " was not treated as a script host.");
+    for (const std::string plain : {"notepad.exe", "ReviaProcessFixture.exe", "pythonic-tool.txt", "gitk-viewer.exe"})
+        tests::Check(!actions::IsScriptHostExecutable(plain), plain + " was wrongly treated as a script host.");
+    tests::Check(actions::IsBatchScript("C:/tools/run.CMD") && actions::IsBatchScript("C:/tools/build.bat") &&
+                     actions::IsBatchScript("C:/tools/run.cmd.") && actions::IsBatchScript("C:/tools/run.bat ") &&
+                     !actions::IsBatchScript("C:/tools/run.exe") && !actions::IsBatchScript("C:/tools/cmd"),
+        "Batch files were not recognised by their extension.");
+    for (const std::string unsafe : {"x\" & calc.exe & \"", "%COMSPEC%", "a|b", "a>b", "a<b", "a^b", "!x!", "(a)", "line\nbreak"})
+        tests::Check(actions::IsUnsafeBatchArgument(unsafe), "A cmd.exe metacharacter was accepted in a batch argument: " + unsafe);
+    tests::Check(!actions::IsUnsafeBatchArgument("release-1.2_final.txt") && !actions::IsUnsafeBatchArgument("C:\\work dir\\out"),
+        "An ordinary batch argument was refused.");
+
+#ifdef _WIN32
+    Fixture fixture;
+    const auto batch = fixture.directory.root / "tool.cmd";
+    {
+        std::ofstream script(batch);
+        script << "@echo off\r\necho ran\r\n";
+    }
+    auto settings = fixture.runtime.Settings();
+    settings.process.approvedExecutables.push_back(batch);
+    auto request = fixture.Request({"plain"});
+    request.process.executable = batch;
+    request.dryRun = true;
+    auto decision = policy::CapabilityPolicy(settings).Evaluate(request);
+    tests::Check(decision.verdict == actions::PolicyVerdict::Blocked && decision.reason.find("interpreters") != std::string::npos,
+        "An allowlisted batch file ran with command interpreters disabled: " + decision.reason);
+
+    settings.process.allowCommandInterpreters = true;
+    decision = policy::CapabilityPolicy(settings).Evaluate(request);
+    tests::Check(decision.verdict == actions::PolicyVerdict::Allowed, "A batch file with a plain argument was refused: " + decision.reason);
+    request.process.arguments = {"x\" & calc.exe & \""};
+    decision = policy::CapabilityPolicy(settings).Evaluate(request);
+    tests::Check(decision.verdict == actions::PolicyVerdict::Blocked && decision.reason.find("cmd.exe") != std::string::npos,
+        "A batch argument that cmd.exe reads as a second command was admitted: " + decision.reason);
+    request.dryRun = false;
+    const auto refused = fixture.runtime.ExecuteScoped(request, policy::CapabilityPolicy(settings), true);
+    tests::Check(!refused.result.attempted && !refused.result.process, "A batch file was started with an injected command.");
+#endif
+}
+
 void TestGuardedFileWrite()
 {
     Fixture fixture;
@@ -250,6 +297,7 @@ void RunProcessExecutionTests()
         R"({"action":"execute_process","executable":"C:/approved/tool.exe","working_directory":"C:/workspace","arguments":["literal argument","","a\"b"],"environment":{"TASK_INPUT":"literal"},"timeout_ms":1000})");
     revia::tests::Check(request.succeeded, "The typed process request is unsupported: " + request.error);
     RunFileWriteUpgradeTests();
+    TestScriptHostsAndBatchFiles();
 #ifdef _WIN32
     TestProcessExecution();
     TestGuardedFileWrite();

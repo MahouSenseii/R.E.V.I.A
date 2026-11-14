@@ -37,6 +37,8 @@ public:
     int status = 200;
     std::string body;
     std::size_t chunkSize = 7;
+    // What the transport reports after the body: a deadline, the size cap, a dropped read.
+    std::string error;
     int calls = 0;
     CloudHttpRequest last;
 
@@ -54,6 +56,7 @@ public:
             if (!onChunk(status, chunk))
                 break;
         }
+        result.error = error;
         return result;
     }
 
@@ -241,6 +244,49 @@ void TestStreamedReplyFillsTheResponse(const std::string& provider, const std::s
     Check(harness.transport->calls == 1, provider + " sent more or fewer than one request.");
 }
 
+// HTTP 200 says the stream started, not that it finished. Text received before the
+// transport gave up, or before the connection quietly closed, is not the answer.
+void TestInterruptedStreamIsNotAnAnswer()
+{
+    CloudTurnRequest turn;
+    turn.bExplicit = true;
+    const std::string whole = OpenAiStream();
+    const std::string partial = whole.substr(0, whole.find("data: {\"choices\":[{\"delta\":{\"content\":\"the capital.\""));
+    {
+        Harness harness;
+        harness.transport->body = partial;
+        harness.transport->error = "The cloud model did not finish within the configured timeout.";
+        const responseOutput output = harness.service.GenerateResponse(Ask("What is the capital of France?"), turn);
+        Check(!output.bSuccess && output.reason.find("cut off") != std::string::npos && output.reason.find("timeout") != std::string::npos,
+            "A reply the transport stopped part-way was returned as complete: " + output.response);
+        Check(output.response.find("Paris is") == std::string::npos, "The partial text was presented as the reply.");
+        Check(harness.audit.size() == 2 && !harness.audit[1].succeeded && harness.audit[1].outcome != "completed",
+            "The audit recorded a cut-off reply as completed.");
+    }
+    {
+        Harness harness;
+        harness.transport->body = partial;
+        const responseOutput output = harness.service.GenerateResponse(Ask("What is the capital of France?"), turn);
+        Check(!output.bSuccess && output.reason.find("end marker") != std::string::npos,
+            "A stream that closed with no finish reason and no end marker was returned as complete.");
+        Check(harness.audit.size() == 2 && !harness.audit[1].succeeded, "The audit recorded an unfinished stream as completed.");
+    }
+    {
+        // Some compatible servers send a finish reason and never the [DONE] line.
+        Harness harness;
+        harness.transport->body = whole.substr(0, whole.find("data: [DONE]"));
+        const responseOutput output = harness.service.GenerateResponse(Ask("What is the capital of France?"), turn);
+        Check(output.bSuccess && output.response == "Paris is the capital.", "A finished stream without [DONE] was refused: " + output.reason);
+    }
+    {
+        Harness harness("anthropic", "https://api.anthropic.com");
+        const std::string stream = AnthropicStream();
+        harness.transport->body = stream.substr(0, stream.find("event: message_delta"));
+        const responseOutput output = harness.service.GenerateResponse(Ask("What is the capital of France?"), turn);
+        Check(!output.bSuccess, "An Anthropic stream with no stop reason and no message_stop was returned as complete.");
+    }
+}
+
 void TestKeyComesOnlyFromTheEnvironment()
 {
     Harness harness;
@@ -285,6 +331,28 @@ void TestKeyComesOnlyFromTheEnvironment()
     std::ofstream(path) << document.dump(2);
     appSettings rejected;
     Check(!configManager(path.string(), "Profiles").LoadSettings(rejected), "An unknown llm.cloud.useFor passed validation.");
+
+    // A model server Revia starts is bound to llm.host and sent every private prompt and
+    // the session key over plain HTTP, so it may not be bound beyond this machine. One the
+    // owner runs elsewhere and Revia only connects to stays allowed.
+    document["llm"]["cloud"]["useFor"] = "hardTurns";
+    document["llm"]["host"] = "192.168.1.20";
+    document["llm"]["autoStartServer"] = true;
+    std::ofstream(path) << document.dump(2);
+    appSettings lan;
+    Check(!configManager(path.string(), "Profiles").LoadSettings(lan), "A server Revia starts was allowed to listen on the LAN.");
+    document["llm"]["autoStartServer"] = false;
+    std::ofstream(path) << document.dump(2);
+    Check(configManager(path.string(), "Profiles").LoadSettings(lan) && lan.llm.host == "192.168.1.20",
+        "A server the owner runs elsewhere could no longer be used.");
+    document["llm"]["host"] = "127.0.0.1";
+    document["llm"]["autoStartServer"] = true;
+
+    // The whisper language reaches the CLI's command line as one argument and nothing more.
+    document["speechRecognition"]["language"] = "en -ng --output-file C:/x";
+    std::ofstream(path) << document.dump(2);
+    appSettings switches;
+    Check(!configManager(path.string(), "Profiles").LoadSettings(switches), "A language value carrying command-line switches loaded.");
 }
 
 void TestRefusals()
@@ -571,6 +639,7 @@ void RunCloudModelTests()
     TestStreamEventsDecode();
     TestStreamedReplyFillsTheResponse("openai-compatible", OpenAiStream(), "https://api.example.com/v1");
     TestStreamedReplyFillsTheResponse("anthropic", AnthropicStream(), "https://api.anthropic.com");
+    TestInterruptedStreamIsNotAnAnswer();
     TestKeyComesOnlyFromTheEnvironment();
     TestRefusals();
     TestPrivateContextIsStripped();

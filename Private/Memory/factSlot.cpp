@@ -136,8 +136,20 @@ FactChange ClassifyFactChange(const std::string& userInput, const std::string_vi
     const std::string text = OwnWords(userInput);
     const std::string next = Lower(Trim(newValue));
     const std::string prior = Lower(Trim(priorValue));
-    // A plan is never current, even if it also mentions the old value.
-    if (ContainsAny(text, {"will", "i'll", "going to", "gonna", "next week", "next month", "next year", "tomorrow", "soon",
+    // A plan is never current, even if it also mentions the old value. The values themselves
+    // are not read as tense: in "his name is Will, not Bill" the word "will" is the name.
+    std::string tense = text;
+    for (const std::string& value : {next, prior})
+    {
+        if (value.empty()) continue;
+        for (std::size_t at = tense.find(value); at != std::string::npos; at = tense.find(value, at + 1))
+        {
+            const std::size_t end = at + value.size();
+            if ((at == 0 || !Word(tense[at - 1])) && (end >= tense.size() || !Word(tense[end])))
+                std::fill(tense.begin() + static_cast<std::ptrdiff_t>(at), tense.begin() + static_cast<std::ptrdiff_t>(end), ' ');
+        }
+    }
+    if (ContainsAny(tense, {"will", "i'll", "going to", "gonna", "next week", "next month", "next year", "tomorrow", "soon",
             "planning to", "plan to", "about to", "starting next", "from next"}))
         return FactChange::Future;
     if (prior.empty() || prior == next) return FactChange::Statement;

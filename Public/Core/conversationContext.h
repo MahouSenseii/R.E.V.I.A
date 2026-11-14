@@ -3,11 +3,14 @@
 #include "Core/conversationMessage.h"
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class conversationContext
 {
   public:
+    // Opens the paragraph GetCompressedHistorySummary returns.
+    static constexpr std::string_view ContinuityLead = "Working continuity:";
     conversationContext();
     ~conversationContext();
 

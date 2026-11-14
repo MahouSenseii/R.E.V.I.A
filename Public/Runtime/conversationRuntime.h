@@ -198,6 +198,10 @@ public:
     [[nodiscard]] bool EarlierSpeakerWithheld() const { return earlierSpeakerWithheld.load(); }
     [[nodiscard]] bool WithheldBeforeTheirName() const { return withheldBeforeTheirName.load(); }
     void SetPrivateAdmissionFactory(std::function<std::function<bool()>()> factory);
+    // Captured when a private turn starts: whether the conversation that turn belongs to
+    // is still the current one. It outlives the turn, so the turn's memory classification
+    // survives the next message. Without it the turn's delivery admission is used.
+    void SetMemoryAdmissionFactory(std::function<std::function<bool()>()> factory);
     using InvestigationExecutorFactory = std::function<agents::CheckExecutor(std::function<bool()>, std::stop_token)>;
     void SetInvestigationExecutorFactory(InvestigationExecutorFactory factory);
 
@@ -317,8 +321,12 @@ private:
     // the live speech state. Shared by the turn posture and the self-inquiry so the two
     // cannot describe her body differently.
     [[nodiscard]] std::string DescribeBody() const;
+    // With `outStanding`, the settings half of her runtime self-knowledge is written there
+    // instead of into the returned posture, for the caller to hand over as standing text.
+    // It is left empty on a public turn and on a brief social one, which is sent without
+    // runtime details at all.
     [[nodiscard]] std::string BuildTurnPosture(const std::string& policyInput, const std::vector<conversationMessage>& promptContext,
-        const aiProfile& profile, bool llmAvailable, const TurnPolicy& turnPolicy) const;
+        const aiProfile& profile, bool llmAvailable, const TurnPolicy& turnPolicy, std::string* outStanding = nullptr) const;
     // Runs one bounded deliberation when the router already judged this turn hard,
     // publishes the questions so they are visible in chat, and returns what she worked
     // out. Returns an empty result whenever the gate stays shut, and a failed pass is
@@ -381,6 +389,7 @@ private:
     logger& log;
     StateHandler setState;
     std::function<std::function<bool()>()> privateAdmissionFactory;
+    std::function<std::function<bool()>()> memoryAdmissionFactory;
     InvestigationExecutorFactory investigationExecutorFactory;
     ResponseLatency responseLatency;
     RuntimeEventBus::SubscriptionId latencySubscription = 0;

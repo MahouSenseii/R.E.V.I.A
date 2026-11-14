@@ -239,8 +239,10 @@ private:
     };
 
     // A preempted evaluation is retried, but not indefinitely: a memory candidate is
-    // worth less the further the conversation moves past it.
-    static constexpr int maximumPreemptionRetries = 2;
+    // worth less the further the conversation moves past it. Six lets it outlast a quick
+    // exchange: at two, a 27B whose evaluation takes four seconds kept nothing from a
+    // conversation whose messages came three seconds apart.
+    static constexpr int maximumPreemptionRetries = 6;
 
     // Test-only stand-in for the model call. Preemption is produced by a live inference
     // scheduler under real contention, which no deterministic test can arrange, so the

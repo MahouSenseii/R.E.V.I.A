@@ -315,10 +315,20 @@ actions::PolicyDecision CapabilityPolicy::Evaluate(const actions::ActionRequest&
             return decision;
         }
         const auto name = Lower(actions::PathToUtf8(decision.canonicalExecutable.filename()));
-        if (!limits.allowCommandInterpreters && (actions::IsCommandSurfaceExecutable(name) ||
-            name == "node.exe" || name == "perl.exe" || name == "ruby.exe" || name == "python3.exe"))
+        // A batch file is a script whatever it is called: Windows hands it to cmd.exe.
+        // Both the path that was asked for and the file it resolves to are checked, so a
+        // link with an innocent name cannot stand in for one.
+        const bool batch = actions::IsBatchScript(decision.canonicalExecutable) || actions::IsBatchScript(process.executable);
+        if (!limits.allowCommandInterpreters && (batch || actions::IsScriptHostExecutable(name)))
         {
             decision.reason = "Direct command and script interpreters require separate process permission.";
+            return decision;
+        }
+        if (batch && std::any_of(process.arguments.begin(), process.arguments.end(),
+                         [](const std::string& argument) { return actions::IsUnsafeBatchArgument(argument); }))
+        {
+            decision.reason = "Batch files are run by cmd.exe, which reads quotes, percent signs and command operators in an "
+                              "argument as instructions. Arguments to a batch file may not contain them.";
             return decision;
         }
         if (process.timeoutMs < 1 || limits.maxTimeoutMs < 1 || limits.maxTimeoutMs > 600000 ||

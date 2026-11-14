@@ -1,0 +1,5325 @@
+{
+ "ordinary, 2 experts' worth": {
+  "runs": 1,
+  "parameters": {
+   "total": 546176,
+   "always_loaded": 348800,
+   "per_expert": 32896,
+   "loaded_per_token": 546176,
+   "planner": 0
+  },
+  "share_loaded_per_token": 1.0,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.55133056640625,
+    "low": 0.55133056640625,
+    "high": 0.55133056640625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.55133056640625,
+    "low": 0.55133056640625,
+    "high": 0.55133056640625,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.47119140625,
+     "low": 0.47119140625,
+     "high": 0.47119140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.548828125,
+     "low": 0.548828125,
+     "high": 0.548828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.57275390625,
+     "low": 0.57275390625,
+     "high": 0.57275390625,
+     "runs": 1
+    },
+    {
+     "mean": 0.5556640625,
+     "low": 0.5556640625,
+     "high": 0.5556640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.56884765625,
+     "low": 0.56884765625,
+     "high": 0.56884765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.55810546875,
+     "low": 0.55810546875,
+     "high": 0.55810546875,
+     "runs": 1
+    },
+    {
+     "mean": 0.56884765625,
+     "low": 0.56884765625,
+     "high": 0.56884765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.55078125,
+     "low": 0.55078125,
+     "high": 0.55078125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.5455322265625,
+    "low": 0.5455322265625,
+    "high": 0.5455322265625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.53729248046875,
+    "low": 0.53729248046875,
+    "high": 0.53729248046875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.55377197265625,
+    "low": 0.55377197265625,
+    "high": 0.55377197265625,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    {
+     "mean": 0.54443359375,
+     "low": 0.54443359375,
+     "high": 0.54443359375,
+     "runs": 1
+    },
+    {
+     "mean": 0.5576171875,
+     "low": 0.5576171875,
+     "high": 0.5576171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.5419921875,
+     "low": 0.5419921875,
+     "high": 0.5419921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.55859375,
+     "low": 0.55859375,
+     "high": 0.55859375,
+     "runs": 1
+    },
+    {
+     "mean": 0.53662109375,
+     "low": 0.53662109375,
+     "high": 0.53662109375,
+     "runs": 1
+    },
+    {
+     "mean": 0.546875,
+     "low": 0.546875,
+     "high": 0.546875,
+     "runs": 1
+    },
+    {
+     "mean": 0.56640625,
+     "low": 0.56640625,
+     "high": 0.56640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.57763671875,
+     "low": 0.57763671875,
+     "high": 0.57763671875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.47607421875,
+     "low": 0.47607421875,
+     "high": 0.47607421875,
+     "runs": 1
+    },
+    {
+     "mean": 0.53759765625,
+     "low": 0.53759765625,
+     "high": 0.53759765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.552734375,
+     "low": 0.552734375,
+     "high": 0.552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.54052734375,
+     "low": 0.54052734375,
+     "high": 0.54052734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.55224609375,
+     "low": 0.55224609375,
+     "high": 0.55224609375,
+     "runs": 1
+    },
+    {
+     "mean": 0.5361328125,
+     "low": 0.5361328125,
+     "high": 0.5361328125,
+     "runs": 1
+    },
+    {
+     "mean": 0.54833984375,
+     "low": 0.54833984375,
+     "high": 0.54833984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.5546875,
+     "low": 0.5546875,
+     "high": 0.5546875,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.550811767578125,
+    "low": 0.550811767578125,
+    "high": 0.550811767578125,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.51220703125,
+    "low": 0.51220703125,
+    "high": 0.51220703125,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.5563267299107143,
+    "low": 0.5563267299107143,
+    "high": 0.5563267299107143,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    {
+     "mean": 0.5525251116071429,
+     "low": 0.5525251116071429,
+     "high": 0.5525251116071429,
+     "runs": 1
+    },
+    {
+     "mean": 0.5601283482142857,
+     "low": 0.5601283482142857,
+     "high": 0.5601283482142857,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.47705078125,
+     "low": 0.47705078125,
+     "high": 0.47705078125,
+     "runs": 1
+    },
+    {
+     "mean": 0.54736328125,
+     "low": 0.54736328125,
+     "high": 0.54736328125,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  }
+ },
+ "ordinary, 16 experts' worth": {
+  "runs": 1,
+  "parameters": {
+   "total": 1927808,
+   "always_loaded": 348800,
+   "per_expert": 32896,
+   "loaded_per_token": 1927808,
+   "planner": 0
+  },
+  "share_loaded_per_token": 1.0,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.95697021484375,
+    "low": 0.95697021484375,
+    "high": 0.95697021484375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.95697021484375,
+    "low": 0.95697021484375,
+    "high": 0.95697021484375,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.67138671875,
+     "low": 0.67138671875,
+     "high": 0.67138671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.88671875,
+     "low": 0.88671875,
+     "high": 0.88671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.947265625,
+     "low": 0.947265625,
+     "high": 0.947265625,
+     "runs": 1
+    },
+    {
+     "mean": 0.97216796875,
+     "low": 0.97216796875,
+     "high": 0.97216796875,
+     "runs": 1
+    },
+    {
+     "mean": 0.98095703125,
+     "low": 0.98095703125,
+     "high": 0.98095703125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9853515625,
+     "low": 0.9853515625,
+     "high": 0.9853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.984375,
+     "low": 0.984375,
+     "high": 0.984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.98876953125,
+     "low": 0.98876953125,
+     "high": 0.98876953125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.915557861328125,
+    "low": 0.915557861328125,
+    "high": 0.915557861328125,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.923095703125,
+    "low": 0.923095703125,
+    "high": 0.923095703125,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.90802001953125,
+    "low": 0.90802001953125,
+    "high": 0.90802001953125,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    {
+     "mean": 0.67138671875,
+     "low": 0.67138671875,
+     "high": 0.67138671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.84228515625,
+     "low": 0.84228515625,
+     "high": 0.84228515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.90576171875,
+     "low": 0.90576171875,
+     "high": 0.90576171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.94580078125,
+     "low": 0.94580078125,
+     "high": 0.94580078125,
+     "runs": 1
+    },
+    {
+     "mean": 0.96240234375,
+     "low": 0.96240234375,
+     "high": 0.96240234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.97607421875,
+     "low": 0.97607421875,
+     "high": 0.97607421875,
+     "runs": 1
+    },
+    {
+     "mean": 0.97998046875,
+     "low": 0.97998046875,
+     "high": 0.97998046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.98046875,
+     "low": 0.98046875,
+     "high": 0.98046875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6689453125,
+     "low": 0.6689453125,
+     "high": 0.6689453125,
+     "runs": 1
+    },
+    {
+     "mean": 0.87646484375,
+     "low": 0.87646484375,
+     "high": 0.87646484375,
+     "runs": 1
+    },
+    {
+     "mean": 0.94091796875,
+     "low": 0.94091796875,
+     "high": 0.94091796875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96728515625,
+     "low": 0.96728515625,
+     "high": 0.96728515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.970703125,
+     "low": 0.970703125,
+     "high": 0.970703125,
+     "runs": 1
+    },
+    {
+     "mean": 0.98291015625,
+     "low": 0.98291015625,
+     "high": 0.98291015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.98828125,
+     "low": 0.98828125,
+     "high": 0.98828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9892578125,
+     "low": 0.9892578125,
+     "high": 0.9892578125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.798675537109375,
+    "low": 0.798675537109375,
+    "high": 0.798675537109375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.776123046875,
+    "low": 0.776123046875,
+    "high": 0.776123046875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.8018973214285714,
+    "low": 0.8018973214285714,
+    "high": 0.8018973214285714,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": null,
+   "share_of_parameters_loaded": null,
+   "route_changes_per_token": null,
+   "route_follows_topic": null,
+   "route_follows_token_kind": null,
+   "after_a_change": [
+    {
+     "mean": 0.76123046875,
+     "low": 0.76123046875,
+     "high": 0.76123046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.8425641741071429,
+     "low": 0.8425641741071429,
+     "high": 0.8425641741071429,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6689453125,
+     "low": 0.6689453125,
+     "high": 0.6689453125,
+     "runs": 1
+    },
+    {
+     "mean": 0.88330078125,
+     "low": 0.88330078125,
+     "high": 0.88330078125,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {}
+  }
+ },
+ "route fixed by the true topic (told)": {
+  "runs": 1,
+  "parameters": {
+   "total": 1927808,
+   "always_loaded": 348800,
+   "per_expert": 32896,
+   "loaded_per_token": 546176,
+   "planner": 0
+  },
+  "share_loaded_per_token": 0.2833145209481442,
+  "one_topic": {
+   "accuracy": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.2833145209481442,
+    "low": 0.2833145209481442,
+    "high": 0.2833145209481442,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.0,
+    "low": 0.0,
+    "high": 0.0,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.133056640625,
+    "low": 0.133056640625,
+    "high": 0.133056640625,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.0,
+     "low": 0.0,
+     "high": 0.0,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.0,
+     "low": 0.0,
+     "high": 0.0,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.0,
+     "low": 0.0,
+     "high": 0.0,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 3.8714194297790527,
+    "low": 3.8714194297790527,
+    "high": 3.8714194297790527,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.3791158792784344,
+    "low": 0.3791158792784344,
+    "high": 0.3791158792784344,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.015839433297514915,
+    "low": 0.015839433297514915,
+    "high": 0.015839433297514915,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1327718198299408,
+    "low": 0.1327718198299408,
+    "high": 0.1327718198299408,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.08978174603174603,
+     "low": 0.08978174603174603,
+     "high": 0.08978174603174603,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.08878968253968254,
+     "low": 0.08878968253968254,
+     "high": 0.08878968253968254,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.08878968253968254,
+     "low": 0.08878968253968254,
+     "high": 0.08878968253968254,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 3.8655600547790527,
+    "low": 3.8655600547790527,
+    "high": 3.8655600547790527,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.3788159272085187,
+    "low": 0.3788159272085187,
+    "high": 0.3788159272085187,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.11098453402519226,
+    "low": 0.11098453402519226,
+    "high": 0.11098453402519226,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 1.0,
+    "low": 1.0,
+    "high": 1.0,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1318359375,
+    "low": 0.1318359375,
+    "high": 0.1318359375,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.6361607142857143,
+     "low": 0.6361607142857143,
+     "high": 0.6361607142857143,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.08953373015873016,
+     "low": 0.08953373015873016,
+     "high": 0.08953373015873016,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.08953373015873016,
+     "low": 0.08953373015873016,
+     "high": 0.08953373015873016,
+     "runs": 1
+    }
+   }
+  },
+  "equal_dense_parameters": 1927808,
+  "loaded_in_a_one_topic_conversation": 546176.0
+ },
+ "route chosen every token": {
+  "runs": 1,
+  "parameters": {
+   "total": 1934000,
+   "always_loaded": 354992,
+   "per_expert": 32896,
+   "loaded_per_token": 552368,
+   "planner": 0
+  },
+  "share_loaded_per_token": 0.28560910031023784,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.6927490234375,
+    "low": 0.6927490234375,
+    "high": 0.6927490234375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.6927490234375,
+    "low": 0.6927490234375,
+    "high": 0.6927490234375,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 15.93994140625,
+    "low": 15.93994140625,
+    "high": 15.93994140625,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.996935367114788,
+    "low": 0.996935367114788,
+    "high": 0.996935367114788,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.9642651677131653,
+    "low": 0.9642651677131653,
+    "high": 0.9642651677131653,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.16745352745056152,
+    "low": 0.16745352745056152,
+    "high": 0.16745352745056152,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.16260528564453125,
+    "low": 0.16260528564453125,
+    "high": 0.16260528564453125,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.685546875,
+     "low": 0.685546875,
+     "high": 0.685546875,
+     "runs": 1
+    },
+    {
+     "mean": 0.69775390625,
+     "low": 0.69775390625,
+     "high": 0.69775390625,
+     "runs": 1
+    },
+    {
+     "mean": 0.70263671875,
+     "low": 0.70263671875,
+     "high": 0.70263671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.69580078125,
+     "low": 0.69580078125,
+     "high": 0.69580078125,
+     "runs": 1
+    },
+    {
+     "mean": 0.69677734375,
+     "low": 0.69677734375,
+     "high": 0.69677734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.68701171875,
+     "low": 0.68701171875,
+     "high": 0.68701171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.69873046875,
+     "low": 0.69873046875,
+     "high": 0.69873046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.67919921875,
+     "low": 0.67919921875,
+     "high": 0.67919921875,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 4.950892857142857,
+     "low": 4.950892857142857,
+     "high": 4.950892857142857,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 4.047867063492063,
+     "low": 4.047867063492063,
+     "high": 4.047867063492063,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 2.6178075396825395,
+     "low": 2.6178075396825395,
+     "high": 2.6178075396825395,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.68548583984375,
+    "low": 0.68548583984375,
+    "high": 0.68548583984375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.68719482421875,
+    "low": 0.68719482421875,
+    "high": 0.68719482421875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.68377685546875,
+    "low": 0.68377685546875,
+    "high": 0.68377685546875,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 15.957845687866211,
+    "low": 15.957845687866211,
+    "high": 15.957845687866211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.9978488883143743,
+    "low": 0.9978488883143743,
+    "high": 0.9978488883143743,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.9643943309783936,
+    "low": 0.9643943309783936,
+    "high": 0.9643943309783936,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.16222578287124634,
+    "low": 0.16222578287124634,
+    "high": 0.16222578287124634,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1633504331111908,
+    "low": 0.1633504331111908,
+    "high": 0.1633504331111908,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.671875,
+     "low": 0.671875,
+     "high": 0.671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.68408203125,
+     "low": 0.68408203125,
+     "high": 0.68408203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.69970703125,
+     "low": 0.69970703125,
+     "high": 0.69970703125,
+     "runs": 1
+    },
+    {
+     "mean": 0.67431640625,
+     "low": 0.67431640625,
+     "high": 0.67431640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.68212890625,
+     "low": 0.68212890625,
+     "high": 0.68212890625,
+     "runs": 1
+    },
+    {
+     "mean": 0.67578125,
+     "low": 0.67578125,
+     "high": 0.67578125,
+     "runs": 1
+    },
+    {
+     "mean": 0.6826171875,
+     "low": 0.6826171875,
+     "high": 0.6826171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.69970703125,
+     "low": 0.69970703125,
+     "high": 0.69970703125,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.673828125,
+     "low": 0.673828125,
+     "high": 0.673828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.666015625,
+     "low": 0.666015625,
+     "high": 0.666015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.70458984375,
+     "low": 0.70458984375,
+     "high": 0.70458984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.68896484375,
+     "low": 0.68896484375,
+     "high": 0.68896484375,
+     "runs": 1
+    },
+    {
+     "mean": 0.68994140625,
+     "low": 0.68994140625,
+     "high": 0.68994140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.68212890625,
+     "low": 0.68212890625,
+     "high": 0.68212890625,
+     "runs": 1
+    },
+    {
+     "mean": 0.69482421875,
+     "low": 0.69482421875,
+     "high": 0.69482421875,
+     "runs": 1
+    },
+    {
+     "mean": 0.697265625,
+     "low": 0.697265625,
+     "high": 0.697265625,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 4.950644841269841,
+     "low": 4.950644841269841,
+     "high": 4.950644841269841,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 4.036706349206349,
+     "low": 4.036706349206349,
+     "high": 4.036706349206349,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 2.6125992063492065,
+     "low": 2.6125992063492065,
+     "high": 2.6125992063492065,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.682952880859375,
+    "low": 0.682952880859375,
+    "high": 0.682952880859375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.67041015625,
+    "low": 0.67041015625,
+    "high": 0.67041015625,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.6847446986607143,
+    "low": 0.6847446986607143,
+    "high": 0.6847446986607143,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 15.952962875366211,
+    "low": 15.952962875366211,
+    "high": 15.952962875366211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.9975997931747673,
+    "low": 0.9975997931747673,
+    "high": 0.9975997931747673,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.9650918841362,
+    "low": 0.9650918841362,
+    "high": 0.9650918841362,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.15927156805992126,
+    "low": 0.15927156805992126,
+    "high": 0.15927156805992126,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.16368994116783142,
+    "low": 0.16368994116783142,
+    "high": 0.16368994116783142,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.68310546875,
+     "low": 0.68310546875,
+     "high": 0.68310546875,
+     "runs": 1
+    },
+    {
+     "mean": 0.6863839285714286,
+     "low": 0.6863839285714286,
+     "high": 0.6863839285714286,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.658203125,
+     "low": 0.658203125,
+     "high": 0.658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.6826171875,
+     "low": 0.6826171875,
+     "high": 0.6826171875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 4.99578373015873,
+     "low": 4.99578373015873,
+     "high": 4.99578373015873,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 4.096230158730159,
+     "low": 4.096230158730159,
+     "high": 4.096230158730159,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 2.654513888888889,
+     "low": 2.654513888888889,
+     "high": 2.654513888888889,
+     "runs": 1
+    }
+   }
+  },
+  "equal_dense_parameters": 847790.4937269541,
+  "loaded_in_a_one_topic_conversation": 1928073.0
+ },
+ "route from a running average (fade 0.8)": {
+  "runs": 1,
+  "parameters": {
+   "total": 1934000,
+   "always_loaded": 354992,
+   "per_expert": 32896,
+   "loaded_per_token": 552368,
+   "planner": 0
+  },
+  "share_loaded_per_token": 0.28560910031023784,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.762908935546875,
+    "low": 0.762908935546875,
+    "high": 0.762908935546875,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.762908935546875,
+    "low": 0.762908935546875,
+    "high": 0.762908935546875,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 12.614258766174316,
+    "low": 12.614258766174316,
+    "high": 12.614258766174316,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.827232613753878,
+    "low": 0.827232613753878,
+    "high": 0.827232613753878,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.3477337956428528,
+    "low": 0.3477337956428528,
+    "high": 0.3477337956428528,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.19459734857082367,
+    "low": 0.19459734857082367,
+    "high": 0.19459734857082367,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.19137828052043915,
+    "low": 0.19137828052043915,
+    "high": 0.19137828052043915,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.68115234375,
+     "low": 0.68115234375,
+     "high": 0.68115234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.7490234375,
+     "low": 0.7490234375,
+     "high": 0.7490234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.75,
+     "low": 0.75,
+     "high": 0.75,
+     "runs": 1
+    },
+    {
+     "mean": 0.75927734375,
+     "low": 0.75927734375,
+     "high": 0.75927734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.759765625,
+     "low": 0.759765625,
+     "high": 0.759765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.75537109375,
+     "low": 0.75537109375,
+     "high": 0.75537109375,
+     "runs": 1
+    },
+    {
+     "mean": 0.7783203125,
+     "low": 0.7783203125,
+     "high": 0.7783203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.76025390625,
+     "low": 0.76025390625,
+     "high": 0.76025390625,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.3668154761904763,
+     "low": 1.3668154761904763,
+     "high": 1.3668154761904763,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.9392361111111112,
+     "low": 0.9392361111111112,
+     "high": 0.9392361111111112,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.6517857142857143,
+     "low": 0.6517857142857143,
+     "high": 0.6517857142857143,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.729644775390625,
+    "low": 0.729644775390625,
+    "high": 0.729644775390625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.74432373046875,
+    "low": 0.74432373046875,
+    "high": 0.74432373046875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.7149658203125,
+    "low": 0.7149658203125,
+    "high": 0.7149658203125,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 12.63671875,
+    "low": 12.63671875,
+    "high": 12.63671875,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.8283787487073423,
+    "low": 0.8283787487073423,
+    "high": 0.8283787487073423,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.3474392890930176,
+    "low": 0.3474392890930176,
+    "high": 0.3474392890930176,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.19451037049293518,
+    "low": 0.19451037049293518,
+    "high": 0.19451037049293518,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1916351318359375,
+    "low": 0.1916351318359375,
+    "high": 0.1916351318359375,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.68017578125,
+     "low": 0.68017578125,
+     "high": 0.68017578125,
+     "runs": 1
+    },
+    {
+     "mean": 0.6923828125,
+     "low": 0.6923828125,
+     "high": 0.6923828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.7158203125,
+     "low": 0.7158203125,
+     "high": 0.7158203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.708984375,
+     "low": 0.708984375,
+     "high": 0.708984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.701171875,
+     "low": 0.701171875,
+     "high": 0.701171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.72802734375,
+     "low": 0.72802734375,
+     "high": 0.72802734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.75146484375,
+     "low": 0.75146484375,
+     "high": 0.75146484375,
+     "runs": 1
+    },
+    {
+     "mean": 0.74169921875,
+     "low": 0.74169921875,
+     "high": 0.74169921875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6806640625,
+     "low": 0.6806640625,
+     "high": 0.6806640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.7333984375,
+     "low": 0.7333984375,
+     "high": 0.7333984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.7490234375,
+     "low": 0.7490234375,
+     "high": 0.7490234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.73583984375,
+     "low": 0.73583984375,
+     "high": 0.73583984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.7529296875,
+     "low": 0.7529296875,
+     "high": 0.7529296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.75,
+     "low": 0.75,
+     "high": 0.75,
+     "runs": 1
+    },
+    {
+     "mean": 0.779296875,
+     "low": 0.779296875,
+     "high": 0.779296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.7734375,
+     "low": 0.7734375,
+     "high": 0.7734375,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.3487103174603174,
+     "low": 1.3487103174603174,
+     "high": 1.3487103174603174,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.9074900793650794,
+     "low": 0.9074900793650794,
+     "high": 0.9074900793650794,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.6408730158730159,
+     "low": 0.6408730158730159,
+     "high": 0.6408730158730159,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.71600341796875,
+    "low": 0.71600341796875,
+    "high": 0.71600341796875,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.69677734375,
+    "low": 0.69677734375,
+    "high": 0.69677734375,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.71875,
+    "low": 0.71875,
+    "high": 0.71875,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 12.626465797424316,
+    "low": 12.626465797424316,
+    "high": 12.626465797424316,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.827855480868666,
+    "low": 0.827855480868666,
+    "high": 0.827855480868666,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.34749868512153625,
+    "low": 0.34749868512153625,
+    "high": 0.34749868512153625,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.1941237449645996,
+    "low": 0.1941237449645996,
+    "high": 0.1941237449645996,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.191192626953125,
+    "low": 0.191192626953125,
+    "high": 0.191192626953125,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.7114955357142857,
+     "low": 0.7114955357142857,
+     "high": 0.7114955357142857,
+     "runs": 1
+    },
+    {
+     "mean": 0.7260044642857143,
+     "low": 0.7260044642857143,
+     "high": 0.7260044642857143,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6611328125,
+     "low": 0.6611328125,
+     "high": 0.6611328125,
+     "runs": 1
+    },
+    {
+     "mean": 0.732421875,
+     "low": 0.732421875,
+     "high": 0.732421875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.3407738095238095,
+     "low": 1.3407738095238095,
+     "high": 1.3407738095238095,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.9119543650793651,
+     "low": 0.9119543650793651,
+     "high": 0.9119543650793651,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.6483134920634921,
+     "low": 0.6483134920634921,
+     "high": 0.6483134920634921,
+     "runs": 1
+    }
+   }
+  },
+  "equal_dense_parameters": 1054447.0376815388,
+  "loaded_in_a_one_topic_conversation": 1599867.875
+ },
+ "route from a running average (fade 0.9)": {
+  "runs": 1,
+  "parameters": {
+   "total": 1934000,
+   "always_loaded": 354992,
+   "per_expert": 32896,
+   "loaded_per_token": 552368,
+   "planner": 0
+  },
+  "share_loaded_per_token": 0.28560910031023784,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.660064697265625,
+    "low": 0.660064697265625,
+    "high": 0.660064697265625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.660064697265625,
+    "low": 0.660064697265625,
+    "high": 0.660064697265625,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 11.097005844116211,
+    "low": 11.097005844116211,
+    "high": 11.097005844116211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.749810367114788,
+    "low": 0.749810367114788,
+    "high": 0.749810367114788,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.5107913017272949,
+    "low": 0.5107913017272949,
+    "high": 0.5107913017272949,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.2753438651561737,
+    "low": 0.2753438651561737,
+    "high": 0.2753438651561737,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.2721672058105469,
+    "low": 0.2721672058105469,
+    "high": 0.2721672058105469,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.66064453125,
+     "low": 0.66064453125,
+     "high": 0.66064453125,
+     "runs": 1
+    },
+    {
+     "mean": 0.67919921875,
+     "low": 0.67919921875,
+     "high": 0.67919921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.67138671875,
+     "low": 0.67138671875,
+     "high": 0.67138671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.65625,
+     "low": 0.65625,
+     "high": 0.65625,
+     "runs": 1
+    },
+    {
+     "mean": 0.6640625,
+     "low": 0.6640625,
+     "high": 0.6640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.66357421875,
+     "low": 0.66357421875,
+     "high": 0.66357421875,
+     "runs": 1
+    },
+    {
+     "mean": 0.65869140625,
+     "low": 0.65869140625,
+     "high": 0.65869140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.64501953125,
+     "low": 0.64501953125,
+     "high": 0.64501953125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.8752480158730158,
+     "low": 1.8752480158730158,
+     "high": 1.8752480158730158,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.7576884920634921,
+     "low": 0.7576884920634921,
+     "high": 0.7576884920634921,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.47346230158730157,
+     "low": 0.47346230158730157,
+     "high": 0.47346230158730157,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.662445068359375,
+    "low": 0.662445068359375,
+    "high": 0.662445068359375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.66473388671875,
+    "low": 0.66473388671875,
+    "high": 0.66473388671875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.66015625,
+    "low": 0.66015625,
+    "high": 0.66015625,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 11.141927719116211,
+    "low": 11.141927719116211,
+    "high": 11.141927719116211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.7521026370217166,
+    "low": 0.7521026370217166,
+    "high": 0.7521026370217166,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.512462854385376,
+    "low": 0.512462854385376,
+    "high": 0.512462854385376,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.2747226357460022,
+    "low": 0.2747226357460022,
+    "high": 0.2747226357460022,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.2729594111442566,
+    "low": 0.2729594111442566,
+    "high": 0.2729594111442566,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6572265625,
+     "low": 0.6572265625,
+     "high": 0.6572265625,
+     "runs": 1
+    },
+    {
+     "mean": 0.6552734375,
+     "low": 0.6552734375,
+     "high": 0.6552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.6611328125,
+     "low": 0.6611328125,
+     "high": 0.6611328125,
+     "runs": 1
+    },
+    {
+     "mean": 0.6748046875,
+     "low": 0.6748046875,
+     "high": 0.6748046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.6484375,
+     "low": 0.6484375,
+     "high": 0.6484375,
+     "runs": 1
+    },
+    {
+     "mean": 0.66259765625,
+     "low": 0.66259765625,
+     "high": 0.66259765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.654296875,
+     "low": 0.654296875,
+     "high": 0.654296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.66748046875,
+     "low": 0.66748046875,
+     "high": 0.66748046875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.67919921875,
+     "low": 0.67919921875,
+     "high": 0.67919921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.6669921875,
+     "low": 0.6669921875,
+     "high": 0.6669921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.6630859375,
+     "low": 0.6630859375,
+     "high": 0.6630859375,
+     "runs": 1
+    },
+    {
+     "mean": 0.65380859375,
+     "low": 0.65380859375,
+     "high": 0.65380859375,
+     "runs": 1
+    },
+    {
+     "mean": 0.6533203125,
+     "low": 0.6533203125,
+     "high": 0.6533203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.6640625,
+     "low": 0.6640625,
+     "high": 0.6640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.6728515625,
+     "low": 0.6728515625,
+     "high": 0.6728515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.66455078125,
+     "low": 0.66455078125,
+     "high": 0.66455078125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.9020337301587302,
+     "low": 1.9020337301587302,
+     "high": 1.9020337301587302,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.7782738095238095,
+     "low": 0.7782738095238095,
+     "high": 0.7782738095238095,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.48933531746031744,
+     "low": 0.48933531746031744,
+     "high": 0.48933531746031744,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.66265869140625,
+    "low": 0.66265869140625,
+    "high": 0.66265869140625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.66943359375,
+    "low": 0.66943359375,
+    "high": 0.66943359375,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.6616908482142857,
+    "low": 0.6616908482142857,
+    "high": 0.6616908482142857,
+    "runs": 1
+   },
+   "guess_right": null,
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 11.163900375366211,
+    "low": 11.163900375366211,
+    "high": 11.163900375366211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.7532238883143744,
+    "low": 0.7532238883143744,
+    "high": 0.7532238883143744,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.5116438865661621,
+    "low": 0.5116438865661621,
+    "high": 0.5116438865661621,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.2748604118824005,
+    "low": 0.2748604118824005,
+    "high": 0.2748604118824005,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.2736320495605469,
+    "low": 0.2736320495605469,
+    "high": 0.2736320495605469,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6600864955357143,
+     "low": 0.6600864955357143,
+     "high": 0.6600864955357143,
+     "runs": 1
+    },
+    {
+     "mean": 0.6632952008928571,
+     "low": 0.6632952008928571,
+     "high": 0.6632952008928571,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6708984375,
+     "low": 0.6708984375,
+     "high": 0.6708984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.66796875,
+     "low": 0.66796875,
+     "high": 0.66796875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.8864087301587302,
+     "low": 1.8864087301587302,
+     "high": 1.8864087301587302,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.7797619047619048,
+     "low": 0.7797619047619048,
+     "high": 0.7797619047619048,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.49503968253968256,
+     "low": 0.49503968253968256,
+     "high": 0.49503968253968256,
+     "runs": 1
+    }
+   }
+  },
+  "equal_dense_parameters": 765870.2914987996,
+  "loaded_in_a_one_topic_conversation": 1450133.25
+ },
+ "route from the planner's guess (16 guesses)": {
+  "runs": 1,
+  "parameters": {
+   "total": 2005488,
+   "always_loaded": 426480,
+   "per_expert": 32896,
+   "loaded_per_token": 623856,
+   "planner": 77680
+  },
+  "share_loaded_per_token": 0.31107441181398243,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.97705078125,
+    "low": 0.97705078125,
+    "high": 0.97705078125,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.97705078125,
+    "low": 0.97705078125,
+    "high": 0.97705078125,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": {
+    "mean": 0.976837158203125,
+    "low": 0.976837158203125,
+    "high": 0.976837158203125,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 3.07958984375,
+    "low": 3.07958984375,
+    "high": 3.07958984375,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.36419991667863383,
+    "low": 0.36419991667863383,
+    "high": 0.36419991667863383,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.014400424435734749,
+    "low": 0.014400424435734749,
+    "high": 0.014400424435734749,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.9781208038330078,
+    "low": 0.9781208038330078,
+    "high": 0.9781208038330078,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.13416290283203125,
+    "low": 0.13416290283203125,
+    "high": 0.13416290283203125,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.669921875,
+     "low": 0.669921875,
+     "high": 0.669921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.966796875,
+     "low": 0.966796875,
+     "high": 0.966796875,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.66552734375,
+     "low": 0.66552734375,
+     "high": 0.66552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9658203125,
+     "low": 0.9658203125,
+     "high": 0.9658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.08382936507936507,
+     "low": 0.08382936507936507,
+     "high": 0.08382936507936507,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.052083333333333336,
+     "low": 0.052083333333333336,
+     "high": 0.052083333333333336,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.05084325396825397,
+     "low": 0.05084325396825397,
+     "high": 0.05084325396825397,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.952972412109375,
+    "low": 0.952972412109375,
+    "high": 0.952972412109375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.95404052734375,
+    "low": 0.95404052734375,
+    "high": 0.95404052734375,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.951904296875,
+    "low": 0.951904296875,
+    "high": 0.951904296875,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.952301025390625,
+    "low": 0.952301025390625,
+    "high": 0.952301025390625,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 5.41015625,
+    "low": 5.41015625,
+    "high": 5.41015625,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.4788846904095163,
+    "low": 0.4788846904095163,
+    "high": 0.4788846904095163,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.0383494608104229,
+    "low": 0.0383494608104229,
+    "high": 0.0383494608104229,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.9549498558044434,
+    "low": 0.9549498558044434,
+    "high": 0.9549498558044434,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1328531950712204,
+    "low": 0.1328531950712204,
+    "high": 0.1328531950712204,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.65283203125,
+     "low": 0.65283203125,
+     "high": 0.65283203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.96533203125,
+     "low": 0.96533203125,
+     "high": 0.96533203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9970703125,
+     "low": 0.9970703125,
+     "high": 0.9970703125,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6689453125,
+     "low": 0.6689453125,
+     "high": 0.6689453125,
+     "runs": 1
+    },
+    {
+     "mean": 0.96923828125,
+     "low": 0.96923828125,
+     "high": 0.96923828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.99609375,
+     "low": 0.99609375,
+     "high": 0.99609375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.666015625,
+     "low": 0.666015625,
+     "high": 0.666015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.96875,
+     "low": 0.96875,
+     "high": 0.96875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99658203125,
+     "low": 0.99658203125,
+     "high": 0.99658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.64501953125,
+     "low": 0.64501953125,
+     "high": 0.64501953125,
+     "runs": 1
+    },
+    {
+     "mean": 0.96533203125,
+     "low": 0.96533203125,
+     "high": 0.96533203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9970703125,
+     "low": 0.9970703125,
+     "high": 0.9970703125,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.21081349206349206,
+     "low": 0.21081349206349206,
+     "high": 0.21081349206349206,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.16964285714285715,
+     "low": 0.16964285714285715,
+     "high": 0.16964285714285715,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.16493055555555555,
+     "low": 0.16493055555555555,
+     "high": 0.16493055555555555,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.8187255859375,
+    "low": 0.8187255859375,
+    "high": 0.8187255859375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.82470703125,
+    "low": 0.82470703125,
+    "high": 0.82470703125,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.81787109375,
+    "low": 0.81787109375,
+    "high": 0.81787109375,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.815338134765625,
+    "low": 0.815338134765625,
+    "high": 0.815338134765625,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 8.138021469116211,
+    "low": 8.138021469116211,
+    "high": 8.138021469116211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.6131200984498536,
+    "low": 0.6131200984498536,
+    "high": 0.6131200984498536,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.17083904147148132,
+    "low": 0.17083904147148132,
+    "high": 0.17083904147148132,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.823637843132019,
+    "low": 0.823637843132019,
+    "high": 0.823637843132019,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.1321767270565033,
+    "low": 0.1321767270565033,
+    "high": 0.1321767270565033,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6705496651785714,
+     "low": 0.6705496651785714,
+     "high": 0.6705496651785714,
+     "runs": 1
+    },
+    {
+     "mean": 0.9651925223214286,
+     "low": 0.9651925223214286,
+     "high": 0.9651925223214286,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.67529296875,
+     "low": 0.67529296875,
+     "high": 0.67529296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.97412109375,
+     "low": 0.97412109375,
+     "high": 0.97412109375,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.671875,
+     "low": 0.671875,
+     "high": 0.671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.97216796875,
+     "low": 0.97216796875,
+     "high": 0.97216796875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.6640625,
+     "low": 0.6640625,
+     "high": 0.6640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9647042410714286,
+     "low": 0.9647042410714286,
+     "high": 0.9647042410714286,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.9990079365079365,
+     "low": 0.9990079365079365,
+     "high": 0.9990079365079365,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.5877976190476191,
+     "low": 0.5877976190476191,
+     "high": 0.5877976190476191,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.30481150793650796,
+     "low": 0.30481150793650796,
+     "high": 0.30481150793650796,
+     "runs": 1
+    }
+   }
+  },
+  "planner": {
+   "guesses_in_use": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   },
+   "topics_with_a_guess": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   }
+  },
+  "equal_dense_parameters": 1927808,
+  "loaded_in_a_one_topic_conversation": 730398.5625
+ },
+ "route from the planner's guess (16 guesses), second guess too above 0.2": {
+  "runs": 1,
+  "parameters": {
+   "total": 2005488,
+   "always_loaded": 426480,
+   "per_expert": 32896,
+   "loaded_per_token": 623856,
+   "planner": 77680
+  },
+  "share_loaded_per_token": 0.31107441181398243,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.97650146484375,
+    "low": 0.97650146484375,
+    "high": 0.97650146484375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.97650146484375,
+    "low": 0.97650146484375,
+    "high": 0.97650146484375,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": {
+    "mean": 0.976837158203125,
+    "low": 0.976837158203125,
+    "high": 0.976837158203125,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.0780463218688965,
+    "low": 2.0780463218688965,
+    "high": 2.0780463218688965,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 3.5255534648895264,
+    "low": 3.5255534648895264,
+    "high": 3.5255534648895264,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.3861453234823644,
+    "low": 0.3861453234823644,
+    "high": 0.3861453234823644,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.014942958950996399,
+    "low": 0.014942958950996399,
+    "high": 0.014942958950996399,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.9946808218955994,
+    "low": 0.9946808218955994,
+    "high": 0.9946808218955994,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.13863754272460938,
+    "low": 0.13863754272460938,
+    "high": 0.13863754272460938,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.67041015625,
+     "low": 0.67041015625,
+     "high": 0.67041015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9619140625,
+     "low": 0.9619140625,
+     "high": 0.9619140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99462890625,
+     "low": 0.99462890625,
+     "high": 0.99462890625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.66552734375,
+     "low": 0.66552734375,
+     "high": 0.66552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9658203125,
+     "low": 0.9658203125,
+     "high": 0.9658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.3663194444444444,
+     "low": 0.3663194444444444,
+     "high": 0.3663194444444444,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.033234126984126984,
+     "low": 0.033234126984126984,
+     "high": 0.033234126984126984,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.016865079365079364,
+     "low": 0.016865079365079364,
+     "high": 0.016865079365079364,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.95050048828125,
+    "low": 0.95050048828125,
+    "high": 0.95050048828125,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.95458984375,
+    "low": 0.95458984375,
+    "high": 0.95458984375,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.9464111328125,
+    "low": 0.9464111328125,
+    "high": 0.9464111328125,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.952301025390625,
+    "low": 0.952301025390625,
+    "high": 0.952301025390625,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.1415252685546875,
+    "low": 2.1415252685546875,
+    "high": 2.1415252685546875,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 6.162923336029053,
+    "low": 6.162923336029053,
+    "high": 6.162923336029053,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.5159275759815067,
+    "low": 0.5159275759815067,
+    "high": 0.5159275759815067,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.0419534407556057,
+    "low": 0.0419534407556057,
+    "high": 0.0419534407556057,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.984993577003479,
+    "low": 0.984993577003479,
+    "high": 0.984993577003479,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.14151892066001892,
+    "low": 0.14151892066001892,
+    "high": 0.14151892066001892,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6318359375,
+     "low": 0.6318359375,
+     "high": 0.6318359375,
+     "runs": 1
+    },
+    {
+     "mean": 0.95068359375,
+     "low": 0.95068359375,
+     "high": 0.95068359375,
+     "runs": 1
+    },
+    {
+     "mean": 0.990234375,
+     "low": 0.990234375,
+     "high": 0.990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6826171875,
+     "low": 0.6826171875,
+     "high": 0.6826171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96484375,
+     "low": 0.96484375,
+     "high": 0.96484375,
+     "runs": 1
+    },
+    {
+     "mean": 0.994140625,
+     "low": 0.994140625,
+     "high": 0.994140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.666015625,
+     "low": 0.666015625,
+     "high": 0.666015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.96875,
+     "low": 0.96875,
+     "high": 0.96875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99658203125,
+     "low": 0.99658203125,
+     "high": 0.99658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.64501953125,
+     "low": 0.64501953125,
+     "high": 0.64501953125,
+     "runs": 1
+    },
+    {
+     "mean": 0.96533203125,
+     "low": 0.96533203125,
+     "high": 0.96533203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9970703125,
+     "low": 0.9970703125,
+     "high": 0.9970703125,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.9565972222222222,
+     "low": 0.9565972222222222,
+     "high": 0.9565972222222222,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.1847718253968254,
+     "low": 0.1847718253968254,
+     "high": 0.1847718253968254,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.1480654761904762,
+     "low": 0.1480654761904762,
+     "high": 0.1480654761904762,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.799530029296875,
+    "low": 0.799530029296875,
+    "high": 0.799530029296875,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.818603515625,
+    "low": 0.818603515625,
+    "high": 0.818603515625,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.7968052455357143,
+    "low": 0.7968052455357143,
+    "high": 0.7968052455357143,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.815338134765625,
+    "low": 0.815338134765625,
+    "high": 0.815338134765625,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.4896292686462402,
+    "low": 2.4896292686462402,
+    "high": 2.4896292686462402,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 10.064291000366211,
+    "low": 10.064291000366211,
+    "high": 10.064291000366211,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.7079098703158533,
+    "low": 0.7079098703158533,
+    "high": 0.7079098703158533,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.18815624713897705,
+    "low": 0.18815624713897705,
+    "high": 0.18815624713897705,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.9270398020744324,
+    "low": 0.9270398020744324,
+    "high": 0.9270398020744324,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.16335932910442352,
+    "low": 0.16335932910442352,
+    "high": 0.16335932910442352,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6444614955357143,
+     "low": 0.6444614955357143,
+     "high": 0.6444614955357143,
+     "runs": 1
+    },
+    {
+     "mean": 0.9491489955357143,
+     "low": 0.9491489955357143,
+     "high": 0.9491489955357143,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.669921875,
+     "low": 0.669921875,
+     "high": 0.669921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96728515625,
+     "low": 0.96728515625,
+     "high": 0.96728515625,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.671875,
+     "low": 0.671875,
+     "high": 0.671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.97216796875,
+     "low": 0.97216796875,
+     "high": 0.97216796875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.6640625,
+     "low": 0.6640625,
+     "high": 0.6640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9647042410714286,
+     "low": 0.9647042410714286,
+     "high": 0.9647042410714286,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 3.398561507936508,
+     "low": 3.398561507936508,
+     "high": 3.398561507936508,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.8236607142857143,
+     "low": 0.8236607142857143,
+     "high": 0.8236607142857143,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.36929563492063494,
+     "low": 0.36929563492063494,
+     "high": 0.36929563492063494,
+     "runs": 1
+    }
+   }
+  },
+  "planner": {
+   "guesses_in_use": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   },
+   "topics_with_a_guess": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   }
+  },
+  "equal_dense_parameters": 1927808,
+  "loaded_in_a_one_topic_conversation": 774409.8125
+ },
+ "route from the planner's guess (32 guesses)": {
+  "runs": 1,
+  "parameters": {
+   "total": 2016864,
+   "always_loaded": 437856,
+   "per_expert": 32896,
+   "loaded_per_token": 635232,
+   "planner": 89056
+  },
+  "share_loaded_per_token": 0.31496025512875436,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.95855712890625,
+    "low": 0.95855712890625,
+    "high": 0.95855712890625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.95855712890625,
+    "low": 0.95855712890625,
+    "high": 0.95855712890625,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": {
+    "mean": 0.97601318359375,
+    "low": 0.97601318359375,
+    "high": 0.97601318359375,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 4.7877607345581055,
+    "low": 4.7877607345581055,
+    "high": 4.7877607345581055,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.4513693040284323,
+    "low": 0.4513693040284323,
+    "high": 0.4513693040284323,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.2753777503967285,
+    "low": 0.2753777503967285,
+    "high": 0.2753777503967285,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.5659937262535095,
+    "low": 0.5659937262535095,
+    "high": 0.5659937262535095,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.15020498633384705,
+    "low": 0.15020498633384705,
+    "high": 0.15020498633384705,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.64404296875,
+     "low": 0.64404296875,
+     "high": 0.64404296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.931640625,
+     "low": 0.931640625,
+     "high": 0.931640625,
+     "runs": 1
+    },
+    {
+     "mean": 0.97705078125,
+     "low": 0.97705078125,
+     "high": 0.97705078125,
+     "runs": 1
+    },
+    {
+     "mean": 0.98486328125,
+     "low": 0.98486328125,
+     "high": 0.98486328125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9833984375,
+     "low": 0.9833984375,
+     "high": 0.9833984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.98583984375,
+     "low": 0.98583984375,
+     "high": 0.98583984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.98193359375,
+     "low": 0.98193359375,
+     "high": 0.98193359375,
+     "runs": 1
+    },
+    {
+     "mean": 0.98388671875,
+     "low": 0.98388671875,
+     "high": 0.98388671875,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.6552734375,
+     "low": 0.6552734375,
+     "high": 0.6552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9638671875,
+     "low": 0.9638671875,
+     "high": 0.9638671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9970703125,
+     "low": 0.9970703125,
+     "high": 0.9970703125,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.5602678571428572,
+     "low": 1.5602678571428572,
+     "high": 1.5602678571428572,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.13541666666666666,
+     "low": 0.13541666666666666,
+     "high": 0.13541666666666666,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.1277281746031746,
+     "low": 0.1277281746031746,
+     "high": 0.1277281746031746,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.9307861328125,
+    "low": 0.9307861328125,
+    "high": 0.9307861328125,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.9344482421875,
+    "low": 0.9344482421875,
+    "high": 0.9344482421875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.9271240234375,
+    "low": 0.9271240234375,
+    "high": 0.9271240234375,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.952911376953125,
+    "low": 0.952911376953125,
+    "high": 0.952911376953125,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 8.162109375,
+    "low": 8.162109375,
+    "high": 8.162109375,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.6164809575658051,
+    "low": 0.6164809575658051,
+    "high": 0.6164809575658051,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.2829654812812805,
+    "low": 0.2829654812812805,
+    "high": 0.2829654812812805,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.5464451313018799,
+    "low": 0.5464451313018799,
+    "high": 0.5464451313018799,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.14908091723918915,
+    "low": 0.14908091723918915,
+    "high": 0.14908091723918915,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.60693359375,
+     "low": 0.60693359375,
+     "high": 0.60693359375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9208984375,
+     "low": 0.9208984375,
+     "high": 0.9208984375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9765625,
+     "low": 0.9765625,
+     "high": 0.9765625,
+     "runs": 1
+    },
+    {
+     "mean": 0.97802734375,
+     "low": 0.97802734375,
+     "high": 0.97802734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.9853515625,
+     "low": 0.9853515625,
+     "high": 0.9853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9853515625,
+     "low": 0.9853515625,
+     "high": 0.9853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9814453125,
+     "low": 0.9814453125,
+     "high": 0.9814453125,
+     "runs": 1
+    },
+    {
+     "mean": 0.982421875,
+     "low": 0.982421875,
+     "high": 0.982421875,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6513671875,
+     "low": 0.6513671875,
+     "high": 0.6513671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9404296875,
+     "low": 0.9404296875,
+     "high": 0.9404296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96923828125,
+     "low": 0.96923828125,
+     "high": 0.96923828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9775390625,
+     "low": 0.9775390625,
+     "high": 0.9775390625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9853515625,
+     "low": 0.9853515625,
+     "high": 0.9853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.98291015625,
+     "low": 0.98291015625,
+     "high": 0.98291015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.982421875,
+     "low": 0.982421875,
+     "high": 0.982421875,
+     "runs": 1
+    },
+    {
+     "mean": 0.986328125,
+     "low": 0.986328125,
+     "high": 0.986328125,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.662109375,
+     "low": 0.662109375,
+     "high": 0.662109375,
+     "runs": 1
+    },
+    {
+     "mean": 0.97119140625,
+     "low": 0.97119140625,
+     "high": 0.97119140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99609375,
+     "low": 0.99609375,
+     "high": 0.99609375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.65673828125,
+     "low": 0.65673828125,
+     "high": 0.65673828125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9638671875,
+     "low": 0.9638671875,
+     "high": 0.9638671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.601686507936508,
+     "low": 1.601686507936508,
+     "high": 1.601686507936508,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.33209325396825395,
+     "low": 0.33209325396825395,
+     "high": 0.33209325396825395,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.30282738095238093,
+     "low": 0.30282738095238093,
+     "high": 0.30282738095238093,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.7750244140625,
+    "low": 0.7750244140625,
+    "high": 0.7750244140625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.79638671875,
+    "low": 0.79638671875,
+    "high": 0.79638671875,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.77197265625,
+    "low": 0.77197265625,
+    "high": 0.77197265625,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.813568115234375,
+    "low": 0.813568115234375,
+    "high": 0.813568115234375,
+    "runs": 1
+   },
+   "experts_in_use_per_token": null,
+   "experts_touched_per_block": {
+    "mean": 10.35498046875,
+    "low": 10.35498046875,
+    "high": 10.35498046875,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.7237812019055325,
+    "low": 0.7237812019055325,
+    "high": 0.7237812019055325,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.3301117420196533,
+    "low": 0.3301117420196533,
+    "high": 0.3301117420196533,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.4893847405910492,
+    "low": 0.4893847405910492,
+    "high": 0.4893847405910492,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.14341354370117188,
+    "low": 0.14341354370117188,
+    "high": 0.14341354370117188,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.6176060267857143,
+     "low": 0.6176060267857143,
+     "high": 0.6176060267857143,
+     "runs": 1
+    },
+    {
+     "mean": 0.9263392857142857,
+     "low": 0.9263392857142857,
+     "high": 0.9263392857142857,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.64892578125,
+     "low": 0.64892578125,
+     "high": 0.64892578125,
+     "runs": 1
+    },
+    {
+     "mean": 0.94384765625,
+     "low": 0.94384765625,
+     "high": 0.94384765625,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.6669921875,
+     "low": 0.6669921875,
+     "high": 0.6669921875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96923828125,
+     "low": 0.96923828125,
+     "high": 0.96923828125,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.6610630580357143,
+     "low": 0.6610630580357143,
+     "high": 0.6610630580357143,
+     "runs": 1
+    },
+    {
+     "mean": 0.9647739955357143,
+     "low": 0.9647739955357143,
+     "high": 0.9647739955357143,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 1.8452380952380953,
+     "low": 1.8452380952380953,
+     "high": 1.8452380952380953,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 1.216765873015873,
+     "low": 1.216765873015873,
+     "high": 1.216765873015873,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.5347222222222222,
+     "low": 0.5347222222222222,
+     "high": 0.5347222222222222,
+     "runs": 1
+    }
+   }
+  },
+  "planner": {
+   "guesses_in_use": {
+    "mean": 32.0,
+    "low": 32,
+    "high": 32,
+    "runs": 1
+   },
+   "topics_with_a_guess": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   }
+  },
+  "equal_dense_parameters": 1927808,
+  "loaded_in_a_one_topic_conversation": 910350.5
+ },
+ "route from the planner's guess (32 guesses, evenness 0.1)": {
+  "runs": 1,
+  "parameters": {
+   "total": 2016864,
+   "always_loaded": 437856,
+   "per_expert": 32896,
+   "loaded_per_token": 635232,
+   "planner": 89056
+  },
+  "share_loaded_per_token": 0.31496025512875436,
+  "one_topic": {
+   "accuracy": {
+    "mean": 0.975738525390625,
+    "low": 0.975738525390625,
+    "high": 0.975738525390625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.975738525390625,
+    "low": 0.975738525390625,
+    "high": 0.975738525390625,
+    "runs": 1
+   },
+   "later_segments": null,
+   "guess_right": {
+    "mean": 0.977630615234375,
+    "low": 0.977630615234375,
+    "high": 0.977630615234375,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 3.2970380783081055,
+    "low": 3.2970380783081055,
+    "high": 3.2970380783081055,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.3784261420204833,
+    "low": 0.3784261420204833,
+    "high": 0.3784261420204833,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.030511124059557915,
+    "low": 0.030511124059557915,
+    "high": 0.030511124059557915,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.9576854109764099,
+    "low": 0.9576854109764099,
+    "high": 0.9576854109764099,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.2025299072265625,
+    "low": 0.2025299072265625,
+    "high": 0.2025299072265625,
+    "runs": 1
+   },
+   "after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6767578125,
+     "low": 0.6767578125,
+     "high": 0.6767578125,
+     "runs": 1
+    },
+    {
+     "mean": 0.9609375,
+     "low": 0.9609375,
+     "high": 0.9609375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99755859375,
+     "low": 0.99755859375,
+     "high": 0.99755859375,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99658203125,
+     "low": 0.99658203125,
+     "high": 0.99658203125,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.67529296875,
+     "low": 0.67529296875,
+     "high": 0.67529296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.96826171875,
+     "low": 0.96826171875,
+     "high": 0.96826171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.1892361111111111,
+     "low": 0.1892361111111111,
+     "high": 0.1892361111111111,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.057787698412698416,
+     "low": 0.057787698412698416,
+     "high": 0.057787698412698416,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.05654761904761905,
+     "low": 0.05654761904761905,
+     "high": 0.05654761904761905,
+     "runs": 1
+    }
+   }
+  },
+  "one_switch": {
+   "accuracy": {
+    "mean": 0.950347900390625,
+    "low": 0.950347900390625,
+    "high": 0.950347900390625,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.95355224609375,
+    "low": 0.95355224609375,
+    "high": 0.95355224609375,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.9471435546875,
+    "low": 0.9471435546875,
+    "high": 0.9471435546875,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.951812744140625,
+    "low": 0.951812744140625,
+    "high": 0.951812744140625,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 5.7578125,
+    "low": 5.7578125,
+    "high": 5.7578125,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.4988353205768956,
+    "low": 0.4988353205768956,
+    "high": 0.4988353205768956,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.05313482508063316,
+    "low": 0.05313482508063316,
+    "high": 0.05313482508063316,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.934627890586853,
+    "low": 0.934627890586853,
+    "high": 0.934627890586853,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.20443598926067352,
+    "low": 0.20443598926067352,
+    "high": 0.20443598926067352,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.630859375,
+     "low": 0.630859375,
+     "high": 0.630859375,
+     "runs": 1
+    },
+    {
+     "mean": 0.95654296875,
+     "low": 0.95654296875,
+     "high": 0.95654296875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9951171875,
+     "low": 0.9951171875,
+     "high": 0.9951171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    }
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6728515625,
+     "low": 0.6728515625,
+     "high": 0.6728515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.966796875,
+     "low": 0.966796875,
+     "high": 0.966796875,
+     "runs": 1
+    },
+    {
+     "mean": 0.99462890625,
+     "low": 0.99462890625,
+     "high": 0.99462890625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 0.9990234375,
+     "low": 0.9990234375,
+     "high": 0.9990234375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99853515625,
+     "low": 0.99853515625,
+     "high": 0.99853515625,
+     "runs": 1
+    },
+    {
+     "mean": 0.998046875,
+     "low": 0.998046875,
+     "high": 0.998046875,
+     "runs": 1
+    }
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.66552734375,
+     "low": 0.66552734375,
+     "high": 0.66552734375,
+     "runs": 1
+    },
+    {
+     "mean": 0.97119140625,
+     "low": 0.97119140625,
+     "high": 0.97119140625,
+     "runs": 1
+    },
+    {
+     "mean": 0.99609375,
+     "low": 0.99609375,
+     "high": 0.99609375,
+     "runs": 1
+    },
+    {
+     "mean": 0.99951171875,
+     "low": 0.99951171875,
+     "high": 0.99951171875,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.63671875,
+     "low": 0.63671875,
+     "high": 0.63671875,
+     "runs": 1
+    },
+    {
+     "mean": 0.962890625,
+     "low": 0.962890625,
+     "high": 0.962890625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9970703125,
+     "low": 0.9970703125,
+     "high": 0.9970703125,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    },
+    {
+     "mean": 1.0,
+     "low": 1.0,
+     "high": 1.0,
+     "runs": 1
+    }
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.34151785714285715,
+     "low": 0.34151785714285715,
+     "high": 0.34151785714285715,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.1902281746031746,
+     "low": 0.1902281746031746,
+     "high": 0.1902281746031746,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.17981150793650794,
+     "low": 0.17981150793650794,
+     "high": 0.17981150793650794,
+     "runs": 1
+    }
+   }
+  },
+  "taking_turns": {
+   "accuracy": {
+    "mean": 0.806488037109375,
+    "low": 0.806488037109375,
+    "high": 0.806488037109375,
+    "runs": 1
+   },
+   "first_segment": {
+    "mean": 0.82080078125,
+    "low": 0.82080078125,
+    "high": 0.82080078125,
+    "runs": 1
+   },
+   "later_segments": {
+    "mean": 0.804443359375,
+    "low": 0.804443359375,
+    "high": 0.804443359375,
+    "runs": 1
+   },
+   "guess_right": {
+    "mean": 0.812347412109375,
+    "low": 0.812347412109375,
+    "high": 0.812347412109375,
+    "runs": 1
+   },
+   "experts_in_use_per_token": {
+    "mean": 2.0,
+    "low": 2.0,
+    "high": 2.0,
+    "runs": 1
+   },
+   "experts_touched_per_block": {
+    "mean": 8.522135734558105,
+    "low": 8.522135734558105,
+    "high": 8.522135734558105,
+    "runs": 1
+   },
+   "share_of_parameters_loaded": {
+    "mean": 0.6340975395465436,
+    "low": 0.6340975395465436,
+    "high": 0.6340975395465436,
+    "runs": 1
+   },
+   "route_changes_per_token": {
+    "mean": 0.1866939663887024,
+    "low": 0.1866939663887024,
+    "high": 0.1866939663887024,
+    "runs": 1
+   },
+   "route_follows_topic": {
+    "mean": 0.8029956817626953,
+    "low": 0.8029956817626953,
+    "high": 0.8029956817626953,
+    "runs": 1
+   },
+   "route_follows_token_kind": {
+    "mean": 0.20307795703411102,
+    "low": 0.20307795703411102,
+    "high": 0.20307795703411102,
+    "runs": 1
+   },
+   "after_a_change": [
+    {
+     "mean": 0.65185546875,
+     "low": 0.65185546875,
+     "high": 0.65185546875,
+     "runs": 1
+    },
+    {
+     "mean": 0.95703125,
+     "low": 0.95703125,
+     "high": 0.95703125,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "at_the_start": [
+    {
+     "mean": 0.6748046875,
+     "low": 0.6748046875,
+     "high": 0.6748046875,
+     "runs": 1
+    },
+    {
+     "mean": 0.966796875,
+     "low": 0.966796875,
+     "high": 0.966796875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_at_the_start": [
+    {
+     "mean": 0.67041015625,
+     "low": 0.67041015625,
+     "high": 0.67041015625,
+     "runs": 1
+    },
+    {
+     "mean": 0.9716796875,
+     "low": 0.9716796875,
+     "high": 0.9716796875,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "guess_right_after_a_change": [
+    {
+     "mean": 0.6577845982142857,
+     "low": 0.6577845982142857,
+     "high": 0.6577845982142857,
+     "runs": 1
+    },
+    {
+     "mean": 0.9644252232142857,
+     "low": 0.9644252232142857,
+     "high": 0.9644252232142857,
+     "runs": 1
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "experts_fetched_per_token": {
+    "keeping_2_per_block": {
+     "mean": 0.9937996031746031,
+     "low": 0.9937996031746031,
+     "high": 0.9937996031746031,
+     "runs": 1
+    },
+    "keeping_4_per_block": {
+     "mean": 0.6207837301587301,
+     "low": 0.6207837301587301,
+     "high": 0.6207837301587301,
+     "runs": 1
+    },
+    "keeping_8_per_block": {
+     "mean": 0.3107638888888889,
+     "low": 0.3107638888888889,
+     "high": 0.3107638888888889,
+     "runs": 1
+    }
+   }
+  },
+  "planner": {
+   "guesses_in_use": {
+    "mean": 17.0,
+    "low": 17,
+    "high": 17,
+    "runs": 1
+   },
+   "topics_with_a_guess": {
+    "mean": 16.0,
+    "low": 16,
+    "high": 16,
+    "runs": 1
+   }
+  },
+  "equal_dense_parameters": 1927808,
+  "loaded_in_a_one_topic_conversation": 763234.0625
+ }
+}

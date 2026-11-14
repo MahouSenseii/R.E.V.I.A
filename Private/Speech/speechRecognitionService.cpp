@@ -1393,9 +1393,11 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     const std::filesystem::path transcriptPath = outputBase.string() + ".txt";
 
 #ifdef _WIN32
+    // The language is one quoted argument, so a value from the settings file cannot add
+    // switches of its own to the command line.
     std::wstring command = Quote(executablePath) + L" -m " + Quote(modelPath) + L" -f " + Quote(wavePath) + L" -l " +
-                           Utf8ToWide(configuration.language) + L" -otxt -of " + Quote(outputBase) + L" --no-timestamps -t " +
-                           std::to_wstring(configuration.threads);
+                           Quote(std::filesystem::path(Utf8ToWide(configuration.language))) + L" -otxt -of " + Quote(outputBase) +
+                           L" --no-timestamps -t " + std::to_wstring(configuration.threads);
     const std::optional<int> deviceOrdinal = CudaOrdinal(configuration.device);
     if (!configuration.bUseGpu || configuration.device == "cpu")
     {
@@ -1412,27 +1414,63 @@ void SpeechRecognitionService::Transcribe(const std::stop_token stopToken, const
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     const std::wstring workingDirectory = executablePath.parent_path().wstring();
-    const BOOL created = CreateProcessW(executablePath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-        workingDirectory.c_str(), &startup, &process);
-    if (!created)
+    // The CLI lives in a job that kills it when the handle closes, so it cannot outlive
+    // Revia, and it is started suspended so it is inside the job before it runs.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (job == nullptr || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
     {
+        if (job != nullptr)
+            CloseHandle(job);
+        transcribing.store(false);
+        Notify({"Error", "whisper.cpp could not be given a bounded lifetime, so it was not started."});
+        return;
+    }
+    const BOOL created = CreateProcessW(executablePath.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
+        CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, workingDirectory.c_str(), &startup, &process);
+    if (!created || !AssignProcessToJobObject(job, process.hProcess))
+    {
+        if (created)
+        {
+            TerminateProcess(process.hProcess, 1);
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+        CloseHandle(job);
         transcribing.store(false);
         Notify({"Error", "whisper.cpp could not be launched."});
         return;
     }
+    ResumeThread(process.hThread);
     CloseHandle(process.hThread);
+    // A hung CLI must not hold the recognizer forever: every later push-to-talk waits on it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(std::clamp(configuration.requestTimeoutSeconds, 10, 1800));
+    bool timedOut = false;
     while (!stopToken.stop_requested() && !transcriptionCancelled.load() && WaitForSingleObject(process.hProcess, 50) == WAIT_TIMEOUT)
     {
+        if (std::chrono::steady_clock::now() > deadline)
+        {
+            timedOut = true;
+            break;
+        }
     }
-    if (stopToken.stop_requested() || transcriptionCancelled.load())
+    if (timedOut || stopToken.stop_requested() || transcriptionCancelled.load())
     {
-        TerminateProcess(process.hProcess, 1);
+        TerminateJobObject(job, 1);
         WaitForSingleObject(process.hProcess, 3000);
         CloseHandle(process.hProcess);
+        CloseHandle(job);
+        std::error_code ignoredTranscript;
+        std::filesystem::remove(transcriptPath, ignoredTranscript);
         transcribing.store(false);
-        Notify({"Stopped", "Speech transcription was stopped.", ElapsedMilliseconds(startedAt)});
+        if (timedOut)
+            Notify({"Error", "whisper.cpp did not finish within its time limit and was stopped.", ElapsedMilliseconds(startedAt)});
+        else
+            Notify({"Stopped", "Speech transcription was stopped.", ElapsedMilliseconds(startedAt)});
         return;
     }
+    CloseHandle(job);
     DWORD exitCode = 1;
     GetExitCodeProcess(process.hProcess, &exitCode);
     CloseHandle(process.hProcess);

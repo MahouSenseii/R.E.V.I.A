@@ -326,10 +326,23 @@ PreferenceStore::PreferenceStore(std::filesystem::path path)
 
 std::map<std::string, std::string> PreferenceStore::Load() const
 {
+    bool readable = true;
+    return Read(readable);
+}
+
+std::map<std::string, std::string> PreferenceStore::Read(bool& readable) const
+{
     std::map<std::string, std::string> values;
+    readable = true;
+    std::error_code missing;
+    if (!std::filesystem::exists(storePath, missing))
+    {
+        return values;
+    }
     std::ifstream file(storePath);
     if (!file.is_open())
     {
+        readable = false;
         return values;
     }
     nlohmann::json document;
@@ -339,10 +352,12 @@ std::map<std::string, std::string> PreferenceStore::Load() const
     }
     catch (const std::exception&)
     {
+        readable = false;
         return values;
     }
     if (!document.is_object())
     {
+        readable = false;
         return values;
     }
     for (const auto& [key, value] : document.items())
@@ -503,7 +518,16 @@ PreferenceResult PreferenceStore::Set(const std::string& name, const std::string
     }
 
     std::lock_guard writeLock(preferenceWriteMutex);
-    std::map<std::string, std::string> values = Load();
+    // A file that exists but cannot be read is not an empty one. Writing this one value
+    // over it would erase every other preference it still holds.
+    bool readable = true;
+    std::map<std::string, std::string> values = Read(readable);
+    if (!readable)
+    {
+        result.message = "The saved preferences in " + storePath.string() +
+            " could not be read, so nothing was changed. Fix or remove that file, then try again.";
+        return result;
+    }
     values[key->name] = stored;
     if (!Write(values))
     {
@@ -525,7 +549,14 @@ PreferenceResult PreferenceStore::Clear(const std::string& name)
         return result;
     }
     std::lock_guard writeLock(preferenceWriteMutex);
-    std::map<std::string, std::string> values = Load();
+    bool readable = true;
+    std::map<std::string, std::string> values = Read(readable);
+    if (!readable)
+    {
+        result.message = "The saved preferences in " + storePath.string() +
+            " could not be read, so nothing was changed. Fix or remove that file, then try again.";
+        return result;
+    }
     if (values.erase(key->name) == 0)
     {
         result.succeeded = true;
