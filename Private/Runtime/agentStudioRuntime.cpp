@@ -158,10 +158,24 @@ std::string UnreadListedFilesNote(const nlohmann::json& receipts)
     return note + ".";
 }
 
-nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, const std::vector<agents::ArtifactReference>& references)
+// Whether the host puts a deliverable's prerequisite references in itself: in a brief report,
+// wherever they have one possible value. The model only copied them, under a grammar that
+// allowed nothing else, at about 96 tokens a reference.
+bool HostFillsReferences(const agents::DeliverableContract& contract, const std::vector<agents::ArtifactReference>& references,
+    const bool brief)
 {
-    nlohmann::json properties = {{"summary", {{"type", "string"}, {"maxLength", 2048}}},
-        {"evidence", {{"type", "string"}, {"maxLength", 2048}}}, {"verified", {{"type", "boolean"}}},
+    return brief && (contract.requireAllPrerequisites || references.empty());
+}
+
+// `brief` bounds a report to what BriefReports asks for. ValidateDeliverable keeps its own,
+// looser limits.
+nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, const std::vector<agents::ArtifactReference>& references,
+    const bool brief = false)
+{
+    const int textLimit = brief ? 480 : 2048;
+    const int itemLimit = brief ? 240 : 1024;
+    nlohmann::json properties = {{"summary", {{"type", "string"}, {"maxLength", textLimit}}},
+        {"evidence", {{"type", "string"}, {"maxLength", textLimit}}}, {"verified", {{"type", "boolean"}}},
         {"prerequisiteEvidence",
             {{"type", "array"}, {"maxItems", 2},
                 {"items", {{"type", "object"},
@@ -171,12 +185,17 @@ nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, co
     if (contract.requireAllPrerequisites || references.empty())
         properties["prerequisiteEvidence"]["const"] = EvidenceReferences(references);
     nlohmann::json required = {"summary", "evidence", "verified", "prerequisiteEvidence"};
+    if (HostFillsReferences(contract, references, brief))
+    {
+        properties.erase("prerequisiteEvidence");
+        required = {"summary", "evidence", "verified"};
+    }
     for (const auto& requirement : contract.requirements)
     {
         const auto name = agents::ToString(requirement.section);
         nlohmann::json populated = {{"type", "object"},
-            {"properties", {{"items", {{"type", "array"}, {"minItems", 1}, {"maxItems", 8},
-                                          {"items", {{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}}}},
+            {"properties", {{"items", {{"type", "array"}, {"minItems", 1}, {"maxItems", brief ? 4 : 8},
+                                          {"items", {{"type", "string"}, {"minLength", 1}, {"maxLength", itemLimit}}}}},
                                {"noneReason", {{"type", "string"}, {"const", ""}}}}},
             {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
         if (requirement.allowNoneWithReason)
@@ -188,7 +207,7 @@ nlohmann::json DeliverableSchema(const agents::DeliverableContract& contract, co
             // delegated run could be verified. With the item type stated, all 10 passed.
             nlohmann::json absent = {{"type", "object"},
                 {"properties", {{"items", {{"type", "array"}, {"maxItems", 0}, {"items", {{"type", "string"}}}}},
-                                   {"noneReason", {{"type", "string"}, {"minLength", 1}, {"maxLength", 1024}}}}},
+                                   {"noneReason", {{"type", "string"}, {"minLength", 1}, {"maxLength", itemLimit}}}}},
                 {"required", {"items", "noneReason"}}, {"additionalProperties", false}};
             properties[name] = {{"anyOf", {populated, absent}}};
         }
@@ -886,7 +905,20 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             deliverableNote = "\n\nHost note: each worker's deliverable speaks only for that worker. Where one says it did not run a "
                               "test, and another worker's host receipt shows the test was run, the test was run. Judge verified from "
                               "the host receipts as a whole.";
-        const std::string schema = DeliverableSchema(request.node.deliverableContract, request.prerequisiteReferences).dump();
+        // Brief reports in a run whose workers may change files. In such a 35B-A3B run most of the
+        // time went to the write-ups and reports after the fix (about 190 of 245 s, at 28 tokens a
+        // second), not to the fix. Replaying 36 of them from ten runs, asked to be brief and
+        // bounded to it they took 38% fewer tokens, and 48% fewer with the references filled in
+        // by the host as well, with every verified decision the same. A 9B's 26: 38% and 47%
+        // fewer; 3 and 5 decisions changed, all in runs whose fix was wrong. Chat hand-offs, which
+        // only read and report what they found, keep the full form.
+        const bool brief = mode == AgentProviderMode::LocalWithTools && capturedScope &&
+                           capturedScope->settings.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite;
+        if (brief)
+            instructions += " Be brief: at most 4 items in a section, each one sentence of at most 30 words; summary and evidence at "
+                            "most 60 words each.";
+        const bool hostReferences = HostFillsReferences(request.node.deliverableContract, request.prerequisiteReferences, brief);
+        const std::string schema = DeliverableSchema(request.node.deliverableContract, request.prerequisiteReferences, brief).dump();
         const auto answered = review(instructions, material.dump() + deliverableNote, schema);
         if (!answered || !usagePersisted)
             return result;
@@ -905,6 +937,9 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             auto payload = nlohmann::json::parse(response.response);
             const bool claimedVerified = payload.at("verified").get<bool>();
             payload.erase("verified");
+            // The schema left them out, so the model could neither drop nor invent one.
+            if (hostReferences)
+                payload["prerequisiteEvidence"] = EvidenceReferences(request.prerequisiteReferences);
             if (!hostEvidence.empty())
                 payload["evidence"] = utf8::Prefix(payload.at("evidence").get<std::string>(), 480) + utf8::Prefix(hostEvidence, 1536);
             result.artifact.content = payload.dump();

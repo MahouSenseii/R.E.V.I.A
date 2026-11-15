@@ -681,8 +681,11 @@ nlohmann::json CompleteStudioDeliverable(const nlohmann::json& wire)
 {
     using json = nlohmann::json;
     const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-    json payload = {{"summary", "A bounded fixture plan."}, {"evidence", "Supplied fixture evidence."}, {"verified", true},
-        {"prerequisiteEvidence", properties.at("prerequisiteEvidence").value("const", json::array())}};
+    properties.at("summary");   // only a deliverable's schema
+    json payload = {{"summary", "A bounded fixture plan."}, {"evidence", "Supplied fixture evidence."}, {"verified", true}};
+    // A brief report leaves its references to the host.
+    if (properties.contains("prerequisiteEvidence"))
+        payload["prerequisiteEvidence"] = properties.at("prerequisiteEvidence").value("const", json::array());
     for (const auto& field : properties.items())
         if (!payload.contains(field.key()))
             payload[field.key()] = {{"items", {"Inspect the supplied marker evidence."}}, {"noneReason", ""}};
@@ -785,11 +788,18 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
     using namespace revia::agents;
     using json = nlohmann::json;
     NativeActionFixture fixture;
+    std::atomic<bool> fullReports{true};
     HeldMemoryBackend backend({},
-        [](const json& wire)
+        [&](const json& wire)
         {
             const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-            return properties.contains("tool") ? std::string(R"({"tool":null})") : CompleteStudioDeliverable(wire).dump();
+            if (properties.contains("tool"))
+                return std::string(R"({"tool":null})");
+            // A run whose workers only read keeps the full report and copies its references.
+            if (!properties.contains("prerequisiteEvidence") || properties.at("summary").at("maxLength") != 2048 ||
+                wire.at("messages").at(0).at("content").get<std::string>().find("Be brief") != std::string::npos)
+                fullReports.store(false);
+            return CompleteStudioDeliverable(wire).dump();
         });
     backend.release.store(true);
     ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
@@ -798,6 +808,7 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
         error);
     ReviaSessionTestAccess::JoinWorkflow(fixture.session);
     const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    Check(fullReports.load(), "A run whose workers may only read was asked for brief reports.");
     Check(snapshot.state == WorkflowState::AwaitingAcceptance && snapshot.parentDecision == ParentDecision::Pending && snapshot.toolCalls == 0 &&
               fixture.session.AgentWorkflowResult().empty(),
         "A legitimate no-tool completion was treated as a failure or bypassed separate parent acceptance.");
@@ -806,6 +817,83 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
             Check(node.state == WorkflowState::Succeeded && node.attempts.size() == 1 && node.attempts.back().verified &&
                       node.attempts.back().toolCalls == 0,
                 "A complete no-tool analytical deliverable did not advance through ordinary verification.");
+}
+
+// A run whose workers may change files asks for brief reports, bounded in their schema, and the
+// host puts in the prerequisite references the model used to copy; every report still passes
+// validation against the references actually supplied.
+void TestToolStudioWritingRunAsksForBriefReports()
+{
+    using namespace revia::runtime;
+    using namespace revia::agents;
+    using json = nlohmann::json;
+    NativeActionFixture fixture("approved_scope", "reversible_write");
+    const std::string marker = revia::actions::PathToUtf8(fixture.marker);
+    std::mutex seenMutex;
+    std::vector<json> reports;
+    HeldMemoryBackend backend({},
+        [&](const json& wire)
+        {
+            if (wire.contains("tools"))
+            {
+                // The worker that may write reads the file once, then reports.
+                for (const auto& message : wire.at("messages"))
+                    if (message.at("role") == "tool")
+                        return json{{"content", "Reviewed."}}.dump();
+                return json{{"content", ""},
+                    {"tool_calls", json::array({{{"id", "call_read"}, {"type", "function"},
+                                       {"function", {{"name", "read_text_file"}, {"arguments", json{{"path", marker}}.dump()}}}}})}}
+                    .dump();
+            }
+            const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+            if (properties.contains("tool"))
+                return std::string(R"({"tool":null})");
+            {
+                std::lock_guard lock(seenMutex);
+                reports.push_back(wire);
+            }
+            return CompleteStudioDeliverable(wire).dump();
+        });
+    backend.release.store(true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+    std::string error;
+    Check(fixture.session.StartAgentWorkflow("Assess the supplied evidence without requiring a file read.", AgentProviderMode::LocalWithTools, error),
+        error);
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    std::lock_guard lock(seenMutex);
+    Check(reports.size() >= 3, "The writing run did not ask its workers and reviewer for reports.");
+    for (const auto& wire : reports)
+    {
+        const auto& schema = wire.at("response_format").at("json_schema").at("schema");
+        const auto& properties = schema.at("properties");
+        Check(wire.at("messages").at(0).at("content").get<std::string>().ends_with("summary and evidence at most 60 words each."),
+            "A report in a writing run was not asked to be brief.");
+        Check(!properties.contains("prerequisiteEvidence") &&
+                  std::find(schema.at("required").begin(), schema.at("required").end(), "prerequisiteEvidence") == schema.at("required").end(),
+            "A brief report still had the model copy its fixed prerequisite references.");
+        Check(properties.at("summary").at("maxLength") == 480 && properties.at("evidence").at("maxLength") == 480,
+            "A brief report's summary or evidence was not bounded.");
+        for (const auto& field : properties.items())
+        {
+            if (!field.value().is_object() || field.key() == "summary" || field.key() == "evidence" || field.key() == "verified")
+                continue;
+            const auto& populated = field.value().contains("anyOf") ? field.value().at("anyOf").at(0) : field.value();
+            const auto& items = populated.at("properties").at("items");
+            Check(items.at("maxItems") == 4 && items.at("items").at("maxLength") == 240,
+                "A brief report's section was not bounded to four short items: " + field.key());
+        }
+    }
+    Check(snapshot.state == WorkflowState::AwaitingAcceptance, "A writing run with brief reports did not reach acceptance.");
+    for (const auto& node : snapshot.nodes)
+    {
+        if (node.role == WorkflowRole::Parent)
+            continue;
+        Check(node.state == WorkflowState::Succeeded && !node.attempts.empty() && node.attempts.back().verified,
+            "A brief report with host-filled references did not pass validation: " + node.id);
+        if (node.id == "review")
+            Check(node.attempts.back().prerequisites.size() == 2, "The reviewer's references were not both supplied and checked.");
+    }
 }
 
 // The worker that may write works in the model's own tool-call format. It is told to look when it
@@ -1067,6 +1155,7 @@ void RunStudioStopDiagnosticsTests()
     TestToolStudioStopFailureDiagnostic(true);
     TestToolStudioStopFailureDiagnostic(false);
     TestToolStudioNoToolCompletionStillAwaitsAcceptance();
+    TestToolStudioWritingRunAsksForBriefReports();
     TestToolStudioWriterKeepsGoingUntilItWrites();
 }
 
