@@ -399,8 +399,19 @@ class HeldMemoryBackend
                 const auto content = responseFactory            ? responseFactory(wire)
                                      : suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
                                                                 : suppliedResponse;
-                const auto answer =
+                auto answer =
                     nlohmann::json{{"choices", nlohmann::json::array({{{"message", {{"content", content}}}, {"finish_reason", "stop"}}})}};
+                // A request that offered tools may be answered with calls: the responder returns
+                // {"content": text, "tool_calls": [...]}, which becomes the reply's message.
+                if (wire.contains("tools"))
+                {
+                    const auto message = nlohmann::json::parse(content, nullptr, false);
+                    if (message.is_object() && message.contains("tool_calls"))
+                    {
+                        answer["choices"][0]["message"] = {{"content", message.value("content", "")}, {"tool_calls", message["tool_calls"]}};
+                        answer["choices"][0]["finish_reason"] = "tool_calls";
+                    }
+                }
                 response.set_content(answer.dump(), "application/json");
             });
         port = server.bind_to_any_port("127.0.0.1");
@@ -797,9 +808,11 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
                 "A complete no-tool analytical deliverable did not advance through ordinary verification.");
 }
 
-// A worker that may write, asked for a change, may not stop before it has written; asked only to
-// review, it may stop once it has read. On ten coding tasks a live 9B stopped after one read in
-// every run until stopping was left out of what its step may answer.
+// The worker that may write works in the model's own tool-call format. It is told to look when it
+// answers before looking, and, asked for a change, told nothing is written yet when it answers
+// before writing; asked only to review, it may stop once it has read. It never handles a digest:
+// a write to a file it has not read is refused with "read it first", one that changes nothing is
+// refused as such, and one after its read goes through.
 void TestToolStudioWriterKeepsGoingUntilItWrites()
 {
     using namespace revia::runtime;
@@ -808,49 +821,57 @@ void TestToolStudioWriterKeepsGoingUntilItWrites()
     {
         NativeActionFixture fixture("approved_scope", "reversible_write");
         const std::string marker = revia::actions::PathToUtf8(fixture.marker);
+        // Ending with a newline, which a whole file written in the model's own tool-call format
+        // arrives without: the rewrite below is the file unchanged all the same.
+        if (askedForAChange)
+            std::ofstream(fixture.marker, std::ios::binary) << "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A\n";
         std::mutex seenMutex;
-        // For each step of the worker that may write: how many receipts it had, whether it had
-        // written, and whether tool:null was among the answers it was offered.
-        std::vector<std::tuple<std::size_t, bool, bool>> steps;
-        bool unchangedRefused = false;
+        // For each step of the worker that may write: its task text (with any host note) and the
+        // results of its earlier calls.
+        std::vector<std::pair<std::string, std::vector<std::string>>> steps;
+        bool schemaless = true;
         HeldMemoryBackend backend({},
             [&](const json& wire)
             {
-                const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-                if (!properties.contains("tool"))
+                if (!wire.contains("tools"))
                     return CompleteStudioDeliverable(wire).dump();
-                const auto& choices = properties.at("tool").at("anyOf");
-                const auto offers = [&](const auto& test) { return std::any_of(choices.begin(), choices.end(), test); };
-                const bool mayEnd = offers([](const json& choice) { return choice.value("type", "") == "null"; });
-                const bool mayWrite = offers([](const json& choice)
-                    { return choice.contains("properties") && choice.at("properties").at("action").value("const", "") == "write_text_file"; });
-                const auto& content = wire.at("messages").at(1).at("content").get_ref<const std::string&>();
-                const auto receipts = json::parse(content.substr(0, content.find("\n\nHost note:"))).at("toolReceipts");
-                const bool wrote = std::any_of(receipts.begin(), receipts.end(),
-                    [](const json& receipt) { return receipt.value("action", "") == "write_text_file" && receipt.value("succeeded", false); });
-                if (mayWrite)
+                std::vector<std::string> results;
+                for (const auto& message : wire.at("messages"))
+                    if (message.at("role") == "tool")
+                        results.push_back(message.at("content").get<std::string>());
+                std::size_t step = 0;
                 {
                     std::lock_guard lock(seenMutex);
-                    steps.emplace_back(receipts.size(), wrote, mayEnd);
+                    schemaless = schemaless && !wire.contains("response_format");
+                    for (const auto& tool : wire.at("tools"))
+                        schemaless = schemaless && !tool.at("function").at("parameters").at("properties").contains("expected_digest");
+                    steps.emplace_back(wire.at("messages").at(1).at("content").get<std::string>(), results);
+                    step = steps.size();
                 }
-                if (receipts.empty())
-                    return json{{"tool", {{"action", "read_text_file"}, {"source", marker}}}}.dump();
-                // First the file written back exactly as it was read, which changes nothing, then the change.
-                if (mayWrite && askedForAChange && !wrote && receipts.size() <= 2)
+                // One reply with `count` calls of the same tool.
+                const auto call = [&](const char* name, json arguments, const int count = 1)
                 {
-                    if (receipts.size() == 2)
-                    {
-                        std::lock_guard lock(seenMutex);
-                        const auto& refused = receipts.at(1);
-                        unchangedRefused = !refused.value("succeeded", true) && !refused.value("attempted", true) &&
-                                           refused.value("message", "").find("nothing would change") != std::string::npos;
-                    }
-                    return json{{"tool", {{"action", "write_text_file"}, {"source", marker},
-                                             {"content", receipts.size() == 1 ? "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A" : "FIXED_MARKER_5F9A"},
-                                             {"expected_digest", receipts.at(0).at("contentDigest")}}}}
-                        .dump();
+                    json calls = json::array();
+                    for (int index = 0; index < count; ++index)
+                        calls.push_back({{"id", "call_" + std::to_string(step) + "_" + std::to_string(index)}, {"type", "function"},
+                            {"function", {{"name", name}, {"arguments", arguments.dump()}}}});
+                    return json{{"content", "Step " + std::to_string(step) + "."}, {"tool_calls", std::move(calls)}}.dump();
+                };
+                const auto text = [](const char* said) { return json{{"content", said}}.dump(); };
+                // Reviewing: eight reads in each of two replies, of which only twelve calls run.
+                if (!askedForAChange)
+                    return step == 1 ? text("I will look.") : step <= 3 ? call("read_text_file", {{"path", marker}}, 8) : text("Reviewed.");
+                switch (step)
+                {
+                case 1: return text("I will look.");
+                case 2: return call("write_text_file", {{"path", marker}, {"content", "FIXED_MARKER_5F9A"}});
+                // Three reads in one reply, which count as one of the worker's six replies.
+                case 3: return call("read_text_file", {{"path", marker}}, 3);
+                case 4: return call("write_text_file", {{"path", marker}, {"content", "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A"}});
+                case 5: return text("It looks right to me.");
+                case 6: return call("write_text_file", {{"path", marker}, {"content", "FIXED_MARKER_5F9A"}});
+                default: return text("Done.");
                 }
-                return std::string(R"({"tool":null})");
             });
         backend.release.store(true);
         ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
@@ -860,21 +881,35 @@ void TestToolStudioWriterKeepsGoingUntilItWrites()
             error);
         ReviaSessionTestAccess::JoinWorkflow(fixture.session);
         std::lock_guard lock(seenMutex);
-        Check(steps.size() >= 2, "The worker that may write took fewer than two steps.");
-        for (const auto& [receipts, wrote, mayEnd] : steps)
+        Check(schemaless, "The worker that may write was sent a JSON schema or asked for a digest.");
+        const auto told = [&](const std::size_t step, const char* words)
+        { return step <= steps.size() && steps[step - 1].first.find(words) != std::string::npos; };
+        const auto result = [&](const std::size_t step, const std::size_t index, const char* words)
         {
-            if (receipts == 0)
-                Check(!mayEnd, "A first step could stop with nothing read.");
-            else if (askedForAChange && !wrote)
-                Check(!mayEnd, "Asked for a change, the worker could stop before it had written anything.");
-            else
-                Check(mayEnd, askedForAChange ? "Having written, the worker could not stop." : "Asked only to review, the worker could not stop after reading.");
+            return step <= steps.size() && index < steps[step - 1].second.size() &&
+                   steps[step - 1].second[index].find(words) != std::string::npos;
+        };
+        Check(told(2, "no tool has run for this worker yet") && !told(3, "Host note"),
+            "Answering before looking, the worker was not told to look, or was still told after.");
+        if (askedForAChange)
+        {
+            Check(steps.size() == 6, "Asked for a change, the worker did not get its six replies, or a reply with three reads spent three.");
+            Check(result(3, 0, "Read the file first"), "A write to a file the worker had not read was not refused with what to do.");
+            Check(result(4, 3, "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A"), "The three reads of one reply did not all run.");
+            Check(result(5, 4, "nothing would change"), "Writing the file back unchanged was not refused as a change that changes nothing.");
+            Check(told(6, "no file has been written by this worker yet"), "Asked for a change, the worker could stop before writing.");
         }
-        Check(unchangedRefused == askedForAChange, "Writing the file back unchanged was not refused as a change that changes nothing.");
-        std::ifstream written(fixture.marker);
+        else
+        {
+            Check(steps.size() == 4 && !told(4, "no file has been written"), "Asked only to review, the worker could not stop after reading.");
+            Check(result(4, 11, "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A") && result(4, 12, "used all of its tool calls") &&
+                      result(4, 15, "used all of its tool calls"),
+                "The worker that may write ran more than its twelve tool calls, or fewer.");
+        }
+        std::ifstream written(fixture.marker, std::ios::binary);
         const std::string now((std::istreambuf_iterator<char>(written)), std::istreambuf_iterator<char>());
-        Check((now == "FIXED_MARKER_5F9A") == askedForAChange,
-            askedForAChange ? "The requested change was not written." : "A review-only run changed the file.");
+        Check(askedForAChange ? now == "FIXED_MARKER_5F9A\n" : now == "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A",
+            askedForAChange ? "The requested change was not written, or lost the file's last newline." : "A review-only run changed the file.");
     }
 }
 

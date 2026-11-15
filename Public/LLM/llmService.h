@@ -54,6 +54,8 @@ public:
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
         std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
+    responseOutput GenerateWorkerToolStep(const std::string& instructions, const std::string& task, const revia::llm::ToolExchange& tools,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateComputerSubgoal(const std::string& instruction,
         const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
 

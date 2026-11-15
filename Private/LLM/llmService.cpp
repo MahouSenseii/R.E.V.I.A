@@ -384,6 +384,20 @@ responseOutput llmService::GenerateCodeReview(const std::string& instructions, c
     return llamaCpp.GenerateCodeReview(instructions, material, schema, stopToken, purpose);
 }
 
+responseOutput llmService::GenerateWorkerToolStep(const std::string& instructions, const std::string& task,
+    const revia::llm::ToolExchange& tools, const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.reason = "The local language model is not ready for an agent worker's tool step.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llamaCpp.GenerateWorkerToolStep(instructions, task, tools, stopToken);
+}
+
 responseOutput llmService::GenerateComputerSubgoal(const std::string& instruction,
     const std::string& situation, const std::string& schema, const std::stop_token stopToken) const
 {

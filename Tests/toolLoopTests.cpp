@@ -1,4 +1,5 @@
 #include "Actions/actionRuntime.h"
+#include "Agents/agentToolWorker.h"
 #include "Agents/chatTools.h"
 #include "Agents/compositionRequest.h"
 #include "Agents/conversationAgent.h"
@@ -1913,8 +1914,48 @@ void TestEmptyFinishReasonToolStepNeverExecutes()
         "RUN3 review: an explicitly empty finish reason plus DONE authorized a tool or answer.");
 }
 
+// An agent worker's step in the model's own tool-call format: the tools go in the request's own
+// field with no JSON schema, the earlier round is replayed, the text before a call is kept, and a
+// call streamed in pieces comes back whole and unexecuted. A step cut off by the token ceiling is
+// refused, since its call may end mid-file.
+void TestWorkerToolStepTakesStreamedCalls()
+{
+    revia::tests::ScopedTestDirectory directory;
+    ScriptedBackend backend;
+    messageRouter router((directory.root / "worker-tool-step.db").string());
+    Configure(router, backend.port);
+    revia::llm::ToolExchange tools;
+    tools.definitions = WritingWorkerTools();
+    tools.rounds.push_back({"Looking first.", {{"call_l", "list_directory", R"({"path":"C:/work"})"}}, {{"call_l", "list_directory", "a.py\n"}}});
+
+    backend.Then({ScriptedBackend::Text("The loop never sorts. "), ScriptedBackend::Call(0, "call_r", "read_text_file", R"({"path":"C:/wo)"),
+        ScriptedBackend::Call(0, "", "", R"(rk/a.py"})", "tool_calls")});
+    const auto step = router.WorkerToolStep("WORKER_SYSTEM", "WORKER_TASK", tools);
+    Check(step.bSuccess && step.response == "The loop never sorts. " && step.toolCalls.size() == 1 && step.toolCalls[0].id == "call_r" &&
+              step.toolCalls[0].name == "read_text_file" && step.toolCalls[0].arguments == R"({"path":"C:/work/a.py"})",
+        "A worker's streamed tool call did not come back whole, with its text, as the call the model made.");
+    const auto sent = backend.Requests().at(0);
+    Check(!sent.contains("response_format") && sent.at("tool_choice") == "auto" && sent.at("tools").size() == 3 &&
+              sent.at("chat_template_kwargs").at("enable_thinking") == false,
+        "A worker's tool step was not sent with its tools in the request's own field, without a schema and without thinking.");
+    const auto& messages = sent.at("messages");
+    Check(messages.size() == 4 && messages[0].at("content") == "WORKER_SYSTEM" && messages[1].at("content") == "WORKER_TASK" &&
+              messages[2].at("tool_calls").at(0).at("function").at("name") == "list_directory" && messages[3].at("content") == "a.py\n",
+        "A worker's earlier round was not replayed after its task.");
+
+    backend.Then({ScriptedBackend::Call(0, "call_w", "write_text_file", R"({"path":"C:/work/a.py","content":"def f(")", "length")});
+    const auto cut = router.WorkerToolStep("WORKER_SYSTEM", "WORKER_TASK", tools);
+    Check(!cut.bSuccess && cut.toolCalls.empty(), "A worker's step cut off by the token ceiling was taken as a call.");
+
+    backend.Then({ScriptedBackend::Text("Nothing needs changing.", "stop")});
+    const auto answer = router.WorkerToolStep("WORKER_SYSTEM", "WORKER_TASK", tools);
+    Check(answer.bSuccess && answer.toolCalls.empty() && answer.response == "Nothing needs changing.",
+        "A worker's plain answer was not returned as text with no calls.");
+}
+
 void RunToolLoopTests()
 {
+    TestWorkerToolStepTakesStreamedCalls();
     TestUnterminatedToolStepNeverExecutes();
     TestEmptyFinishReasonToolStepNeverExecutes();
     TestRuntimeOwnsGeneratedArtifactDelivery();

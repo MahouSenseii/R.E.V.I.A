@@ -184,4 +184,56 @@ void RunAgentToolWorkerTests()
     Check(unavailable && processReceipt.size() <= agents::WorkerToolOutputReservation && identities.at("succeeded") == true &&
               identities.at("attempted") == true,
         "Unfittable identity metadata did not become explicitly unavailable within the existing encoded receipt bound.");
+
+    // The worker that may write, in the model's own tool-call format: three tools, none asking for a
+    // digest; a call becomes the same action request, a write with its digest left for the host.
+    const auto tools = agents::WritingWorkerTools();
+    Check(tools.size() == 3 && tools[0].name == "list_directory" && tools[1].name == "read_text_file" && tools[2].name == "write_text_file",
+        "The writing worker's tools are not list, read and write.");
+    for (const auto& tool : tools)
+        Check(tool.parametersSchema.find("digest") == std::string::npos && nlohmann::json::parse(tool.parametersSchema).is_object(),
+            "A writing worker's tool asks the model for a digest, or has no valid schema.");
+    Check(agents::ParseWritingWorkerCall({"c1", "write_text_file", R"({"path":"C:/workspace/a.py","content":"x = 1\n"})"}, action, error) &&
+              action && action->type == actions::ActionType::WriteTextFile && action->value == "x = 1\n" && action->expectedDigest == "missing" &&
+              actions::PathToUtf8(action->source) == "C:/workspace/a.py" && action->requestedBy == "agent-workflow",
+        "A writing worker's write call did not become a write request waiting for the host's digest.");
+    Check(agents::ParseWritingWorkerCall({"c2", "read_text_file", R"({"path":"C:/workspace/a.py"})"}, action, error) && action &&
+              action->type == actions::ActionType::ReadTextFile,
+        "A writing worker's read call was refused.");
+    for (const auto& [name, arguments] : std::vector<std::pair<std::string, std::string>>{{"run_shell_command", R"({"command":"dir"})"},
+             {"read_text_file", R"({"path":"relative.txt"})"}, {"read_text_file", R"({"path":"C:/a.txt","extra":1})"},
+             {"write_text_file", R"({"path":"C:/a.txt"})"}, {"write_text_file", R"({"path":"C:/a.txt","content":"x","expected_digest":"y"})"},
+             {"write_text_file", "{\"path\":\"C:/a.txt\",\"content\":\"" + std::string(agents::MaximumWritingWorkerContentBytes + 1, 'x') + "\"}"},
+             {"list_directory", "not json"}})
+    {
+        Check(!agents::ParseWritingWorkerCall({"bad", name, arguments}, action, error) && !action && error.starts_with("Not "),
+            "A malformed writing-worker call was accepted, or refused without telling the model why: " + name + " " + arguments.substr(0, 60));
+    }
+    Check(!agents::ParseWritingWorkerCall({"bad", "run_shell_command", "{}"}, action, error) && error.find("list_directory") != std::string::npos,
+        "An unknown tool was refused without naming the tools there are.");
+
+    // Shown to the model as plain text: a listing without its labels, a file as it is.
+    actions::ActionRequest nativeListing;
+    nativeListing.type = actions::ActionType::ListDirectory;
+    nativeListing.source = actions::Utf8ToPath("C:/workspace");
+    actions::ActionOutcome listed;
+    listed.result.attempted = listed.result.succeeded = true;
+    listed.result.entries = {"[DIR]   sub", "[FILE]  a.py"};
+    Check(agents::WritingWorkerToolResult(nativeListing, listed) == "sub/\na.py\n", "A listing was not shown one name a line.");
+    actions::ActionRequest reading;
+    reading.type = actions::ActionType::ReadTextFile;
+    reading.source = actions::Utf8ToPath("C:/workspace/a.py");
+    actions::ActionOutcome nativeRead;
+    nativeRead.result.attempted = nativeRead.result.succeeded = true;
+    nativeRead.result.content = "x = 1\n";
+    nativeRead.result.entries = {"sha256:" + audit::ContentDigest("x = 1\n")};
+    Check(agents::WritingWorkerToolResult(reading, nativeRead) == "x = 1\n", "A read was not shown as the file's own text, without its digest line.");
+    actions::ActionRequest unread;
+    unread.type = actions::ActionType::WriteTextFile;
+    unread.source = reading.source;
+    unread.expectedDigest = "missing";
+    actions::ActionOutcome refused;
+    refused.result.message = "The file could not be opened exclusively with the expected existence state (Windows error 80).";
+    Check(agents::WritingWorkerToolResult(unread, refused).find("Read the file first") != std::string::npos,
+        "A write to a file the worker had not read was refused without saying to read it first.");
 }

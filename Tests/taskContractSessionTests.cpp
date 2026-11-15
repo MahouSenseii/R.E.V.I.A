@@ -216,20 +216,29 @@ public:
         server.Get("/health", [](const auto&, auto& response) { response.set_content(R"({"status":"ok"})", "application/json"); });
         server.Get("/v1/models", [](const auto&, auto& response)
             { response.set_content(R"({"data":[{"id":"scope-fixture"}]})", "application/json"); });
-        server.Post("/v1/chat/completions", [this, file](const auto&, auto& response)
+        server.Post("/v1/chat/completions", [this, file](const auto& request, auto& response)
         {
+            // The worker that may write asks in the model's own tool-call format, the others with a schema.
+            const bool native = nlohmann::json::parse(request.body, nullptr, false).contains("tools");
             nlohmann::json content = {{"tool", nullptr}};
+            nlohmann::json message = {{"content", native ? "Done." : content.dump()}};
             if (calls.fetch_add(1) == 0)
             {
                 content["tool"] = {{"action", "write_text_file"}, {"source", actions::PathToUtf8(file)},
                     {"content", "admitted worker effect"}, {"expected_digest", "missing"}};
+                message = {{"content", content.dump()}};
+                if (native)
+                    message = {{"content", ""}, {"tool_calls", nlohmann::json::array({{{"id", "call_0"}, {"type", "function"},
+                        {"function", {{"name", "write_text_file"}, {"arguments", nlohmann::json{{"path", actions::PathToUtf8(file)},
+                            {"content", "admitted worker effect"}}.dump()}}}}})}};
                 proposed.store(true);
                 const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
                 while (!release.load() && std::chrono::steady_clock::now() < until)
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             response.set_content(nlohmann::json{{"choices", nlohmann::json::array({
-                {{"message", {{"content", content.dump()}}}, {"finish_reason", "stop"}}})}}.dump(), "application/json");
+                {{"message", message}, {"finish_reason", message.contains("tool_calls") ? "tool_calls" : "stop"}}})}}.dump(),
+                "application/json");
         });
         port = server.bind_to_any_port("127.0.0.1");
         Check(port > 0, "worker backend bound");

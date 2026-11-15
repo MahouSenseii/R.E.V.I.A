@@ -9,6 +9,7 @@
 #include "LLM/codeReviewPurpose.h"
 #include "Memory/memoryTypes.h"
 #include "Agents/responseProvenance.h"
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -75,6 +76,10 @@ public:
     // waiting on it; Main otherwise.
     responseOutput ReviewCode(const std::string& instructions, const std::string& material, const std::string& schema,
         std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
+    // One tool step of an agent worker, in the model's own tool-call format, on the same model a
+    // development review would use: Expert when it can be had, Main otherwise.
+    responseOutput WorkerToolStep(const std::string& instructions, const std::string& task, const revia::llm::ToolExchange& tools,
+        std::stop_token stopToken = {}) const;
     responseOutput ReviewConversationReply(const std::string& userInput, const std::string& candidateReply,
         const std::string& runtimeGroundTruth, int maxReviewTokens, std::stop_token stopToken = {},
         const std::string& conversationEvidence = {}) const;
@@ -142,6 +147,10 @@ public:
 
 private:
     [[nodiscard]] const std::string& ConfiguredModelName(const llmService& service) const;
+    // Runs `generate` on Expert when `purpose` is Development and Expert can be had (loaded on
+    // demand and released after if it was not resident), on Main otherwise, and records the tier.
+    responseOutput OnReviewModel(revia::llm::CodeReviewPurpose purpose, std::stop_token stopToken,
+        const std::function<responseOutput(const llmService&)>& generate) const;
 
     // True when the Fast brain is pinned to the CPU while Main has a GPU. Then Main is
     // quicker for everything, including the short turns Fast exists for. With no GPU
