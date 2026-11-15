@@ -5,6 +5,7 @@
 #include "Planning/structuredActionParser.h"
 
 #include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <set>
 
@@ -45,11 +46,13 @@ void AddPathIdentity(Json& receipt, const char* field, const std::filesystem::pa
 }
 }
 
-std::string WorkerToolSchema(const bool allowWrites, const bool allowProcess)
+std::string WorkerToolSchema(const bool allowWrites, const bool allowProcess, const bool mayEnd)
 {
     const Json path = {{"type", "string"}, {"minLength", 1}, {"maxLength", 2048}};
-    Json choices = Json::array(
-        {Json{{"type", "null"}}, ObjectSchema({{"action", {{"enum", {"list_directory", "read_text_file"}}}}, {"source", path}})});
+    Json choices = Json::array();
+    if (mayEnd)
+        choices.push_back(Json{{"type", "null"}});
+    choices.push_back(ObjectSchema({{"action", {{"enum", {"list_directory", "read_text_file"}}}}, {"source", path}}));
     if (allowWrites)
         choices.push_back(ObjectSchema({{"action", {{"const", "write_text_file"}}}, {"source", path},
             {"content", {{"type", "string"}, {"maxLength", 8192}}}, {"expected_digest", {{"type", "string"}, {"maxLength", 64}}}}));
@@ -110,6 +113,29 @@ bool ParseWorkerToolResponse(const std::string& response, const bool allowWrites
             for (const auto& argument : request.process.arguments)
                 if (argument.size() > 1024 || argument.find('\0') != std::string::npos || !utf8::IsValid(argument))
                     return false;
+            // The program is named once, by `executable`. A live 9B also repeated it as the first
+            // argument in 13 of 13 replayed runs, as a command line would, so Python was handed its
+            // own executable as the script to run and the test never started. Naming the program
+            // again is never a real argument to it, so the repeat is dropped.
+            if (!request.process.arguments.empty())
+            {
+                const auto same = [](std::string a, std::string b)
+                {
+                    const auto fold = [](std::string& text)
+                    {
+                        std::replace(text.begin(), text.end(), '\\', '/');
+                        std::transform(text.begin(), text.end(), text.begin(),
+                            [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    };
+                    fold(a);
+                    fold(b);
+                    return a == b;
+                };
+                const auto& first = request.process.arguments.front();
+                if (same(first, actions::PathToUtf8(request.process.executable)) ||
+                    same(first, actions::PathToUtf8(request.process.executable.filename())))
+                    request.process.arguments.erase(request.process.arguments.begin());
+            }
         }
         else if (!validPath(request.source))
             return false;
@@ -117,6 +143,21 @@ bool ParseWorkerToolResponse(const std::string& response, const bool allowWrites
             (!Digest(request.expectedDigest) || request.value.size() > 8192 || request.value.find('\0') != std::string::npos ||
                 !utf8::IsValid(request.value)))
             return false;
+        if (type == actions::ActionType::WriteTextFile && request.expectedDigest.size() == 64)
+        {
+            // A read's receipt ends its output with the file's digest line. Rewriting a file from
+            // that output, a live 9B copied the line into the new content in 8 of 19 replayed
+            // writes, and the file no longer parsed. The line is the host's, never the file's: it
+            // is the digest of the very content being replaced, which the worker has just quoted.
+            const std::string echoed = "sha256:" + request.expectedDigest;
+            auto& content = request.value;
+            std::size_t end = content.size();
+            while (end > 0 && (content[end - 1] == '\n' || content[end - 1] == '\r'))
+                --end;
+            if (end >= echoed.size() && content.compare(end - echoed.size(), echoed.size(), echoed) == 0 &&
+                (end == echoed.size() || content[end - echoed.size() - 1] == '\n'))
+                content.erase(end - echoed.size());
+        }
         request.requestedBy = "agent-workflow";
         outAction = std::move(request);
         outError.clear();
@@ -126,6 +167,119 @@ bool ParseWorkerToolResponse(const std::string& response, const bool allowWrites
     {
         return false;
     }
+}
+
+std::vector<llm::ToolDefinition> WritingWorkerTools()
+{
+    const auto pathOnly = [](const char* about)
+    {
+        return Json{{"type", "object"}, {"properties", {{"path", {{"type", "string"}, {"description", about}}}}},
+            {"required", Json::array({"path"})}, {"additionalProperties", false}}
+            .dump();
+    };
+    return {
+        {"list_directory", "List the files and folders in one folder.", pathOnly("Absolute path of a folder inside the approved folders.")},
+        {"read_text_file", "Read one text file.", pathOnly("Absolute path of a file inside the approved folders.")},
+        {"write_text_file", "Replace a text file you have read with new content, or create a new file. Write the whole file.",
+            Json{{"type", "object"},
+                {"properties", {{"path", {{"type", "string"}, {"description", "Absolute path of the file inside the approved folders."}}},
+                                   {"content", {{"type", "string"}, {"description", "The whole new text of the file."}}}}},
+                {"required", Json::array({"path", "content"})}, {"additionalProperties", false}}
+                .dump()}};
+}
+
+bool ParseWritingWorkerCall(const llm::ToolCall& call, std::optional<actions::ActionRequest>& outAction, std::string& outError)
+{
+    outAction.reset();
+    const bool write = call.name == "write_text_file";
+    if (!write && call.name != "read_text_file" && call.name != "list_directory")
+    {
+        outError = "Not run: there is no tool named \"" + utf8::Prefix(utf8::Sanitize(call.name), 64) +
+                   "\". The tools are list_directory, read_text_file and write_text_file.";
+        return false;
+    }
+    outError = write ? "Not run: write_text_file takes a JSON object with an absolute path and the whole new content."
+                     : "Not run: " + call.name + " takes a JSON object with one absolute path.";
+    if (call.arguments.size() > 4 * MaximumWritingWorkerContentBytes || !utf8::IsValid(call.arguments))
+        return false;
+    try
+    {
+        const auto arguments = Json::parse(call.arguments);
+        if (!arguments.is_object() || arguments.size() != (write ? 2U : 1U) || !arguments.contains("path") || !arguments["path"].is_string() ||
+            (write && (!arguments.contains("content") || !arguments["content"].is_string())))
+            return false;
+        const auto& path = arguments["path"].get_ref<const std::string&>();
+        if (path.empty() || path.size() > 2048 || path.find('\0') != std::string::npos || !actions::Utf8ToPath(path).is_absolute())
+        {
+            outError = "Not run: the path must be absolute, inside the approved folders.";
+            return false;
+        }
+        Json action = {{"action", call.name}, {"source", path}};
+        if (write)
+        {
+            const auto& content = arguments["content"].get_ref<const std::string&>();
+            if (content.size() > MaximumWritingWorkerContentBytes || content.find('\0') != std::string::npos)
+            {
+                outError = "Not written: the content is longer than " + std::to_string(MaximumWritingWorkerContentBytes) +
+                           " bytes, more than one write may hold.";
+                return false;
+            }
+            action["content"] = content;
+            action["expected_digest"] = "missing";
+        }
+        auto parsed = planning::StructuredActionParser::ParseObject(action);
+        if (!parsed.succeeded)
+            return false;
+        parsed.request.requestedBy = "agent-workflow";
+        outAction = std::move(parsed.request);
+        outError.clear();
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+std::string WritingWorkerToolResult(const actions::ActionRequest& request, const actions::ActionOutcome& outcome)
+{
+    const std::string name = utf8::Sanitize(actions::PathToUtf8(request.source.filename()));
+    if (!outcome.Succeeded())
+    {
+        std::string said = BoundedText(outcome.Message(), 1024);
+        // The host checks a write against this worker's own read of that file; with no read
+        // there is nothing to check it against, and the model never handles a digest itself.
+        if (request.type == actions::ActionType::WriteTextFile && request.expectedDigest == "missing")
+            said += " Read the file first: a write replaces a file this worker has read, and the host checks it against that read.";
+        return said.empty() ? "The host could not run this call." : said;
+    }
+    if (request.type == actions::ActionType::ListDirectory)
+    {
+        std::string listing;
+        for (const auto& entry : outcome.result.entries)
+        {
+            if (listing.size() >= MaximumWritingWorkerContentBytes)
+            {
+                listing += "[more entries not shown]\n";
+                break;
+            }
+            const bool folder = entry.starts_with("[DIR]");
+            const auto first = entry.starts_with("[") ? entry.find_first_not_of(" \t", entry.find(']') + 1) : 0;
+            if (first == std::string::npos)
+                continue;
+            listing += BoundedText(entry.substr(first), 1024) + (folder ? "/" : "") + "\n";
+        }
+        return listing.empty() ? "The folder is empty." : listing;
+    }
+    if (request.type == actions::ActionType::ReadTextFile)
+    {
+        // The file as it is: no digest line, which a model rewriting the file copied into it.
+        std::string text = BoundedText(outcome.result.content, MaximumWritingWorkerContentBytes);
+        if (text.size() < outcome.result.content.size())
+            text += "\n[The file is longer than " + std::to_string(MaximumWritingWorkerContentBytes) + " bytes; the rest is not shown.]";
+        return text.empty() ? "The file is empty." : text;
+    }
+    return "Wrote " + std::to_string(request.value.size()) + " bytes to " + name + ".";
 }
 
 std::string WorkerToolReceipt(const actions::ActionRequest& request, const actions::ActionOutcome& outcome)
@@ -163,6 +317,18 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
         receipt["timedOut"] = process.timedOut;
         receipt["cancelled"] = process.cancelled;
     }
+    // What the host wrote. The receipt otherwise carried only the new file's hash, and a
+    // worker asked whether its change was established could not tell from a hash: a live 9B
+    // fixed the bug it was given, then reported the fix as unverified because no receipt
+    // showed the new content, and the run paused before its test was ever run.
+    std::string written;
+    if (request.type == actions::ActionType::WriteTextFile && outcome.Succeeded())
+    {
+        written = BoundedText(request.value, 8192);
+        receipt["written"] = written;
+        if (written.size() < request.value.size())
+            receipt["truncated"] = true;
+    }
     auto encoded = receipt.dump();
     while (encoded.size() > WorkerToolOutputReservation && !output.empty())
     {
@@ -176,6 +342,13 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
     {
         message = utf8::Prefix(message, message.size() / 2);
         receipt["message"] = message;
+        receipt["truncated"] = true;
+        encoded = receipt.dump();
+    }
+    while (encoded.size() > WorkerToolOutputReservation && !written.empty())
+    {
+        written = utf8::Prefix(written, written.size() / 2);
+        receipt["written"] = written;
         receipt["truncated"] = true;
         encoded = receipt.dump();
     }

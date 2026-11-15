@@ -29,7 +29,7 @@ public:
     void ApplyProfile(const llmSettings& settings, const aiProfile& profile);
     bool IsBackendAvailable(std::stop_token stopToken = {}) const;
     bool WarmUp(std::stop_token stopToken, std::string& outError) const;
-    void SetPosture(std::string posture);
+    void SetPosture(std::string posture, std::string standing = {});
     void SetReplyNote(std::string note);
     // Applies to local source explanations until SetPosture resets the turn state.
     void SetSourceExplanation(bool enabled);
@@ -54,6 +54,8 @@ public:
     responseOutput GenerateGoalPlan(const std::string& userRequest) const;
     responseOutput GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
         std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
+    responseOutput GenerateWorkerToolStep(const std::string& instructions, const std::string& task, const revia::llm::ToolExchange& tools,
+        std::stop_token stopToken = {}) const;
     responseOutput GenerateComputerSubgoal(const std::string& instruction,
         const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
 

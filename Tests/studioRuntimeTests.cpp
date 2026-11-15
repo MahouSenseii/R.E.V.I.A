@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -40,7 +41,7 @@ struct NativeActionFixture
     std::filesystem::path approved = temporary.root / "approved";
     std::filesystem::path marker = approved / "marker.txt";
 
-    explicit NativeActionFixture(const char* mode = "approved_scope")
+    explicit NativeActionFixture(const char* mode = "approved_scope", const char* risk = "read_only")
         : session(revia::runtime::CompanionPaths(temporary.root, {"native-action", "Native action fixture", "assistant", false}))
     {
         std::filesystem::create_directories(approved);
@@ -51,7 +52,7 @@ struct NativeActionFixture
         {
             std::ofstream output(temporary.root / "capabilities.json");
             output << nlohmann::json{{"mode", mode}, {"approvedRoots", {revia::actions::PathToUtf8(approved)}},
-                {"autoApproveRiskThrough", "read_only"}, {"createMissingApprovedRoots", false}}
+                {"autoApproveRiskThrough", risk}, {"createMissingApprovedRoots", false}}
                           .dump();
         }
         std::string error;
@@ -398,8 +399,19 @@ class HeldMemoryBackend
                 const auto content = responseFactory            ? responseFactory(wire)
                                      : suppliedResponse.empty() ? R"({"shouldRemember":false,"reason":"Synthetic fixture."})"
                                                                 : suppliedResponse;
-                const auto answer =
+                auto answer =
                     nlohmann::json{{"choices", nlohmann::json::array({{{"message", {{"content", content}}}, {"finish_reason", "stop"}}})}};
+                // A request that offered tools may be answered with calls: the responder returns
+                // {"content": text, "tool_calls": [...]}, which becomes the reply's message.
+                if (wire.contains("tools"))
+                {
+                    const auto message = nlohmann::json::parse(content, nullptr, false);
+                    if (message.is_object() && message.contains("tool_calls"))
+                    {
+                        answer["choices"][0]["message"] = {{"content", message.value("content", "")}, {"tool_calls", message["tool_calls"]}};
+                        answer["choices"][0]["finish_reason"] = "tool_calls";
+                    }
+                }
                 response.set_content(answer.dump(), "application/json");
             });
         port = server.bind_to_any_port("127.0.0.1");
@@ -669,8 +681,11 @@ nlohmann::json CompleteStudioDeliverable(const nlohmann::json& wire)
 {
     using json = nlohmann::json;
     const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-    json payload = {{"summary", "A bounded fixture plan."}, {"evidence", "Supplied fixture evidence."}, {"verified", true},
-        {"prerequisiteEvidence", properties.at("prerequisiteEvidence").value("const", json::array())}};
+    properties.at("summary");   // only a deliverable's schema
+    json payload = {{"summary", "A bounded fixture plan."}, {"evidence", "Supplied fixture evidence."}, {"verified", true}};
+    // A brief report leaves its references to the host.
+    if (properties.contains("prerequisiteEvidence"))
+        payload["prerequisiteEvidence"] = properties.at("prerequisiteEvidence").value("const", json::array());
     for (const auto& field : properties.items())
         if (!payload.contains(field.key()))
             payload[field.key()] = {{"items", {"Inspect the supplied marker evidence."}}, {"noneReason", ""}};
@@ -773,11 +788,18 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
     using namespace revia::agents;
     using json = nlohmann::json;
     NativeActionFixture fixture;
+    std::atomic<bool> fullReports{true};
     HeldMemoryBackend backend({},
-        [](const json& wire)
+        [&](const json& wire)
         {
             const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
-            return properties.contains("tool") ? std::string(R"({"tool":null})") : CompleteStudioDeliverable(wire).dump();
+            if (properties.contains("tool"))
+                return std::string(R"({"tool":null})");
+            // A run whose workers only read keeps the full report and copies its references.
+            if (!properties.contains("prerequisiteEvidence") || properties.at("summary").at("maxLength") != 2048 ||
+                wire.at("messages").at(0).at("content").get<std::string>().find("Be brief") != std::string::npos)
+                fullReports.store(false);
+            return CompleteStudioDeliverable(wire).dump();
         });
     backend.release.store(true);
     ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
@@ -786,6 +808,7 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
         error);
     ReviaSessionTestAccess::JoinWorkflow(fixture.session);
     const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    Check(fullReports.load(), "A run whose workers may only read was asked for brief reports.");
     Check(snapshot.state == WorkflowState::AwaitingAcceptance && snapshot.parentDecision == ParentDecision::Pending && snapshot.toolCalls == 0 &&
               fixture.session.AgentWorkflowResult().empty(),
         "A legitimate no-tool completion was treated as a failure or bypassed separate parent acceptance.");
@@ -794,6 +817,188 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
             Check(node.state == WorkflowState::Succeeded && node.attempts.size() == 1 && node.attempts.back().verified &&
                       node.attempts.back().toolCalls == 0,
                 "A complete no-tool analytical deliverable did not advance through ordinary verification.");
+}
+
+// A run whose workers may change files asks for brief reports, bounded in their schema, and the
+// host puts in the prerequisite references the model used to copy; every report still passes
+// validation against the references actually supplied.
+void TestToolStudioWritingRunAsksForBriefReports()
+{
+    using namespace revia::runtime;
+    using namespace revia::agents;
+    using json = nlohmann::json;
+    NativeActionFixture fixture("approved_scope", "reversible_write");
+    const std::string marker = revia::actions::PathToUtf8(fixture.marker);
+    std::mutex seenMutex;
+    std::vector<json> reports;
+    HeldMemoryBackend backend({},
+        [&](const json& wire)
+        {
+            if (wire.contains("tools"))
+            {
+                // The worker that may write reads the file once, then reports.
+                for (const auto& message : wire.at("messages"))
+                    if (message.at("role") == "tool")
+                        return json{{"content", "Reviewed."}}.dump();
+                return json{{"content", ""},
+                    {"tool_calls", json::array({{{"id", "call_read"}, {"type", "function"},
+                                       {"function", {{"name", "read_text_file"}, {"arguments", json{{"path", marker}}.dump()}}}}})}}
+                    .dump();
+            }
+            const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+            if (properties.contains("tool"))
+                return std::string(R"({"tool":null})");
+            {
+                std::lock_guard lock(seenMutex);
+                reports.push_back(wire);
+            }
+            return CompleteStudioDeliverable(wire).dump();
+        });
+    backend.release.store(true);
+    ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+    std::string error;
+    Check(fixture.session.StartAgentWorkflow("Assess the supplied evidence without requiring a file read.", AgentProviderMode::LocalWithTools, error),
+        error);
+    ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+    const auto snapshot = fixture.session.AgentWorkflowSnapshot();
+    std::lock_guard lock(seenMutex);
+    Check(reports.size() >= 3, "The writing run did not ask its workers and reviewer for reports.");
+    for (const auto& wire : reports)
+    {
+        const auto& schema = wire.at("response_format").at("json_schema").at("schema");
+        const auto& properties = schema.at("properties");
+        Check(wire.at("messages").at(0).at("content").get<std::string>().ends_with("summary and evidence at most 60 words each."),
+            "A report in a writing run was not asked to be brief.");
+        Check(!properties.contains("prerequisiteEvidence") &&
+                  std::find(schema.at("required").begin(), schema.at("required").end(), "prerequisiteEvidence") == schema.at("required").end(),
+            "A brief report still had the model copy its fixed prerequisite references.");
+        Check(properties.at("summary").at("maxLength") == 480 && properties.at("evidence").at("maxLength") == 480,
+            "A brief report's summary or evidence was not bounded.");
+        for (const auto& field : properties.items())
+        {
+            if (!field.value().is_object() || field.key() == "summary" || field.key() == "evidence" || field.key() == "verified")
+                continue;
+            const auto& populated = field.value().contains("anyOf") ? field.value().at("anyOf").at(0) : field.value();
+            const auto& items = populated.at("properties").at("items");
+            Check(items.at("maxItems") == 4 && items.at("items").at("maxLength") == 240,
+                "A brief report's section was not bounded to four short items: " + field.key());
+        }
+    }
+    Check(snapshot.state == WorkflowState::AwaitingAcceptance, "A writing run with brief reports did not reach acceptance.");
+    for (const auto& node : snapshot.nodes)
+    {
+        if (node.role == WorkflowRole::Parent)
+            continue;
+        Check(node.state == WorkflowState::Succeeded && !node.attempts.empty() && node.attempts.back().verified,
+            "A brief report with host-filled references did not pass validation: " + node.id);
+        if (node.id == "review")
+            Check(node.attempts.back().prerequisites.size() == 2, "The reviewer's references were not both supplied and checked.");
+    }
+}
+
+// The worker that may write works in the model's own tool-call format. It is told to look when it
+// answers before looking, and, asked for a change, told nothing is written yet when it answers
+// before writing; asked only to review, it may stop once it has read. It never handles a digest:
+// a write to a file it has not read is refused with "read it first", one that changes nothing is
+// refused as such, and one after its read goes through.
+void TestToolStudioWriterKeepsGoingUntilItWrites()
+{
+    using namespace revia::runtime;
+    using json = nlohmann::json;
+    for (const bool askedForAChange : {true, false})
+    {
+        NativeActionFixture fixture("approved_scope", "reversible_write");
+        const std::string marker = revia::actions::PathToUtf8(fixture.marker);
+        // Ending with a newline, which a whole file written in the model's own tool-call format
+        // arrives without: the rewrite below is the file unchanged all the same.
+        if (askedForAChange)
+            std::ofstream(fixture.marker, std::ios::binary) << "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A\n";
+        std::mutex seenMutex;
+        // For each step of the worker that may write: its task text (with any host note) and the
+        // results of its earlier calls.
+        std::vector<std::pair<std::string, std::vector<std::string>>> steps;
+        bool schemaless = true;
+        HeldMemoryBackend backend({},
+            [&](const json& wire)
+            {
+                if (!wire.contains("tools"))
+                    return CompleteStudioDeliverable(wire).dump();
+                std::vector<std::string> results;
+                for (const auto& message : wire.at("messages"))
+                    if (message.at("role") == "tool")
+                        results.push_back(message.at("content").get<std::string>());
+                std::size_t step = 0;
+                {
+                    std::lock_guard lock(seenMutex);
+                    schemaless = schemaless && !wire.contains("response_format");
+                    for (const auto& tool : wire.at("tools"))
+                        schemaless = schemaless && !tool.at("function").at("parameters").at("properties").contains("expected_digest");
+                    steps.emplace_back(wire.at("messages").at(1).at("content").get<std::string>(), results);
+                    step = steps.size();
+                }
+                // One reply with `count` calls of the same tool.
+                const auto call = [&](const char* name, json arguments, const int count = 1)
+                {
+                    json calls = json::array();
+                    for (int index = 0; index < count; ++index)
+                        calls.push_back({{"id", "call_" + std::to_string(step) + "_" + std::to_string(index)}, {"type", "function"},
+                            {"function", {{"name", name}, {"arguments", arguments.dump()}}}});
+                    return json{{"content", "Step " + std::to_string(step) + "."}, {"tool_calls", std::move(calls)}}.dump();
+                };
+                const auto text = [](const char* said) { return json{{"content", said}}.dump(); };
+                // Reviewing: eight reads in each of two replies, of which only twelve calls run.
+                if (!askedForAChange)
+                    return step == 1 ? text("I will look.") : step <= 3 ? call("read_text_file", {{"path", marker}}, 8) : text("Reviewed.");
+                switch (step)
+                {
+                case 1: return text("I will look.");
+                case 2: return call("write_text_file", {{"path", marker}, {"content", "FIXED_MARKER_5F9A"}});
+                // Three reads in one reply, which count as one of the worker's six replies.
+                case 3: return call("read_text_file", {{"path", marker}}, 3);
+                case 4: return call("write_text_file", {{"path", marker}, {"content", "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A"}});
+                case 5: return text("It looks right to me.");
+                case 6: return call("write_text_file", {{"path", marker}, {"content", "FIXED_MARKER_5F9A"}});
+                default: return text("Done.");
+                }
+            });
+        backend.release.store(true);
+        ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+        std::string error;
+        Check(fixture.session.StartAgentWorkflow(askedForAChange ? "Fix the sentinel spelling in marker.txt." : "Review marker.txt for its sentinel.",
+                  AgentProviderMode::LocalWithTools, error),
+            error);
+        ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+        std::lock_guard lock(seenMutex);
+        Check(schemaless, "The worker that may write was sent a JSON schema or asked for a digest.");
+        const auto told = [&](const std::size_t step, const char* words)
+        { return step <= steps.size() && steps[step - 1].first.find(words) != std::string::npos; };
+        const auto result = [&](const std::size_t step, const std::size_t index, const char* words)
+        {
+            return step <= steps.size() && index < steps[step - 1].second.size() &&
+                   steps[step - 1].second[index].find(words) != std::string::npos;
+        };
+        Check(told(2, "no tool has run for this worker yet") && !told(3, "Host note"),
+            "Answering before looking, the worker was not told to look, or was still told after.");
+        if (askedForAChange)
+        {
+            Check(steps.size() == 6, "Asked for a change, the worker did not get its six replies, or a reply with three reads spent three.");
+            Check(result(3, 0, "Read the file first"), "A write to a file the worker had not read was not refused with what to do.");
+            Check(result(4, 3, "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A"), "The three reads of one reply did not all run.");
+            Check(result(5, 4, "nothing would change"), "Writing the file back unchanged was not refused as a change that changes nothing.");
+            Check(told(6, "no file has been written by this worker yet"), "Asked for a change, the worker could stop before writing.");
+        }
+        else
+        {
+            Check(steps.size() == 4 && !told(4, "no file has been written"), "Asked only to review, the worker could not stop after reading.");
+            Check(result(4, 11, "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A") && result(4, 12, "used all of its tool calls") &&
+                      result(4, 15, "used all of its tool calls"),
+                "The worker that may write ran more than its twelve tool calls, or fewer.");
+        }
+        std::ifstream written(fixture.marker, std::ios::binary);
+        const std::string now((std::istreambuf_iterator<char>(written)), std::istreambuf_iterator<char>());
+        Check(askedForAChange ? now == "FIXED_MARKER_5F9A\n" : now == "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A",
+            askedForAChange ? "The requested change was not written, or lost the file's last newline." : "A review-only run changed the file.");
+    }
 }
 
 void TestLocalStudioGrammarPinsNativeEvidence()
@@ -850,6 +1055,17 @@ void TestLocalStudioGrammarPinsNativeEvidence()
                   alternatives.at(1).at("properties").at("items").at("maxItems") == 0 &&
                   alternatives.at(1).at("properties").at("noneReason").at("minLength") == 1,
             "Model grammar lost mutually exclusive optional-section content and absence rationale.");
+        // An array bound binds in llama.cpp's grammar only where the item type is stated.
+        // Without it "no items, with a reason" admitted items too, a live 9B's verifying
+        // worker gave both 10 times in 10, and every such deliverable was refused.
+        for (const auto* section : {"risks", "constraints"})
+        {
+            if (!properties.contains(section) || !properties.at(section).contains("anyOf"))
+                continue;
+            const auto& emptyList = properties.at(section).at("anyOf").at(1).at("properties").at("items");
+            Check(emptyList.at("maxItems") == 0 && emptyList.contains("items") && emptyList.at("items").value("type", "") == "string",
+                std::string("The empty list of a section that may be absent does not bind in the model grammar: ") + section);
+        }
     }
 }
 
@@ -939,6 +1155,8 @@ void RunStudioStopDiagnosticsTests()
     TestToolStudioStopFailureDiagnostic(true);
     TestToolStudioStopFailureDiagnostic(false);
     TestToolStudioNoToolCompletionStillAwaitsAcceptance();
+    TestToolStudioWritingRunAsksForBriefReports();
+    TestToolStudioWriterKeepsGoingUntilItWrites();
 }
 
 void RunStudioRuntimeTests()

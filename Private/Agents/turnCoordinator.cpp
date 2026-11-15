@@ -24,7 +24,7 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     const ResponseFilterContext& filterContext, const bool evaluateMemory, const ResponseProvenance provenance, const std::uint64_t turnId,
     const std::stop_token stopToken, messageRouter::DeltaHandler onDelta, const revia::intelligence::IntelligenceDecision& decision,
     const llm::PrivateMemoryAccess memoryAccess, std::function<bool()> contextAdmission, const memory::MemoryScope& scope,
-    const ToolLoop* tools) const
+    const ToolLoop* tools, std::function<bool()> memoryAdmission) const
 {
     TurnAgentResult result;
     const auto admitted = [&contextAdmission]()
@@ -62,7 +62,11 @@ TurnAgentResult TurnCoordinator::Execute(const messageRouter& router, const std:
     if (memoryAccess == llm::PrivateMemoryAccess::ProfileSetting &&
         evaluateMemory && result.response.bSuccess && !stopToken.stop_requested())
     {
-        memoryAgent.Submit(router, input, result.response.response, provenance, turnId, contextAdmission, scope);
+        // The reply was admitted and is already delivered. What it leaves to remember is
+        // governed by the conversation it belongs to, not by the turn: a turn's own
+        // admission ends when the next message starts, and took the memory with it.
+        memoryAgent.Submit(router, input, result.response.response, provenance, turnId,
+            memoryAdmission ? std::move(memoryAdmission) : contextAdmission, scope);
         result.memoryQueued = true;
     }
     return result;

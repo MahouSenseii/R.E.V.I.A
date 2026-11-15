@@ -1,5 +1,6 @@
 #include "Identity/relationshipEvidence.h"
 #include "Core/speechAttribution.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -62,6 +63,23 @@ namespace
             [&haystack](const std::string_view needle)
             {
                 return haystack.find(needle) != std::string::npos;
+            });
+    }
+
+    // A phrase that begins a word: "thank" finds "thanks" and "thankful", and does not
+    // find itself inside another word, as "perfect" sits in "imperfect".
+    bool ContainsAnyAtWordStart(const std::string& haystack, const std::initializer_list<std::string_view> needles)
+    {
+        return std::any_of(needles.begin(), needles.end(),
+            [&haystack](const std::string_view needle)
+            {
+                for (std::size_t at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1))
+                {
+                    const unsigned char before = at == 0 ? ' ' : static_cast<unsigned char>(haystack[at - 1]);
+                    if (std::isalnum(before) == 0 && before != '_' && before < 0x80)
+                        return true;
+                }
+                return false;
             });
     }
 
@@ -204,6 +222,15 @@ namespace
             for (std::size_t at = input.find(phrase); at != std::string::npos;
                 at = input.find(phrase, at + phrase.size()))
             {
+                // Whole words only. "I hate YouTube" holds the letters of "i hate you" and
+                // says nothing about her; neither does "you sucked the air out of the room".
+                const auto partOfWord = [&input](const std::size_t index)
+                {
+                    const auto character = static_cast<unsigned char>(input[index]);
+                    return std::isalnum(character) != 0 || character == '_' || character >= 0x80;
+                };
+                const std::size_t end = at + phrase.size();
+                if ((at > 0 && partOfWord(at - 1)) || (end < input.size() && partOfWord(end))) continue;
                 if (NegatesJudgmentBefore(userInput, at)) continue;
                 signals.hostileTowardRevia = true;
                 break;
@@ -228,7 +255,7 @@ namespace
             }
         }
 
-        signals.expressedAppreciation = ContainsAny(
+        signals.expressedAppreciation = ContainsAnyAtWordStart(
             input, {"thank", "thanks", "appreciate", "well done", "good job", "nice work", "that helped", "perfect", "exactly right"});
 
         // Recurrence and praise ("good to see you again", "you keep making me laugh")
@@ -241,7 +268,8 @@ namespace
             IsDirectRetryRequest(input) || HasWrongResultComplaint(input);
 
         signals.collaborative =
-            succeeded && ContainsAny(input, {"let's", "lets ", "we should", "can you help", "work on", "together", "figure out", "let us"});
+            succeeded &&
+            ContainsAnyAtWordStart(input, {"let's", "lets ", "we should", "can you help", "work on", "together", "figure out", "let us"});
 
         // A short acknowledgement is not a relationship event. Weighting every "ok" the same
         // as a real exchange would let idle chatter accumulate into closeness.
@@ -303,8 +331,27 @@ namespace
             authored.replace(at, 3, "'");
         std::vector<std::vector<std::string>> clauses(1);
         std::string word;
-        for (const char character : authored + '.')
+        const std::string text = authored + '.';
+        for (std::size_t at = 0; at < text.size(); ++at)
         {
+            const char character = text[at];
+            // A letter outside ASCII is part of the word: "andré" is one word, not "andr".
+            if (static_cast<unsigned char>(character) >= 0x80)
+            {
+                const std::size_t width = utf8::SequenceAt(text, at);
+                if (width != 0 && utf8::IsWordCodePoint(utf8::CodePointAt(text, at, width)))
+                {
+                    word.append(text, at, width);
+                    at += width - 1;
+                    continue;
+                }
+                if (width > 1)
+                    at += width - 1;
+                if (!word.empty())
+                    clauses.back().push_back(std::move(word));
+                word.clear();
+                continue;
+            }
             if (std::isalpha(static_cast<unsigned char>(character)) != 0 || character == '\'' || character == '-')
             {
                 word.push_back(character);
@@ -384,16 +431,26 @@ std::string ReadStatedNameFrom(const std::string& userInput, const bool includeA
             std::string name;
             // One word, letters and a couple of joining characters only. Taking the rest of
             // the sentence would store "quentin and i work on revia" as somebody's name.
+            // Letters of any script count: stopping at the first byte outside ASCII cut
+            // "André" and "Andrés" to the same "Andr", one person for two.
             while (index < userInput.size() && name.size() < 32)
             {
                 const unsigned char character = static_cast<unsigned char>(userInput[index]);
-                if (std::isalpha(character) != 0 || character == '-' || character == '\'')
+                if (character < 0x80)
                 {
+                    if (std::isalpha(character) == 0 && character != '-' && character != '\'')
+                        break;
                     name.push_back(userInput[index]);
                     ++index;
                     continue;
                 }
-                break;
+                const std::size_t width = utf8::SequenceAt(userInput, index);
+                const char32_t codePoint = width == 0 ? 0 : utf8::CodePointAt(userInput, index, width);
+                // A curly apostrophe joins a name as a straight one does: O’Brien.
+                if (width == 0 || (!utf8::IsWordCodePoint(codePoint) && codePoint != 0x2019) || name.size() + width > 32)
+                    break;
+                name.append(userInput, index, width);
+                index += width;
             }
             if (name.size() < 2)
             {
@@ -403,7 +460,8 @@ std::string ReadStatedNameFrom(const std::string& userInput, const bool includeA
             {
                 continue;
             }
-            name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            if (static_cast<unsigned char>(name[0]) < 0x80)
+                name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             if (stated.empty() || IsExplicitNameCorrection(userInput, at, index))
                 stated = name;
         }
@@ -491,7 +549,8 @@ std::string ReadSpeakerNameCorrection(const std::string& userInput, const std::s
             if (selfReference && words[index].size() >= 2 && !IsNotAName(words[index]))
             {
                 std::string corrected = words[index];
-                corrected[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(corrected[0])));
+                if (static_cast<unsigned char>(corrected[0]) < 0x80)
+                    corrected[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(corrected[0])));
                 return corrected;
             }
         }
@@ -504,7 +563,7 @@ std::string ReadReturningSpeaker(const std::string& userInput, const std::vector
     const auto known = [&knownNames](const std::string& word) -> std::string
     {
         for (const auto& name : knownNames)
-            if (!name.empty() && Lower(name) == word)
+            if (!name.empty() && utf8::FoldCase(name) == utf8::FoldCase(word))
                 return name;
         return {};
     };

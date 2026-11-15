@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <initializer_list>
+#include <string_view>
 #include <utility>
 
 namespace revia::runtime
@@ -20,11 +21,39 @@ namespace
         return value;
     }
 
+    bool WordCharacter(const char character)
+    {
+        const auto byte = static_cast<unsigned char>(character);
+        return std::isalnum(byte) != 0 || byte == '_' || byte >= 0x80;
+    }
+
+    // A marker that begins a word: "fail" finds "failed", and "bug" is not found in
+    // "debug", nor "error" in "terror".
     bool ContainsAny(const std::string& text, const std::initializer_list<const char*> markers)
     {
         return std::any_of(markers.begin(), markers.end(), [&](const char* marker)
         {
-            return text.find(marker) != std::string::npos;
+            const std::string_view needle(marker);
+            for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1))
+                if (at == 0 || !WordCharacter(text[at - 1]))
+                    return true;
+            return false;
+        });
+    }
+
+    // A marker that is a whole word: "again" is not in "against", "lol" not in "lollipop".
+    bool ContainsWord(const std::string& text, const std::initializer_list<const char*> markers)
+    {
+        return std::any_of(markers.begin(), markers.end(), [&](const char* marker)
+        {
+            const std::string_view needle(marker);
+            for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1))
+            {
+                const std::size_t end = at + needle.size();
+                if ((at == 0 || !WordCharacter(text[at - 1])) && (end == text.size() || !WordCharacter(text[end])))
+                    return true;
+            }
+            return false;
         });
     }
 
@@ -406,8 +435,8 @@ AffectController::Candidate AffectController::Classify(const std::string& userIn
         return {AffectState::Bored, 0.58F,
             "The exchange feels repetitive enough for boredom to show."};
     }
-    if (ContainsAny(input, {
-        "you keep", "again", "still not", "i already said", "i just said",
+    if (ContainsWord(input, {"again"}) || ContainsAny(input, {
+        "you keep", "still not", "i already said", "i just said",
         "that's not what", "that is not what", "why won't", "why wont"}))
     {
         return {AffectState::Frustrated, 0.78F,
@@ -430,8 +459,8 @@ AffectController::Candidate AffectController::Classify(const std::string& userIn
         return {AffectState::Lonely, 0.6F,
             "The user invited an honest description of missing conversation."};
     }
-    if (ContainsAny(input, {
-        "haha", "hehe", "lol", "lmao", "joke", "tease", "brat", "silly",
+    if (ContainsWord(input, {"lol", "lmao"}) || ContainsAny(input, {
+        "haha", "hehe", "joke", "tease", "brat", "silly",
         "revia!", "say your name"}))
     {
         return {AffectState::Playful, 0.7F,

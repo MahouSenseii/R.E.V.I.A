@@ -228,6 +228,20 @@ responseOutput messageRouter::RouteMessage(const std::string& message, const std
 responseOutput messageRouter::ReviewCode(const std::string& instructions, const std::string& material, const std::string& schema,
     const std::stop_token stopToken, const revia::llm::CodeReviewPurpose purpose) const
 {
+    return OnReviewModel(purpose, stopToken, [&](const llmService& service)
+        { return service.GenerateCodeReview(instructions, material, schema, stopToken, purpose); });
+}
+
+responseOutput messageRouter::WorkerToolStep(const std::string& instructions, const std::string& task,
+    const revia::llm::ToolExchange& tools, const std::stop_token stopToken) const
+{
+    return OnReviewModel(revia::llm::CodeReviewPurpose::Development, stopToken,
+        [&](const llmService& service) { return service.GenerateWorkerToolStep(instructions, task, tools, stopToken); });
+}
+
+responseOutput messageRouter::OnReviewModel(const revia::llm::CodeReviewPurpose purpose, const std::stop_token stopToken,
+    const std::function<responseOutput(const llmService&)>& generate) const
+{
     // Held for the whole review, so the idle sweep cannot unload Expert mid-answer.
     revia::intelligence::ModelLifetimeCoordinator::Lease expertLease;
     const llmService* selected = &llm;
@@ -250,7 +264,7 @@ responseOutput messageRouter::ReviewCode(const std::string& instructions, const 
         }
     }
     residency.BeginInference(tier, "background");
-    responseOutput output = selected->GenerateCodeReview(instructions, material, schema, stopToken, purpose);
+    responseOutput output = generate(*selected);
     residency.EndInference(tier);
     // Brought up only for this review, so put straight back. Left to the idle grace, it
     // kept the GPU 95% full for five more minutes, and everything else she does on her
@@ -294,16 +308,16 @@ void messageRouter::SetReasoningHandler(ReasoningHandler handler)
     pendingReasoning = std::move(handler);
 }
 
-void messageRouter::SetPosture(std::string posture)
+void messageRouter::SetPosture(std::string posture, std::string standing)
 {
     {
         std::lock_guard lock(reasoningMutex);
         pendingReasoning = {};
         pendingCloud.reset();
     }
-    llm.SetPosture(posture);
-    if (fastConfigured) fastLlm.SetPosture(posture);
-    if (expertConfigured) expertLlm.SetPosture(std::move(posture));
+    llm.SetPosture(posture, standing);
+    if (fastConfigured) fastLlm.SetPosture(posture, standing);
+    if (expertConfigured) expertLlm.SetPosture(std::move(posture), std::move(standing));
 }
 
 std::string messageRouter::RelatedMemories(

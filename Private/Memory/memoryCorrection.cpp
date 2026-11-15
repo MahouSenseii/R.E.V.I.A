@@ -46,7 +46,15 @@ bool ExplicitFirstPersonCorrection(const std::string& input)
         "example", "hypothetical", "suppose", "if i ", "what if", "ignore ", "instruction", "system prompt", "you must",
         "i said ", "i wrote ", "i read ", "i heard ", "i was told ", "i am acting ", "i'm acting ", "i am playing ",
         "i'm playing ", "i am quoting ", "i'm quoting ", "as a character", "in a game"})
-        if (text.find(unsafe) != std::string::npos) return false;
+    {
+        // At the start of a word only: "story" is a cue, "history" is a subject. A cue
+        // still blocks every word it begins, so "fictional" and "storyline" stay refused.
+        for (std::size_t at = text.find(unsafe); at != std::string::npos; at = text.find(unsafe, at + 1))
+        {
+            const auto before = at == 0 ? ' ' : static_cast<unsigned char>(text[at - 1]);
+            if (std::isalnum(before) == 0 && before != '_' && before < 0x80) return false;
+        }
+    }
     return true;
 }
 bool AllowedCategory(const std::string& category)

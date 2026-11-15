@@ -1022,6 +1022,10 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME Revia.GuestPreparation COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/guestSandbox.test.py")
+        # Offline: never starts VMware or downloads an image. The guest worker's own tests
+        # need Linux and run in CI's Linux guest-worker job instead.
+        add_test(NAME Revia.GuestVmBootstrap COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/Tools/Guest" -p test_vmware_ubuntu.py)
         add_test(NAME Revia.ContextBenchmarkContract COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/Tests/contextBenchmark.test.py")
         add_test(NAME Revia.AnswerGateSessionContract COMMAND "${Python3_EXECUTABLE}"

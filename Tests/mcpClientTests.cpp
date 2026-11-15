@@ -492,6 +492,28 @@ void TestManagerGatesEveryCall()
     Check(!Contains(record, "hello-secret-arg") && Contains(record, "\"result_bytes\"") && Contains(record, "mcp_tool_call"),
         "The audit record copied the arguments or lost its size.");
 
+    // The owner approves what the prompt shows, so it has to show every argument. A
+    // long value is cut where it stands and says by how much; it does not push a later
+    // argument, such as the path a file is written to, off the end.
+    {
+        const Json small = {{"path", "notes.txt"}, {"content", "short"}};
+        Check(mcp::ArgumentsForApproval(small) == small.dump(), "Short arguments were not shown exactly as sent.");
+        const Json large = {{"content", std::string(6000, 'x')}, {"path", "C:/Users/owner/startup/run-at-logon.cmd"}, {"zz_overwrite", true}};
+        const auto prompt = mcp::ArgumentsForApproval(large);
+        Check(prompt && Contains(*prompt, "\"path\": \"C:/Users/owner/startup/run-at-logon.cmd\"") && Contains(*prompt, "\"zz_overwrite\": true"),
+            "A long value pushed a later argument out of the approval prompt: " + prompt.value_or("(nothing)"));
+        Check(Contains(*prompt, "bytes not shown]") && Contains(*prompt, std::to_string(large.dump().size()) + " bytes in all") &&
+                  prompt->size() < 2400,
+            "A cut value was not marked with what was left out, or the prompt is unbounded: " + std::to_string(prompt->size()));
+        Json many = Json::object();
+        for (int index = 0; index < 60; ++index)
+            many["argument" + std::to_string(index)] = std::string(20, 'y');
+        Check(!mcp::ArgumentsForApproval(many), "More arguments than a prompt can name were offered for approval.");
+        const Json list = Json::array({std::string(3000, 'z')});
+        const auto listed = mcp::ArgumentsForApproval(list);
+        Check(listed && Contains(*listed, "bytes not shown]") && listed->size() < 2400, "Long non-object arguments were not cut and marked.");
+    }
+
     // An audit that cannot record stops the call before it is sent.
     recorder.auditWorks = false;
     const Json other = {{"text", "unrecorded"}};

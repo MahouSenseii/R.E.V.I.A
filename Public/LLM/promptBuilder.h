@@ -55,7 +55,11 @@ public:
         // instead of in the system message, so the system message is identical between
         // turns and the backend can reuse its cached prompt.
         bool stablePrefix = false,
-        std::stop_token stopToken = {}
+        std::stop_token stopToken = {},
+        // Guidance that is the same from turn to turn until a setting changes. With a
+        // stable prefix it ends the system message, where the backend's cache keeps it;
+        // otherwise it leads the turn context, where it always was.
+        const std::string& standing = ""
     ) const;
     std::string BuildMemoryBlock(const std::string& query = "") const;
     // The saved memories closest to `query`, for a caller deciding whether something is

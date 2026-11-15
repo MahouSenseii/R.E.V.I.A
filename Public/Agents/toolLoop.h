@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -80,6 +81,15 @@ class ToolLoop
     // The turn's admission; checked before every request and every call.
     void SetAdmission(std::function<bool()> admission);
     void SetTurnId(std::uint64_t turnId);
+    // Calls the runtime makes itself, from the person's own words, before the model's
+    // first step. They are validated, executed, audited and budgeted exactly as a call the
+    // model asks for, and the first request already carries their results.
+    void SetOpeningCalls(std::vector<llm::ToolCall> calls);
+    // A call this turn has to make, because the person's own words asked for it. A model
+    // that ends its answer without asking for that tool has the call made for it, through
+    // the same validation, executor and audit, and one more step to say what came of it.
+    // A call the model does make for that tool, accepted or refused, settles it.
+    void SetRequiredCall(llm::ToolCall call);
 
     [[nodiscard]] bool Active() const;
     [[nodiscard]] const ToolRegistry& Registry() const;
@@ -104,6 +114,8 @@ class ToolLoop
     GeneratedMediaHandler generatedMedia;
     std::function<bool()> admission;
     std::uint64_t turnId = 0;
+    std::vector<llm::ToolCall> openingCalls;
+    std::optional<llm::ToolCall> requiredCall;
 };
 
 } // namespace revia::agents

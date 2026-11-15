@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,7 +36,9 @@ struct ExtractedText
 // content streams are uncompressed or FlateDecode (including objects packed in object
 // streams), decodes text through each font's ToUnicode map when there is one and as
 // WinAnsi otherwise. Encrypted files, scanned pages with no text layer and fonts with
-// no usable mapping are reported, not guessed at. Every count and size is bounded.
-[[nodiscard]] ExtractedText ExtractPdfText(std::string_view bytes, std::size_t maxTextBytes);
+// no usable mapping are reported, not guessed at. Every count and size is bounded, and
+// so is the work: a file built to make the reader rescan itself is refused after an
+// allowance that grows with the file's real size, and `stopToken` ends the read early.
+[[nodiscard]] ExtractedText ExtractPdfText(std::string_view bytes, std::size_t maxTextBytes, std::stop_token stopToken = {});
 
 } // namespace revia::attachments

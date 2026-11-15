@@ -2065,7 +2065,7 @@ void TestConfiguredModelMetadataForReviewCuriosityAndDeliberation()
         "zeta":{"type":"string"},"alpha":{"type":"integer"},"middle":{"type":"boolean"}},"additionalProperties":false})";
     assertModel(router.ReviewCode("Review this material.", "int value = 1;", developmentSchema), "Expert", "metadata-expert");
     const auto development = backend.Last();
-    Check(backend.Count() == developmentIndex + 1 && development.value("max_tokens", 0) == 1600 &&
+    Check(backend.Count() == developmentIndex + 1 && development.value("max_tokens", 0) == 3072 &&
               development.value("temperature", 0.0) > 0.19 && development.value("temperature", 0.0) < 0.21 &&
               !development.contains("reasoning_budget_tokens") && !development.contains("top_k") && !development.contains("min_p") &&
               !development.value("chat_template_kwargs", json::object()).value("enable_thinking", true),

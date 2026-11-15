@@ -199,11 +199,29 @@ bool LearningRecordStore::Propose(const LearningCandidate& candidate, std::strin
                 error.clear();
                 return true;
             }
-        if (records.size() >= 256 ||
-            (!candidate.correctsRecordId.empty() &&
-                std::none_of(records.begin(), records.end(), [&](const auto& prior) { return prior.id == candidate.correctsRecordId; })))
-            throw std::runtime_error("Learning capacity or correction reference invalid.");
+        if (!candidate.correctsRecordId.empty() &&
+            std::none_of(records.begin(), records.end(), [&](const auto& prior) { return prior.id == candidate.correctsRecordId; }))
+            throw std::runtime_error("Learning correction reference invalid.");
         auto updated = records;
+        // The history is bounded. When it is full, the oldest finished record makes room:
+        // one the owner rejected, or one already saved as trusted memory, that no other
+        // record corrects. Open reviews are never dropped; with nothing finished to drop,
+        // the new lesson is refused as before rather than growing the file without end.
+        if (updated.size() >= 256)
+        {
+            const auto finished = std::find_if(updated.begin(), updated.end(), [&](const LearningRecord& prior)
+            {
+                const bool closed = prior.decision == LearningDecision::Reject ||
+                                    (prior.decision == LearningDecision::Accept && prior.disposition == LearningDisposition::TrustedMemory);
+                const bool referenced = prior.id == candidate.correctsRecordId ||
+                                        std::any_of(updated.begin(), updated.end(),
+                                            [&](const LearningRecord& other) { return other.candidate.correctsRecordId == prior.id; });
+                return closed && !referenced;
+            });
+            if (finished == updated.end())
+                throw std::runtime_error("Learning capacity reached with every record still open.");
+            updated.erase(finished);
+        }
         updated.push_back(record);
         if (!Save(updated, error))
             return false;

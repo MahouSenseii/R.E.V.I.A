@@ -254,6 +254,14 @@ std::vector<std::string> BuildLlamaServerArguments(
     // depend on it; recent llama.cpp builds default to it, and saying so keeps a build
     // with the older default from silently dropping tools.
     add({"--jinja"});
+    // For a hybrid model such as Qwen3.5 the server can resume a prompt only from a saved
+    // checkpoint, and by default it keeps them at least 8,192 tokens apart, which is more
+    // than a whole conversation here. The turn after a tool use then found none close and
+    // re-read the chat from its start: about 2,600 tokens and 0.78 s on the 9B, against
+    // about 1,330 tokens and 0.44 s with checkpoints 512 tokens apart. Ordinary turns read
+    // about 50 ms less. No spacing at all was faster still after a tool, but saving that
+    // many checkpoints added about 40 ms to every turn.
+    add({"--checkpoint-min-step", "512"});
     if (settings.bVisionEnabled && settings.imageMinTokens > 0)
         add({"--image-min-tokens", std::to_string(std::min(settings.imageMinTokens, 4096))});
     if (settings.batchSize > 0)

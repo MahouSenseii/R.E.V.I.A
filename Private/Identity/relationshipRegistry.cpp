@@ -1,5 +1,6 @@
 #include "Identity/relationshipRegistry.h"
 #include "Actions/actionTypes.h"
+#include "Core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -80,6 +81,42 @@ std::string Sanitize(const std::string& value)
         output.pop_back();
     }
     return output.substr(0, 64);
+}
+
+// The same for a person's name, with one difference: a letter outside ASCII is kept,
+// lower-cased where that is simple, instead of becoming a dash. Otherwise "Zoë" and
+// "Zoé" are one key and one person is handed the other's history. A name made only of
+// ASCII gets exactly the key it always had.
+std::string SanitizeName(const std::string& value)
+{
+    const std::string folded = revia::utf8::FoldCase(value);
+    std::string output;
+    output.reserve(folded.size());
+    for (std::size_t at = 0; at < folded.size();)
+    {
+        const auto character = static_cast<unsigned char>(folded[at]);
+        std::size_t width = 1;
+        bool letter = false;
+        if (character < 0x80)
+        {
+            letter = std::isalnum(character) != 0;
+        }
+        else if (const std::size_t sequence = revia::utf8::SequenceAt(folded, at); sequence != 0)
+        {
+            width = sequence;
+            letter = revia::utf8::IsWordCodePoint(revia::utf8::CodePointAt(folded, at, width));
+        }
+        if (letter)
+            output.append(folded, at, width);
+        else if (!output.empty() && output.back() != '-')
+            output.push_back('-');
+        at += width;
+    }
+    while (!output.empty() && output.back() == '-')
+    {
+        output.pop_back();
+    }
+    return revia::utf8::Prefix(output, 64);
 }
 }
 
@@ -366,7 +403,7 @@ void RelationshipRegistry::SetDisplayName(const std::string& entityId, const std
 
 std::string RelationshipRegistry::NamedLocalEntityId(const std::string& name)
 {
-    const std::string slug = Sanitize(name);
+    const std::string slug = SanitizeName(name);
     return slug.empty() ? LocalUserEntityId() : "local:" + slug;
 }
 

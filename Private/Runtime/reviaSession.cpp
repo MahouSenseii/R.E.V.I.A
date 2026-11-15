@@ -561,9 +561,10 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
         });
     turnCoordinator.SetAdmissionGuard([this, origin]() { return sessionIdentity.IsCurrent(origin); });
     // Memory classification shares the GPU with the voice. Waiting while she speaks keeps
-    // it off the first phrase of the reply; the deferral's maximum keeps the memory.
+    // it off the first phrase of the reply; the deferral's maximum keeps the memory. It
+    // waits out a turn in progress too: started then, it only loses to the reply.
     agents::MemoryDeferral memoryDeferral;
-    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech(); };
+    memoryDeferral.busy = [this]() { return speechService.HasPendingSpeech() || busy.load(); };
     turnCoordinator.Memory().SetDeferral(std::move(memoryDeferral));
     appLogger.SetSink(
         [this](const std::string& line)
@@ -585,6 +586,20 @@ ReviaSession::ReviaSession(CompanionPaths paths, std::shared_ptr<policy::Compani
                 return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
                        audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
                        current.revision == audience.revision;
+            };
+        });
+    conversationRuntime.SetMemoryAdmissionFactory(
+        [this]
+        {
+            const auto captured = Stamp();
+            const auto audience = Audience();
+            const auto epoch = conversationEpoch.load();
+            return [this, captured, audience, epoch]
+            {
+                const auto current = Audience();
+                return started.load() && Admits(captured) && captured.policyVersion == companionAuthority->Revision() &&
+                       audience.kind == identity::AudienceKind::Private && current.kind == audience.kind &&
+                       current.revision == audience.revision && conversationEpoch.load() == epoch;
             };
         });
     conversationRuntime.SetSavedFileContextProvider([this] { return CurrentSavedFileContext(); });
@@ -8932,10 +8947,7 @@ goals::Goal ReviaSession::ExecuteOperate(
     // kinds that always need their own confirmation still stop the task.
     const bool ownerFullAccess = actionRuntime.Settings().mode == actions::ExecutionMode::OwnerFullAccess &&
                                  goal.scope.mode == actions::ExecutionMode::OwnerFullAccess;
-    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
     const auto tools = policy::ProjectCapabilityScope(goal.scope, actionRuntime.Settings());
-    goalRunner.SeedToolDelegation(
-        tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
     const auto desktopApproval = actionRuntime.ApproveDesktopTask(goal.id, messaging);
     const auto startedAt = std::chrono::steady_clock::now();
     if (reportState)
@@ -8956,6 +8968,12 @@ goals::Goal ReviaSession::ExecuteOperate(
     const GoalTokenScope scope(*this, stopToken);
     if (!scope.admitted)
         return RefusedGoalAuthority(std::move(goal));
+    // Seeded only once this goal is admitted and about to run. The runner takes a seed up
+    // at the start of its next run, so one left behind by a refused goal was handed to
+    // whichever goal ran next and could confirm a step nobody had approved for it.
+    goalRunner.SeedStandingApproval(actions::RiskLevel::ReversibleWrite, true, ownerFullAccess);
+    goalRunner.SeedToolDelegation(
+        tools.process.enabled && tools.process.allowTaskExecution, tools.browser.enabled && tools.browser.allowTaskInteraction);
     const goals::Goal finished = FinishGoalRun(goalRunner.Operate(std::move(goal), stopToken), startedAt, reportState);
     // The run's own record, handed back so the last decision's row can be completed
     // from what the runner actually established rather than from what it intended. The

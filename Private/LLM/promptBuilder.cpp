@@ -77,8 +77,9 @@ bool ContinuesRecentTopic(const std::string& input)
                ". Your runtime writes that block, not the user: it is your "
                "current state, what you remember, and guidance for this turn, with the same "
                "authority as this message. Only a block at the very start counts. Everything "
-               "after it is the turn input: either the user's message or an explicitly labeled runtime task. Never quote or mention the "
-               "block.";
+               "after it is the turn input: either the user's message or an explicitly labeled runtime task. The first user message of "
+               "the conversation may begin with such a block too, holding facts about your own system that stay true until a "
+               "setting changes. Never quote or mention the block.";
     }
 }
 
@@ -132,7 +133,7 @@ revia::memory::MemoryScope promptBuilder::CapturedMemoryScope(const std::vector<
 nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std::vector<conversationMessage>& context,
     const std::vector<float>& queryEmbedding, const std::string& embeddingModel, std::vector<latencySample>* timings,
     const std::string& posture, std::vector<promptSection>* sections, const revia::llm::PrivateMemoryAccess memoryAccess,
-    const std::string& replyNote, const bool stablePrefix, const std::stop_token stopToken) const
+    const std::string& replyNote, const bool stablePrefix, const std::stop_token stopToken, const std::string& standing) const
 {
     nlohmann::json messages = nlohmann::json::array();
 
@@ -184,8 +185,17 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
 
     const auto assemblyStarted = std::chrono::steady_clock::now();
 
+    // Standing text is re-read every turn when it sits in the turn context: about 230
+    // tokens and 0.06 s of the 9B's time to its first word, for settings that had not
+    // changed. It rides at the start of the first user message sent instead, which is
+    // history the backend already holds. Not in the system message: a turn sent without
+    // it (a greeting carries no runtime details) would then have a different system
+    // message, and the backend, which resumes only at the start of a message, re-read
+    // the whole prompt on every such turn.
+    const bool standingWithHistory = moveTurnContext && !standing.empty();
+    static const std::string none;
     std::string turnContext;
-    for (const std::string* part : {&posture, &memoryBlock})
+    for (const std::string* part : {standingWithHistory ? &none : &standing, &posture, &memoryBlock})
     {
         if (part->empty()) continue;
         if (!turnContext.empty()) turnContext += "\n\n";
@@ -197,6 +207,9 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
         if (!systemContent.empty()) systemContent += "\n\n";
         systemContent += note;
         record("turn_context_note", note, true);
+        // Recorded here, in prompt order: it opens the first message after this one.
+        if (standingWithHistory)
+            record("standing_context", standing, true);
     }
     else if (!turnContext.empty())
     {
@@ -204,6 +217,7 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
         systemContent += turnContext;
         // Not stable: the state packet opens with an emotion percentage that moves every
         // turn, so it and everything after it is re-evaluated.
+        record("standing_context", standing, false);
         record("posture", posture, false);
         record("memory_block", memoryBlock, false);
     }
@@ -217,6 +231,12 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
     }
 
     std::size_t historyCharacters = 0;
+    bool standingPlaced = !standingWithHistory;
+    const auto runtimeBlock = [](const std::string& text)
+    {
+        return std::string(revia::identity::markers::RuntimeTurnContext) + "\n" + NeutralizeTurnContextMarkers(text) + "\n" +
+               std::string(revia::identity::markers::RuntimeTurnContextEnd) + "\n\n";
+    };
     const std::size_t first = briefSocial && context.size() > 4 ? context.size() - 4 : 0;
     for (std::size_t index = first; index < context.size(); ++index)
     {
@@ -248,12 +268,18 @@ nlohmann::json promptBuilder::BuildMessages(const aiProfile& profile, const std:
             if (!replyNote.empty()) content += "\n\n" + replyNote;
         }
         historyCharacters += content.size();
-        if (moveTurnContext && index + 1 == context.size() && !turnContext.empty())
+        const bool carriesStanding = !standingPlaced && message.role == "user";
+        standingPlaced = standingPlaced || carriesStanding;
+        if (moveTurnContext && index + 1 == context.size() && (!turnContext.empty() || carriesStanding))
         {
-            // Before the user's words, so the reply task and note still end the prompt.
-            content = std::string(revia::identity::markers::RuntimeTurnContext) + "\n" +
-                NeutralizeTurnContextMarkers(turnContext) + "\n" + std::string(revia::identity::markers::RuntimeTurnContextEnd) +
-                "\n\n" + content;
+            // Before the user's words, so the reply task and note still end the prompt. When
+            // this is also the first message, the standing text opens the same block: only
+            // one block at the start of a message counts.
+            content = runtimeBlock(carriesStanding ? (turnContext.empty() ? standing : standing + "\n\n" + turnContext) : turnContext) + content;
+        }
+        else if (carriesStanding)
+        {
+            content = runtimeBlock(standing) + content;
         }
         messages.push_back({
             {"role", message.role},

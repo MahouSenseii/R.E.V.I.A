@@ -445,6 +445,42 @@ void TestSeveralPeopleAtOneKeyboard()
     Check(registry.Count() == 2, "Returning created a duplicate relationship.");
 }
 
+// A name is read to its end in any script. Cutting it at the first letter outside ASCII
+// gave "André" and "Andrés" one identity, and one could be shown the other's memories.
+void TestNamesOutsideAsciiStayDistinct()
+{
+    using namespace revia::identity;
+    Check(ReadStatedName("My name is Andr\xC3\xA9.") == "Andr\xC3\xA9", "A name ending in a letter outside ASCII was cut short.");
+    Check(ReadStatedName("Call me Andr\xC3\xA9s") == "Andr\xC3\xA9s", "A name with a letter outside ASCII inside it was cut short.");
+    Check(ReadStatedName("My name is \xC3\x89lodie") == "\xC3\x89lodie", "A name beginning outside ASCII was not recognised.");
+    Check(ReadStatedName("Call me \xC5\x81ukasz\xE2\x80\x94thanks") == "\xC5\x81ukasz", "A dash after a name was read as part of it.");
+    Check(ReadStatedName("My name is O\xE2\x80\x99" "Brien") == "O\xE2\x80\x99" "Brien", "A curly apostrophe split a name.");
+    Check(RelationshipRegistry::NamedLocalEntityId("Andr\xC3\xA9") != RelationshipRegistry::NamedLocalEntityId("Andr\xC3\xA9s") &&
+              RelationshipRegistry::NamedLocalEntityId("Zo\xC3\xAB") != RelationshipRegistry::NamedLocalEntityId("Zo\xC3\xA9"),
+        "Two different names outside ASCII share one identity.");
+    Check(RelationshipRegistry::NamedLocalEntityId("\xC3\x89LODIE") == RelationshipRegistry::NamedLocalEntityId("\xC3\xA9lodie"),
+        "The same name in another case became another person.");
+    Check(RelationshipRegistry::NamedLocalEntityId("Quentin") == "local:quentin" &&
+              RelationshipRegistry::NamedLocalEntityId("Mary-Jane O'Neil") == "local:mary-jane-o-neil",
+        "An ASCII name no longer gets the key it always had.");
+    Check(ReadReturningSpeaker("It's \xC3\xA9lodie", {"\xC3\x89lodie"}) == "\xC3\x89lodie",
+        "A known name outside ASCII was not recognised on return.");
+}
+
+// The words of a hostile phrase must be the speaker's words, not letters inside others.
+void TestHostilityNeedsWholeWords()
+{
+    using namespace revia::identity;
+    for (const std::string input : {"I hate YouTube ads.", "Ugh, I hate youth football practice.", "You suckle the lamb first."})
+        Check(!ReadConversationSignals(input, "ok", true).hostileTowardRevia,
+            "Words that only contain a hostile phrase were read as hostility toward Revia: " + input);
+    for (const std::string input : {"I hate you.", "Honestly, you suck!", "I HATE YOU"})
+        Check(ReadConversationSignals(input, "ok", true).hostileTowardRevia, "Real hostility was missed: " + input);
+    Check(!ReadConversationSignals("This is imperfect and unthankful work", "ok", true).expressedAppreciation,
+        "Appreciation was read from inside other words.");
+    Check(ReadConversationSignals("Thanks, that was perfect", "ok", true).expressedAppreciation, "Plain appreciation was missed.");
+}
+
 void TestExplicitIdentitySurvivesWithoutDefaultGuess()
 {
     using namespace revia::identity;
@@ -492,6 +528,8 @@ void RunLoadAndNameTests()
     TestReturningSpeakersAreOnlyKnownPeople();
     TestLearningANameKeepsEverythingEarned();
     TestSeveralPeopleAtOneKeyboard();
+    TestNamesOutsideAsciiStayDistinct();
+    TestHostilityNeedsWholeWords();
     TestExplicitIdentitySurvivesWithoutDefaultGuess();
     std::cout << "Load sheds optional work on how full a device is rather than on a "
                  "budget, batched voice clips are refused unless their framing is\n"

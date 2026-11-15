@@ -20,7 +20,13 @@ using Clock = std::chrono::steady_clock;
 
 // A server that failed to start is left alone this long before a turn tries again.
 constexpr std::chrono::seconds RetryDelay{60};
+// Arguments this short are shown to the owner exactly as sent.
 constexpr std::size_t ShownArgumentBytes = 600;
+// Longer ones are shown argument by argument within this much text.
+constexpr std::size_t ShownSummaryBytes = 1600;
+constexpr std::size_t ShownArgumentNames = 24;
+constexpr std::size_t ShownNameBytes = 48;
+constexpr std::size_t MinimumShownValueBytes = 40;
 
 std::string Line(const std::string& text, const std::size_t bytes)
 {
@@ -28,6 +34,21 @@ std::string Line(const std::string& text, const std::size_t bytes)
     std::replace(line.begin(), line.end(), '\n', ' ');
     std::replace(line.begin(), line.end(), '\r', ' ');
     return line.size() > bytes ? utf8::Prefix(line, bytes) + "..." : line;
+}
+
+std::string Dump(const Json& value)
+{
+    return value.dump(-1, ' ', false, Json::error_handler_t::replace);
+}
+
+// A value cut to `bytes`, saying how much of what will be sent is not on screen.
+std::string CutValue(const std::string& text, const std::size_t bytes)
+{
+    const std::string whole = Line(text, std::string::npos);
+    if (whole.size() <= bytes)
+        return whole;
+    const std::string kept = utf8::Prefix(whole, bytes);
+    return kept + "... [+" + std::to_string(whole.size() - kept.size()) + " bytes not shown]";
 }
 
 bool SameSettings(const mcpServerSettings& left, const mcpServerSettings& right)
@@ -43,6 +64,33 @@ double ElapsedMilliseconds(const Clock::time_point start)
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 } // namespace
+
+std::optional<std::string> ArgumentsForApproval(const Json& arguments)
+{
+    const std::string whole = Dump(arguments);
+    if (whole.size() <= ShownArgumentBytes)
+        return Line(whole, ShownArgumentBytes);
+    const std::string total = " (" + std::to_string(whole.size()) + " bytes in all; a value marked \"not shown\" is longer than this prompt has room for)";
+    if (!arguments.is_object())
+        return CutValue(whole, ShownSummaryBytes) + total;
+    if (arguments.size() > ShownArgumentNames)
+        return std::nullopt;
+    // Each argument gets an equal share, and what a short one leaves unused goes to the
+    // ones after it. Keys come out in the order they are sent.
+    std::size_t room = ShownSummaryBytes;
+    std::size_t left = arguments.size();
+    std::string shown = "{";
+    for (auto item = arguments.begin(); item != arguments.end(); ++item, --left)
+    {
+        const std::size_t share = std::max(MinimumShownValueBytes, room / left);
+        const std::string value = CutValue(Dump(item.value()), share);
+        if (shown.size() > 1)
+            shown += ", ";
+        shown += "\"" + Line(item.key(), ShownNameBytes) + "\": " + value;
+        room -= std::min(room, std::min(value.size(), share));
+    }
+    return shown + "}" + total;
+}
 
 struct McpManager::Server
 {
@@ -275,10 +323,15 @@ agents::ChatTool McpManager::BuildTool(const std::shared_ptr<Server>& server, co
             if (!ports.confirm)
                 return refuse("This MCP tool needs your approval, and no approval prompt is available in this conversation, so "
                               "nothing was sent.");
+            // What is approved is what is shown. Arguments that cannot all be named in
+            // the prompt are not sent on the strength of a yes to something else.
+            const std::optional<std::string> shown = ArgumentsForApproval(arguments);
+            if (!shown)
+                return refuse("This MCP tool call has more arguments than an approval prompt can show you, so nothing was sent.");
             bool granted = false;
             try
             {
-                granted = ports.confirm({settings.id, Line(toolName, 64), Line(argumentText, ShownArgumentBytes)});
+                granted = ports.confirm({settings.id, Line(toolName, 64), *shown});
             }
             catch (...)
             {

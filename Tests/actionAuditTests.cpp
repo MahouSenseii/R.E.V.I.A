@@ -91,6 +91,29 @@ void TestUnavailableAuditPreventsExecution(const bool scoped)
         "ActionRuntime hid a failed audit admission.");
 }
 
+// Error text from the system can arrive in a legacy code page. The result record is
+// written after the effect ran; a strict JSON dump used to throw there, so the result
+// was lost and the task stopped as if the audit itself were broken.
+void TestResultWithInvalidUtf8IsRecorded()
+{
+    AuditFixture fixture;
+    revia::audit::ActionAuditLogger logger(fixture.directory.root / "legacy-text.jsonl");
+    const ActionRequest request = fixture.Request();
+    PolicyDecision decision;
+    decision.verdict = PolicyVerdict::Allowed;
+    decision.reason = "Fixture \xE9t\xE9 policy";
+    ActionResult result;
+    result.attempted = true;
+    result.message = std::string("Acc\xE8s refus\xE9.", 13);
+    Check(logger.RecordIntent(request, decision, "legacy-text") &&
+              logger.Record(request, decision, result, 1.0, "legacy-text"),
+        "A result whose text is not UTF-8 could not be audited.");
+    const auto records = Records(fixture.directory.root / "legacy-text.jsonl");
+    Check(records.size() == 2 && records[1].at("record_type") == "result" &&
+              records[1].at("result").get<std::string>().find("Acc") == 0,
+        "The audited result with replaced bytes is not readable JSON.");
+}
+
 void TestIntentAndResultAreRecorded(const bool scoped)
 {
     AuditFixture fixture;
@@ -412,6 +435,7 @@ void RunActionAuditTests()
         TestCompletionFailurePreservesExecutionTruth(scoped);
     }
     TestObserverReplacementKeepsOneLifecycle();
+    TestResultWithInvalidUtf8IsRecorded();
     TestObserverAndAuditFailureBothRemainVisible();
     TestPartialAuditIsRecoveredNotReplayed();
     TestLegacyResultRecordsRemainIntact();

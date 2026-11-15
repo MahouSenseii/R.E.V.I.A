@@ -88,6 +88,15 @@ actions::ActionResult ProcessExecutor::Execute(const actions::ActionRequest& req
     result.message = "Native process execution is unavailable on this platform.";
     return result;
 #else
+    // The policy refuses this first. It is checked again where the command line is
+    // built, because the quoting below is for the C runtime and means nothing to cmd.exe.
+    if (actions::IsBatchScript(decision.canonicalExecutable) &&
+        std::any_of(request.process.arguments.begin(), request.process.arguments.end(),
+            [](const std::string& argument) { return actions::IsUnsafeBatchArgument(argument); }))
+    {
+        result.message = "A batch file cannot be given arguments that cmd.exe would read as commands.";
+        return result;
+    }
     std::wstring command = Quote(decision.canonicalExecutable.native());
     for (const auto& argument : request.process.arguments)
         command += L" " + Quote(Wide(argument));

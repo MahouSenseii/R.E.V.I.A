@@ -1,5 +1,6 @@
 #include "Windows/applicationLocator.h"
 
+#include <algorithm>
 #include <vector>
 #include <filesystem>
 
@@ -20,7 +21,36 @@ std::wstring ResolveApplicationExecutable(const std::wstring& name)
         return {};
     }
     std::vector<wchar_t> buffer(32768);
-    const DWORD length = SearchPathW(nullptr, name.c_str(), nullptr,
+    // An explicit search path: the system folders, then each absolute folder on PATH.
+    // The default search also looks in the current directory, so a file of the same
+    // name dropped wherever Revia happens to be working would be launched instead.
+    std::wstring searchPath;
+    const auto addFolder = [&searchPath](const std::wstring& folder)
+    {
+        if (folder.empty() || folder.find(L'"') != std::wstring::npos || !std::filesystem::path(folder).is_absolute())
+            return;
+        if (!searchPath.empty())
+            searchPath.push_back(L';');
+        searchPath += folder;
+    };
+    if (const UINT systemLength = GetSystemDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
+        systemLength > 0 && systemLength < buffer.size())
+        addFolder(std::wstring(buffer.data(), systemLength));
+    if (const UINT windowsLength = GetWindowsDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
+        windowsLength > 0 && windowsLength < buffer.size())
+        addFolder(std::wstring(buffer.data(), windowsLength));
+    if (const DWORD pathLength = GetEnvironmentVariableW(L"PATH", buffer.data(), static_cast<DWORD>(buffer.size()));
+        pathLength > 0 && pathLength < buffer.size())
+    {
+        const std::wstring path(buffer.data(), pathLength);
+        for (std::size_t start = 0; start <= path.size();)
+        {
+            const std::size_t end = std::min(path.find(L';', start), path.size());
+            addFolder(path.substr(start, end - start));
+            start = end + 1;
+        }
+    }
+    const DWORD length = searchPath.empty() ? 0 : SearchPathW(searchPath.c_str(), name.c_str(), nullptr,
         static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
     if (length > 0 && length < buffer.size())
     {

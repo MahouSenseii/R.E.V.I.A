@@ -13,9 +13,12 @@ checkpoint does not update or qualify the installed Revia app or local RNL studi
 
 Read the [live Atlas](https://mahousenseii.github.io/R.E.V.I.A/),
 [RNL research summary](https://mahousenseii.github.io/R.E.V.I.A/research.html)
-and [structured snapshot](atlas/milestone.json) first. Closed dated records retain
-the full earlier findings and failures; their old "current/next/unrun" language
-applies to their own date.
+and [structured snapshot](atlas/milestone.json) first. The Atlas is a small
+tracking document: what was done and what happened. The full earlier findings and
+failures are no longer copied into it; they stay in the repository at
+[42853a82](https://github.com/MahouSenseii/R.E.V.I.A/tree/42853a828502793bc53edf32ea7179547e32ea1f/docs/atlas),
+which the Atlas links as "Earlier records". Their old "current/next/unrun"
+language applies to their own date.
 
 ## Verified Revia source
 
@@ -85,7 +88,7 @@ memories passing the 0.35 similarity floor still mislead recall. Restart and exi
 40–70 s after "Shutdown complete" (pre-existing, not investigated).
 Physical desktop, real voice/media and release qualification remain separately
 scoped. Historical setup/timing failures and long-path save
-limits remain in the dated records.
+limits remain in the earlier records linked above.
 
 ## RNL evidence boundary
 
@@ -140,11 +143,17 @@ Verify: node --test Tools/Atlas/atlas.test.mjs.
 Preview: node Tools/Atlas/serve.mjs, then open its loopback URL.
 Stop that owned preview process when finished.
 
-The generator reads curated current data from Tools/Atlas/data.mjs, preserves
-the marked dated HTML inside the existing pages, and retains the entire previous
-milestone under the JSON history field. Do not remove those record markers.
+The generator builds both pages and milestone.json from curated data in
+Tools/Atlas/data.mjs, plus the capability list and the 3 November checkpoint counts
+kept in Tools/Atlas/retained.mjs. It no longer reads its own previous output: the
+dated HTML records and the previous milestone are not carried forward. They remain
+in the repository at the commit data.mjs names as earlierRecords, and
+node Tools/Atlas/verify-preservation.mjs checks that commit still holds them
+unchanged (it needs full Git history). The six files are kept under 250000 bytes
+by atlas.test.mjs; when an update passes that, move older entries out instead of
+raising the number.
 
-The original Pages workflow still enforces exactly six files, a total below
+The original Pages workflow is unchanged: exactly six files, a total below
 500000 bytes, privacy patterns, historical totals and installation qualifiers.
 No workflow permissions, timeouts or artifact checks were weakened.
 

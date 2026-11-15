@@ -113,6 +113,16 @@ function Receive-ReviaArtifact {
         Write-Host "Ready: $destination"
         return
     }
+    # A partial of the full pinned size that fails its hash can never be finished: asking
+    # the server for the bytes after its end is answered with HTTP 416 on every run. It is
+    # damaged, so it is discarded and the download starts again. -Force does the same for
+    # any partial.
+    if (($offset -eq $Artifact.Bytes -or ($Force -and $offset -gt 0)) -and
+        (Test-Path -LiteralPath $partial -PathType Leaf)) {
+        Write-Host "Discarding the unusable partial download of $($Artifact.Name)."
+        Remove-Item -LiteralPath $partial -Force
+        $offset = 0L
+    }
 
     $uri = "https://huggingface.co/$($Artifact.Repository)/resolve/$($Artifact.Commit)/$($Artifact.Name)?download=true"
     # Loaded explicitly. setup.bat launches Windows PowerShell 5.1, which runs on .NET

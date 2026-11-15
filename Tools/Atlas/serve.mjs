@@ -7,7 +7,10 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../docs
 const allowed=new Set(['index.html','research.html','atlas.css','public.css','atlas.js','milestone.json']);
 const types={'.html':'text/html','.css':'text/css','.js':'text/javascript','.json':'application/json'};
 const server=http.createServer((req,res)=>{
-  const name=new URL(req.url,'http://local').pathname.slice(1)||'index.html';
+  // A request line such as "//" is not a URL at all; it is refused rather than crashing the preview.
+  let name;
+  try{name=new URL(req.url,'http://local').pathname.slice(1)||'index.html';}
+  catch{res.writeHead(400);res.end('Bad request');return;}
   if(!allowed.has(name)){res.writeHead(404);res.end('Not found');return;}
   res.writeHead(200,{'Content-Type':types[path.extname(name)]+'; charset=utf-8','Cache-Control':'no-store'});
   fs.createReadStream(path.join(root,name)).pipe(res);

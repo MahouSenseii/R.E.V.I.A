@@ -4,6 +4,7 @@
 #include "LLM/LLamaCPP/llamaCppService.h"
 #include "Runtime/conversationRuntime.h"
 #include "Core/conversationContext.h"
+#include "Identity/promptMarkers.h"
 #include "testSupport.h"
 
 #include <httplib.h>
@@ -931,6 +932,123 @@ void TestToolCallsStreamAndReplayOnTheWire()
         "An 8K tier was sent tool definitions it cannot hold, or did not report the refusal.");
 }
 
+// DRY lowers the chance of every token that continues a run already in the context. With
+// runs past two tokens penalised on each chat reply, a live 9B never once copied a folder
+// path into a tool call, gave a searched number as the result had it, or read a remembered
+// phone number back, and the memory selector saved an invented number in place of the one
+// it was told. The allowance now fits what the reply carries, and a reply that code reads
+// has no DRY at all.
+void TestRepetitionBrakeLetsExactTextThrough()
+{
+    revia::tests::ScopedTestDirectory directory;
+    WireBackend backend;
+    llamaCppService service((directory.root / "brake.db").string());
+    llmSettings settings;
+    settings.host = "127.0.0.1";
+    settings.port = backend.port;
+    settings.modelName = "structured-reply-fixture";
+    settings.contextSize = 32768;
+    settings.maxTokens = 512;
+    settings.bAutoMaxTokens = settings.bAutoStartServer = settings.bVisionEnabled = false;
+    embeddingSettings embeddings;
+    embeddings.bEnabled = embeddings.bAutoStartServer = false;
+    aiProfile profile;
+    profile.bMemoryEnabled = false;
+    service.ApplySettings(settings, embeddings, profile);
+
+    const auto ask = [&](const std::vector<conversationMessage>& context, const revia::llm::ToolExchange* exchange = nullptr)
+    {
+        backend.Script({WireBackend::Delta("content", "Fine.", "stop")});
+        const auto reply =
+            service.GenerateResponse(context, {}, {}, false, revia::llm::PrivateMemoryAccess::ProfileSetting, {}, exchange);
+        Check(reply.bSuccess, "The fixture reply did not complete: " + reply.reason);
+        return backend.Requests().back();
+    };
+    const auto brake = [](const nlohmann::json& request, const int allowance)
+    {
+        return request.value("dry_multiplier", 0.0) == 0.8 && request.value("dry_base", 0.0) == 1.75 &&
+               request.value("dry_penalty_last_n", 0) == 4096 && request.value("dry_allowed_length", 0) == allowance;
+    };
+    // Ordinary talk keeps a brake that stops a loop within a few words, and llama.cpp's
+    // own places for a run to start again.
+    const auto spoken = [&](const nlohmann::json& request) { return brake(request, 8) && !request.contains("dry_sequence_breakers"); };
+    // Text being carried gets room for a line of it, and each folder of a path is a run
+    // of its own.
+    const auto carried = [&](const nlohmann::json& request)
+    {
+        return brake(request, 64) &&
+               request.value("dry_sequence_breakers", nlohmann::json()) == nlohmann::json::array({"\n", ":", "\"", "*", "/", "\\"});
+    };
+
+    for (const std::string said : {"Tease me about my taste in music.", "remind me in 20 minutes to check the oven",
+             "I'm 30 and I still can't parallel park.", "what was my sister's number again?", "where do I work?"})
+        Check(spoken(ask({{"user", said}})), "Ordinary talk does not have the spoken brake: " + said);
+    // A joke or a roast keeps the strictest brake: asked for a joke a second time, a live
+    // 9B retold its last one in 3 tries of 10 at the spoken allowance and in none at this.
+    for (const std::string said : {"tell me another joke about welding", "Roast my taste in music.", "got any puns?"})
+        Check(brake(ask({{"user", said}}), 2) && !backend.Requests().back().contains("dry_sequence_breakers"),
+            "A joke or roast she was asked for can repeat the last one: " + said);
+    Check(carried(ask({{"user", "tell me a joke about the file todo.md"}})), "Exact text beside a joke lost its room.");
+    Check(brake(ask({{"user", "list the files in D:/notes/week"}, {"assistant", "Three files."}, {"user", "now tell me a joke"}}), 2),
+        "A joke asked for just after file work was given room to repeat the last one.");
+    Check(spoken(ask({{"user", "I was only joking, I don't hate jazz"}})), "A word that merely contains an act's name was read as asking for it.");
+    for (const std::string said : {"list the files in D:/notes/week", "open C:\\Users\\rosa\\todo", "what does todo.md say about Friday?",
+             "my sister's number is 415-555-0137", "search for \"elevator jazz\"", "write to rosa@example.com",
+             "what does total_cost mean in that file", "is it `range` or `xrange`"})
+        Check(carried(ask({{"user", said}})), "A message with exact text in it got the spoken brake: " + said);
+    // "The other one in there": what has to be copied was said a few messages back.
+    Check(carried(ask({{"user", "list the files in D:/notes/week"}, {"assistant", "Three files."},
+              {"user", "read the first one in that folder"}, {"assistant", "It is a shopping list."}, {"user", "and the second one"},
+              {"assistant", "A recipe."}, {"user", "what about the other one in there"}})),
+        "The path named three messages earlier could not be copied.");
+    // Further back than that it is no longer what she is being asked about.
+    Check(spoken(ask({{"user", "list the files in D:/notes/week"}, {"assistant", "Three files."}, {"user", "thanks for that"},
+              {"assistant", "Any time."}, {"user", "how was your day"}, {"assistant", "Quiet."}, {"user", "mine was long"},
+              {"assistant", "Tell me."}, {"user", "the shop was loud and the coffee was cold"}})),
+        "A path from many messages back still loosened ordinary talk.");
+
+    // Offering tools changes nothing; a result she has to answer from does.
+    revia::llm::ToolExchange exchange;
+    exchange.definitions.push_back({"web_search", "Search the web.",
+        R"({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false})"});
+    Check(spoken(ask({{"user", "How tall is Everest?"}}, &exchange)), "Offering tools alone changed the brake on ordinary talk.");
+    exchange.rounds.push_back(
+        {"", {{"call_a", "web_search", R"({"query":"Everest height"})"}}, {{"call_a", "web_search", "8,848.86 m (29,031 ft)", false}}});
+    Check(carried(ask({{"user", "How tall is Everest?"}}, &exchange)), "A reply made from a tool result got the spoken brake.");
+
+    // Text the runtime read for the turn is answered from in the same way.
+    service.SetPosture(std::string(revia::identity::markers::DocumentGrounding) + "\nInvoice total: one thousand and twelve dollars.");
+    Check(carried(ask({{"user", "What was the total?"}})), "A reply answering from retrieved text got the spoken brake.");
+    service.SetPosture({});
+    Check(spoken(ask({{"user", "What was the total?"}})), "The carried setting outlived the text it was for.");
+
+    // A reply that code reads: the planner's action and the memory selector's fact.
+    const auto background = [&backend](const std::string& text)
+    {
+        auto last = WireBackend::Delta("content", text, "stop");
+        last["usage"] = {{"prompt_tokens", 40}, {"completion_tokens", 12}};
+        backend.Script({last}, R"({"choices":[]})");
+    };
+    background(R"({"action":"unknown","reason":"Fixture."})");
+    (void)service.GenerateActionProposal("open C:\\Users\\rosa\\Documents\\todo.md in Notepad");
+    auto request = backend.Requests().back();
+    Check(request.at("response_format").at("type") == "json_object" &&
+              request.at("messages")[0].at("content").get<std::string>().find("constrained action planner") != std::string::npos,
+        "The action planner's request was not the one inspected.");
+    for (const auto* key : {"dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n", "dry_sequence_breakers"})
+        Check(!request.contains(key), std::string("A planner reply that code reads is still penalised for copying: ") + key);
+    background(R"({"shouldRemember":true,"category":"identity","summary":"The user works at Henderson-Whitlock Fabrication.",)"
+               R"("subject":"speaker","reason":"Stated."})");
+    (void)service.EvaluateMemory("I work at Henderson-Whitlock Fabrication and Marine Welding in Chattanooga.", "Noted.",
+        revia::agents::ResponseProvenance::NormalGeneration);
+    request = backend.Requests().back();
+    Check(request.at("response_format").at("type") == "json_object" &&
+              request.at("messages")[0].at("content").get<std::string>().find("long-term memory selector") != std::string::npos,
+        "The memory selector's request was not the one inspected.");
+    for (const auto* key : {"dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n", "dry_sequence_breakers"})
+        Check(!request.contains(key), std::string("The memory selector is still penalised for keeping a fact as it was given: ") + key);
+}
+
 // Native thinking: reasoning_content was ignored, and thinking shared the answer's
 // max_tokens, so a long deliberation could end the turn before the answer began.
 void TestNativeThinkingStreamsReasoningWithItsOwnBudget()
@@ -1759,6 +1877,7 @@ void RunStructuredReplyTests()
     TestOnlyTheKeyedServerReviaStartedIsTrusted();
     TestNativeThinkingStreamsReasoningWithItsOwnBudget();
     TestToolCallsStreamAndReplayOnTheWire();
+    TestRepetitionBrakeLetsExactTextThrough();
     TestNativeDeliberationReplacesTheSeparateInquiry();
     TestReasoningRelayReleasesReadablePieces();
     TerminationChecks checks;

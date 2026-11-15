@@ -1149,6 +1149,11 @@ void MemoryAgent::Run(const std::stop_token stopToken)
         if (stopToken.stop_requested() || !Admitted(task.admission))
         {
             if (stopToken.stop_requested()) return;
+            // Said, because nothing else is: a turn whose evaluation ends here leaves
+            // no verdict, no event and no memory.
+            if (!task.hasLearnedDecision && task.memoryId.empty())
+                Report("[MemoryAgent] dropped | type=turn | turn=" + std::to_string(task.turnId) +
+                       " | reason=no longer admitted when its evaluation ended");
             continue;
         }
 
@@ -1162,6 +1167,11 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             task.preemptionRetries < maximumPreemptionRetries)
         {
             ++task.preemptionRetries;
+            const int retry = task.preemptionRetries;
+            const std::uint64_t turn = task.turnId;
+            // Queued afresh, so the deferral holds it back again. Tried at once, it met
+            // the same turn that had just preempted it and used up its retries there.
+            task.queuedAt = std::chrono::steady_clock::now();
             bool requeued = false;
             {
                 std::lock_guard lock(mutex);
@@ -1173,10 +1183,15 @@ void MemoryAgent::Run(const std::stop_token stopToken)
             }
             if (requeued)
             {
+                Report("[MemoryAgent] requeued | type=turn | turn=" + std::to_string(turn) + " | reason=preempted | retry=" +
+                       std::to_string(retry));
                 taskAvailable.notify_one();
                 continue;
             }
         }
+        if (!task.hasLearnedDecision && event.decision.bPreempted)
+            Report("[MemoryAgent] dropped | type=turn | turn=" + std::to_string(task.turnId) +
+                   " | reason=kept losing to the conversation");
 
         if (!task.hasLearnedDecision && event.decision.bSuccess && event.decision.bShouldRemember)
         {

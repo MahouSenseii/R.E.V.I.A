@@ -19,6 +19,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace revia::core
@@ -588,6 +589,16 @@ struct KeyChord
 // is model text reaching a shell however it got there, so it needs the same permission
 // the chords do.
 [[nodiscard]] bool IsCommandSurfaceExecutable(const std::string& executableName);
+// Wider than a command surface: every program that runs whatever code or command its
+// arguments name. Starting one of these with model-chosen arguments is running a script
+// however the program is named, so the process allowlist alone does not cover it.
+[[nodiscard]] bool IsScriptHostExecutable(const std::string& executableName);
+// A .bat or .cmd file. Windows starts these through cmd.exe, whoever asks.
+[[nodiscard]] bool IsBatchScript(const std::filesystem::path& executable);
+// An argument cmd.exe could read as more than text: a quote, a variable expansion or a
+// command operator. Quoting an argument for the C runtime does not make it safe for
+// cmd.exe, which reads the same command line by different rules.
+[[nodiscard]] bool IsUnsafeBatchArgument(std::string_view argument);
 [[nodiscard]] std::string NewActionId();
 [[nodiscard]] std::filesystem::path Utf8ToPath(const std::string& value);
 [[nodiscard]] std::string PathToUtf8(const std::filesystem::path& value);

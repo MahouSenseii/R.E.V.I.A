@@ -7,6 +7,7 @@
 #include "Core/settingsFileEditor.h"
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -120,6 +121,21 @@ namespace
             output.idleGraceSeconds = data["idleGraceSeconds"].get<int>();
         if (data.contains("minimumResidencySeconds"))
             output.minimumResidencySeconds = data["minimumResidencySeconds"].get<int>();
+    }
+
+    // A whisper language code: "auto" or letters with optional dashes ("en", "pt-BR").
+    // It reaches the CLI's command line, so nothing else is accepted.
+    bool IsLanguageCode(const std::string& code)
+    {
+        return !code.empty() && code.size() <= 16 && std::isalpha(static_cast<unsigned char>(code.front())) != 0 &&
+               std::all_of(code.begin(), code.end(), [](const unsigned char c) { return std::isalpha(c) != 0 || c == '-'; });
+    }
+
+    // Revia binds a server it starts to this host, and every private prompt and the
+    // session's key go to it over plain HTTP. One it starts must stay on this machine.
+    bool IsLoopbackHost(const std::string& host)
+    {
+        return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]";
     }
 
     bool IsValidModelTier(const modelTierSettings& tier)
@@ -1497,7 +1513,7 @@ bool ReadSettings(json& data, appSettings& outSettings)
         outSettings.localApi.port < 1024 || outSettings.localApi.port > 65535 || outSettings.localApi.port == outSettings.llm.port ||
         outSettings.localApi.port == outSettings.embedding.port ||
         (outSettings.llm.backend == "LLamaCpp" && outSettings.llm.bAutoStartServer &&
-            (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty())) ||
+            (outSettings.llm.serverExecutable.empty() || outSettings.llm.modelPath.empty() || !IsLoopbackHost(outSettings.llm.host))) ||
         (outSettings.llm.bVisionEnabled && (outSettings.llm.multimodalProjectorPath.empty() || outSettings.llm.mediaPath.empty())) ||
         (outSettings.intelligence.bEnabled && (!IsValidModelTier(outSettings.intelligence.fast) ||
                                                   !IsValidModelTier(outSettings.intelligence.expert) || intelligencePortsConflict)) ||
@@ -1516,7 +1532,8 @@ bool ReadSettings(json& data, appSettings& outSettings)
                 outSettings.embedding.pooling != "mean" || outSettings.embedding.device.empty() ||
                 outSettings.embedding.queryPrefix.empty() || outSettings.embedding.documentPrefix.empty() ||
                 (outSettings.embedding.bAutoStartServer &&
-                    (outSettings.embedding.serverExecutable.empty() || outSettings.embedding.modelPath.empty())))) ||
+                    (outSettings.embedding.serverExecutable.empty() || outSettings.embedding.modelPath.empty() ||
+                        !IsLoopbackHost(outSettings.embedding.host))))) ||
         outSettings.speech.volume < 0 || outSettings.speech.volume > 100 ||
         (outSettings.speech.backend != "Auto" && outSettings.speech.backend != "WindowsSapi" && outSettings.speech.backend != "Qwen3TTS") ||
         outSettings.speech.pythonExecutable.empty() || outSettings.speech.qwenServiceScript.empty() ||
@@ -1550,7 +1567,7 @@ bool ReadSettings(json& data, appSettings& outSettings)
         outSettings.speech.maxQueuedUtterances > 16 ||
         (outSettings.speechRecognition.bEnabled &&
             (outSettings.speechRecognition.executable.empty() || outSettings.speechRecognition.modelPath.empty() ||
-                outSettings.speechRecognition.language.empty() ||
+                !IsLanguageCode(outSettings.speechRecognition.language) ||
                 (outSettings.speechRecognition.bUseServer &&
                     (outSettings.speechRecognition.serverExecutable.empty() || outSettings.speechRecognition.serverHost != "127.0.0.1" ||
                         outSettings.speechRecognition.serverPort < 1 || outSettings.speechRecognition.serverPort > 65535 ||

@@ -42,10 +42,10 @@ void llmService::ApplyProfile(const llmSettings& settings, const aiProfile& prof
     llamaCpp.ApplyProfile(settings, profile);
 }
 
-void llmService::SetPosture(std::string posture)
+void llmService::SetPosture(std::string posture, std::string standing)
 {
     // Only the local backend assembles its own prompt; the others have nowhere to put it.
-    llamaCpp.SetPosture(std::move(posture));
+    llamaCpp.SetPosture(std::move(posture), std::move(standing));
 }
 
 void llmService::SetReplyNote(std::string note)
@@ -382,6 +382,20 @@ responseOutput llmService::GenerateCodeReview(const std::string& instructions, c
         return output;
     }
     return llamaCpp.GenerateCodeReview(instructions, material, schema, stopToken, purpose);
+}
+
+responseOutput llmService::GenerateWorkerToolStep(const std::string& instructions, const std::string& task,
+    const revia::llm::ToolExchange& tools, const std::stop_token stopToken) const
+{
+    if (!bIsReady || backendType != llmBackendType::LLamaCpp)
+    {
+        responseOutput output;
+        output.bSuccess = false;
+        output.reason = "The local language model is not ready for an agent worker's tool step.";
+        output.bShouldSpeak = false;
+        return output;
+    }
+    return llamaCpp.GenerateWorkerToolStep(instructions, task, tools, stopToken);
 }
 
 responseOutput llmService::GenerateComputerSubgoal(const std::string& instruction,

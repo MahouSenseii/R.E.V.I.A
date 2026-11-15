@@ -65,6 +65,19 @@ void RunApplicationLocatorTests()
         "The executable lookup accepted a path or a command line.");
     Check(!ResolveApplicationExecutable(L"notepad.exe").empty(),
         "The existing Windows executable search stopped working.");
+
+    // A file in whatever folder Revia is working in is not an installed application.
+    {
+        const std::wstring planted = L"revia-planted-" + std::to_wstring(GetCurrentProcessId()) + L".exe";
+        { std::ofstream file(directory / planted); file << "fixture only; never executed"; }
+        const auto previous = std::filesystem::current_path();
+        std::filesystem::current_path(directory);
+        const std::wstring found = ResolveApplicationExecutable(planted);
+        std::filesystem::current_path(previous);
+        std::error_code error;
+        std::filesystem::remove(directory / planted, error);
+        Check(found.empty(), "A name-only lookup found a file in the current directory.");
+    }
     std::cout << "Application lookup tests passed.\n";
 #endif
 }

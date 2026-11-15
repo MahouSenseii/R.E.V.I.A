@@ -39,7 +39,8 @@ public:
     // Revia's own response posture for the next turn, already formatted. Stored rather
     // than threaded through every call because it changes per turn while the rest of the
     // request shape does not.
-    void SetPosture(std::string posture);
+    // `standing` is the part of the turn's guidance that only changes with a setting.
+    void SetPosture(std::string posture, std::string standing = {});
     void SetReplyNote(std::string note);
     // Applies to source explanations until SetPosture resets the turn state.
     void SetSourceExplanation(bool enabled);
@@ -76,6 +77,11 @@ public:
     // Structured source review uses background priority and yields to conversation.
     responseOutput GenerateCodeReview(const std::string& instructions, const std::string& material, const std::string& schema,
         std::stop_token stopToken = {}, revia::llm::CodeReviewPurpose purpose = revia::llm::CodeReviewPurpose::Development) const;
+    // One step of an agent worker that offers tools in the model's own tool-call format: the
+    // model may write text before its calls, and the calls come back unexecuted. Background
+    // priority, as a code review.
+    responseOutput GenerateWorkerToolStep(const std::string& instructions, const std::string& task, const revia::llm::ToolExchange& tools,
+        std::stop_token stopToken = {}) const;
     // Bounded subgoal grammar uses the whole instruction as its system prompt.
     responseOutput GenerateComputerSubgoal(const std::string& instruction,
         const std::string& situation, const std::string& schema, std::stop_token stopToken = {}) const;
@@ -110,10 +116,13 @@ private:
     // payload is SVG, and making a small local model escape a whole document into a JSON
     // string burns most of the token budget on backslashes and fails on the first one it
     // gets wrong.
+    // With `tools`, the request offers them in the model's own tool-call format and replays
+    // the earlier rounds; the reply's calls come back unexecuted in toolCalls.
     responseOutput GeneratePlannerResponse(const std::string& systemPrompt, const std::string& userRequest, int maxTokens,
         bool structuredJson = true, std::stop_token stopToken = {},
         revia::llm::InferencePriority priority = revia::llm::InferencePriority::Interactive, float requestTemperature = 0.1F,
-        const std::string& operation = "structured planning", const std::string& responseSchema = {}, int reasoningBudget = 0) const;
+        const std::string& operation = "structured planning", const std::string& responseSchema = {}, int reasoningBudget = 0,
+        const revia::llm::ToolExchange* tools = nullptr) const;
 
     std::string host = "127.0.0.1";
     int port = 8080;
@@ -143,6 +152,7 @@ private:
     aiProfile activeProfile;
     mutable std::mutex postureMutex;
     std::string activePosture;
+    std::string activeStanding;
     std::string activeReplyNote;
     bool activeSourceExplanation = false;
     mutable revia::llm::InferenceScheduler inferenceScheduler;

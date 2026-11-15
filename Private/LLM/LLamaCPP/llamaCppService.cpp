@@ -1,3 +1,4 @@
+#include "Core/conversationContext.h"
 #include "Core/conversationMessage.h"
 #include "Core/profile.h"
 #include "LLM/backendTypes.h"
@@ -93,6 +94,107 @@ namespace
             { return paragraph.starts_with(header) || paragraph.find("\n" + std::string(header)) != std::string_view::npos; });
     }
 
+    // DRY lowers the chance of each token that would continue a run of tokens already in
+    // the context, more steeply the longer the run. That is what ends a phrase loop. It
+    // cannot tell her repeating herself from her handing back what she was given, and
+    // with every run past two tokens penalised, as each chat reply used to be, the local
+    // 9B could do none of these in any try: copy a folder path into a tool call (0 of
+    // 28), report a searched height as the result gave it (0 of 28), read a remembered
+    // phone number back (0 of 8). It wrote a near-copy, or a different number, or said it
+    // had no record. So a run is now let through for as long as these stay whole.
+    //
+    // Ordinary talk: long enough to say a phone number or a name back, short enough that
+    // a phrase she starts to repeat is cut off about a dozen tokens in. Over a 45-reply
+    // conversation about one in a hundred of her four-word runs was one she had already
+    // used, at 8 as at 2.
+    constexpr int SpokenRepeatAllowance = 8;
+    // A reply that has text to carry across: long enough for a line of a file or a
+    // sentence of a search result, and a run of that length repeated is still a loop.
+    constexpr int CarriedRepeatAllowance = 64;
+    // A joke or a roast she was asked for: nothing in it has to be said back as given,
+    // and the one thing it must not be is the one she told last. Asked for a joke about
+    // welding a second time, the 9B retold its last one in 3 tries of 10 at 8, and in 1 of
+    // 10 when asked for another; in none of either at 2.
+    constexpr int PerformedRepeatAllowance = 2;
+
+    enum class RepeatBrake
+    {
+        Performed,
+        Spoken,
+        Carried
+    };
+
+    // Whether the person asked for a joke, a roast, a pun or the like, read from the
+    // whole words of what they said. A miss either way only moves the brake.
+    bool AsksForAPerformance(const std::string_view text)
+    {
+        constexpr std::string_view acts[] = {"joke", "jokes", "roast", "pun", "puns", "riddle", "riddles", "limerick", "haiku"};
+        std::string word;
+        const auto performs = [&word, &acts] { return std::find(std::begin(acts), std::end(acts), word) != std::end(acts); };
+        for (const char raw : text)
+        {
+            const auto character = static_cast<unsigned char>(raw);
+            if (std::isalpha(character) != 0)
+            {
+                word.push_back(static_cast<char>(std::tolower(character)));
+                continue;
+            }
+            if (performs())
+                return true;
+            word.clear();
+        }
+        return performs();
+    }
+
+    // Whether `text` holds something that has to be handed back character for character:
+    // a long number, a path or address, a file name, quoted words, a line of code. "In 20
+    // minutes" is ordinary talk; five digits or more is a phone number, a date, a total.
+    bool HoldsExactText(const std::string_view text)
+    {
+        int digits = 0;
+        for (std::size_t at = 0; at < text.size(); ++at)
+        {
+            const auto character = static_cast<unsigned char>(text[at]);
+            if ((std::isdigit(character) != 0 && ++digits >= 5) || std::string_view("/\\@`_\"={}<>").find(text[at]) != std::string_view::npos)
+                return true;
+            // "todo.md", "example.com": a dot with a letter or digit on each side.
+            if (character == '.' && at > 0 && at + 1 < text.size() && std::isalnum(static_cast<unsigned char>(text[at - 1])) != 0 &&
+                std::isalnum(static_cast<unsigned char>(text[at + 1])) != 0)
+                return true;
+            // Typographic double quotes, U+201C and U+201D.
+            if (character == 0xE2 && at + 2 < text.size() && static_cast<unsigned char>(text[at + 1]) == 0x80 &&
+                (static_cast<unsigned char>(text[at + 2]) == 0x9C || static_cast<unsigned char>(text[at + 2]) == 0x9D))
+                return true;
+        }
+        return false;
+    }
+
+    // Whether the runtime put text in front of this reply for it to answer from: a page it
+    // read, search results, the clipboard, an attached file, passages of a kept document.
+    bool HoldsGroundingText(const std::string_view text)
+    {
+        namespace markers = revia::identity::markers;
+        constexpr std::string_view headers[] = {markers::LivePageGrounding, markers::VisibleBrowserGrounding, markers::ClipboardGrounding,
+            markers::AttachmentGrounding, markers::DocumentGrounding};
+        return std::any_of(
+            std::begin(headers), std::end(headers), [text](const std::string_view header) { return text.find(header) != std::string_view::npos; });
+    }
+
+    void ApplyRepetitionBrake(json& requestBody, const RepeatBrake brake)
+    {
+        requestBody["dry_multiplier"] = 0.8;
+        requestBody["dry_base"] = 1.75;
+        requestBody["dry_allowed_length"] = brake == RepeatBrake::Carried  ? CarriedRepeatAllowance
+                                            : brake == RepeatBrake::Spoken ? SpokenRepeatAllowance
+                                                                           : PerformedRepeatAllowance;
+        requestBody["dry_penalty_last_n"] = 4096;
+        // A run starts again after any of these. The first four are llama.cpp's own, and
+        // naming any replaces them all. With the two separators each folder name is a run
+        // of its own, so a path of any depth gets through.
+        if (brake == RepeatBrake::Carried)
+            requestBody["dry_sequence_breakers"] = json::array({"\n", ":", "\"", "*", "/", "\\"});
+    }
+
     std::vector<std::string> CaptureTurnPriorityParagraphs(const std::string& posture)
     {
         std::optional<std::pair<std::size_t, std::size_t>> purpose;
@@ -185,6 +287,120 @@ namespace
     }
     constexpr int ContextReserveTokens = 384;
     constexpr std::size_t RecentDialogueMessages = 2;
+
+    // The continuity paragraph repeats lines of earlier dialogue. When the message a line
+    // came from is itself in the prompt, word for word, the line is read twice: about 190
+    // tokens a turn in an 18-turn chat. Those lines are dropped from the newest message's
+    // block, and the paragraph with them when none is left. A line whose source is no
+    // longer in the prompt, or was shortened there, stays.
+    void DropRepeatedContinuity(json& messages)
+    {
+        namespace markers = revia::identity::markers;
+        if (!messages.is_array() || messages.size() < 3)
+            return;
+        const auto isUser = [](const json& message)
+        { return message.is_object() && message.value("role", std::string{}) == "user" && message.contains("content") && message["content"].is_string(); };
+        const auto newestUser = std::find_if(messages.rbegin(), messages.rend(), isUser);
+        if (newestUser == messages.rend())
+            return;
+        auto& newest = (*newestUser)["content"].get_ref<std::string&>();
+        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
+        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
+        if (newest.rfind(open, 0) != 0)
+            return;
+        const std::size_t blockEnd = newest.find(close, open.size());
+        if (blockEnd == std::string::npos)
+            return;
+        // The paragraph opens the block or follows a blank line inside it.
+        const std::string lead = std::string(conversationContext::ContinuityLead);
+        std::size_t paragraph = std::string::npos;
+        if (newest.compare(open.size(), lead.size(), lead) == 0)
+            paragraph = open.size();
+        else if (const std::size_t found = newest.find("\n\n" + lead, open.size()); found != std::string::npos && found < blockEnd)
+            paragraph = found + 2;
+        if (paragraph == std::string::npos)
+            return;
+        std::size_t end = newest.find("\n\n", paragraph);
+        if (end == std::string::npos || end > blockEnd)
+            end = blockEnd;
+        std::string history;
+        for (const auto& message : messages)
+            if (&message != &*newestUser && message.is_object() && message.value("role", std::string{}) != "system" &&
+                message.contains("content") && message["content"].is_string())
+                history += message["content"].get_ref<const std::string&>() + '\n';
+        std::string kept;
+        bool anyLine = false;
+        bool header = true;
+        for (std::size_t at = paragraph; at < end;)
+        {
+            const std::size_t lineEnd = std::min(newest.find('\n', at), end);
+            const std::string line = newest.substr(at, lineEnd - at);
+            at = lineEnd + 1;
+            bool repeated = false;
+            if (!header)
+            {
+                // "[source 12] User: what they said"
+                const std::size_t said = line.find(": ");
+                if (line.rfind("[source ", 0) == 0 && said != std::string::npos)
+                {
+                    std::string text = line.substr(said + 2);
+                    while (!text.empty() && (text.back() == ' ' || text.back() == '\r'))
+                        text.pop_back();
+                    repeated = !text.empty() && history.find(text) != std::string::npos;
+                }
+                anyLine = anyLine || !repeated;
+            }
+            header = false;
+            if (!repeated)
+                kept += (kept.empty() ? "" : "\n") + line;
+        }
+        if (anyLine)
+        {
+            newest.replace(paragraph, end - paragraph, kept);
+            return;
+        }
+        // Nothing left to say: the paragraph goes, with its own closing newline and the
+        // blank line that set it off from its neighbour.
+        std::size_t removeEnd = end;
+        if (removeEnd < blockEnd && newest[removeEnd] == '\n' && (removeEnd + 1 == blockEnd || newest.compare(removeEnd + 1, 2, "\n\n") == 0))
+            ++removeEnd;
+        if (paragraph > open.size())
+            newest.erase(paragraph - 2, removeEnd - (paragraph - 2));
+        else if (removeEnd < blockEnd)
+            newest.erase(paragraph, removeEnd + 2 - paragraph);
+        else
+            newest.erase(0, blockEnd + close.size());
+    }
+
+    // Standing text rides at the start of the first user message, which a prompt that has
+    // to be compacted may drop or cut. Before compaction it is moved to the head of the
+    // newest message's runtime block, where it was before it was cached and where the
+    // compaction already knows how to keep what matters.
+    void InlineStandingContext(json& messages, const std::string& standing)
+    {
+        namespace markers = revia::identity::markers;
+        if (standing.empty() || !messages.is_array())
+            return;
+        const std::string open = std::string(markers::RuntimeTurnContext) + "\n";
+        const std::string close = "\n" + std::string(markers::RuntimeTurnContextEnd) + "\n\n";
+        const std::string text = revia::llm::NeutralizeTurnContextMarkers(standing);
+        const auto isUser = [](const json& message)
+        { return message.is_object() && message.value("role", std::string{}) == "user" && message.contains("content") && message["content"].is_string(); };
+        const auto firstUser = std::find_if(messages.begin(), messages.end(), isUser);
+        const auto newestUser = std::find_if(messages.rbegin(), messages.rend(), isUser);
+        if (firstUser == messages.end() || &*firstUser == &*newestUser)
+            return;
+        auto& carried = (*firstUser)["content"].get_ref<std::string&>();
+        const std::string block = open + text + close;
+        if (carried.rfind(block, 0) != 0)
+            return;
+        carried.erase(0, block.size());
+        auto& newest = (*newestUser)["content"].get_ref<std::string&>();
+        if (newest.rfind(open, 0) == 0)
+            newest.insert(open.size(), text + "\n\n");
+        else
+            newest.insert(0, block);
+    }
 
     std::size_t NewestTurnAllowance(const std::string& content, const std::size_t remaining)
     {
@@ -1236,6 +1452,34 @@ namespace
         return state == NativeTerminalState::Incomplete || state == NativeTerminalState::Invalid;
     }
 
+    // Bounds on what the model may ask for in one reply; past them a call is cut and its
+    // arguments fail validation rather than growing without limit.
+    constexpr std::size_t MaximumToolCallsPerReply = 8;
+    constexpr std::size_t MaximumToolNameBytes = 64;
+    constexpr std::size_t MaximumToolArgumentBytes = 16 * 1024;
+
+    // Adds one streamed fragment to the calls of a reply, keyed by the call's index.
+    void AddToolCallFragment(std::vector<revia::llm::ToolCall>& calls, std::vector<std::size_t>& indexes, const ToolCallDelta& fragment)
+    {
+        auto slot = std::find(indexes.begin(), indexes.end(), fragment.index);
+        if (slot == indexes.end())
+        {
+            if (calls.size() >= MaximumToolCallsPerReply)
+                return;
+            indexes.push_back(fragment.index);
+            calls.emplace_back();
+            slot = indexes.end() - 1;
+        }
+        auto& call = calls[static_cast<std::size_t>(slot - indexes.begin())];
+        if (!fragment.id.empty())
+            call.id = revia::utf8::Prefix(fragment.id, 128);
+        if (call.name.size() + fragment.name.size() <= MaximumToolNameBytes)
+            call.name += fragment.name;
+        // Past the bound the arguments are cut, which fails validation.
+        if (call.arguments.size() < MaximumToolArgumentBytes)
+            call.arguments += fragment.arguments.substr(0, MaximumToolArgumentBytes - call.arguments.size());
+    }
+
     // A completed background request, in the shape the non-streamed API returns.
     struct CompletionResult
     {
@@ -1252,7 +1496,9 @@ namespace
     // and frees the slot; non-streamed, it noticed only at its periodic disconnect
     // check, so cancelling one for a user's turn kept that turn waiting about a second.
     // A body that is not a stream (a proxy or fixture ignoring the flag) passes through.
-    CompletionResult PostCompletion(httplib::ClientImpl& client, const std::string& encodedRequest)
+    // `callsAllowed` is for a request that offered tools: its calls are assembled into the
+    // message's tool_calls, unexecuted. Elsewhere a reply that asks for tools is invalid.
+    CompletionResult PostCompletion(httplib::ClientImpl& client, const std::string& encodedRequest, const bool callsAllowed = false)
     {
         constexpr std::size_t MaximumResponseBytes = 16 * 1024 * 1024;
         CompletionResult output;
@@ -1320,12 +1566,14 @@ namespace
             {
                 terminal.invalid = true;
             }
-            output.terminal = ClassifyNativeTermination(terminal, false, false, false);
+            output.terminal = ClassifyNativeTermination(terminal, false, callsAllowed, false);
             output.body = std::move(raw);
             return output;
         }
 
         std::string content;
+        std::vector<revia::llm::ToolCall> calls;
+        std::vector<std::size_t> callIndexes;
         json usage;
         std::size_t begin = 0;
         while (begin < raw.size())
@@ -1352,11 +1600,22 @@ namespace
             StreamEvent event = ParseStreamEvent(line);
             terminal.Observe(event);
             content += event.content;
+            if (callsAllowed)
+                for (const auto& fragment : event.toolCalls)
+                    AddToolCallFragment(calls, callIndexes, fragment);
             if (event.usage.is_object())
                 usage = std::move(event.usage);
         }
-        output.terminal = ClassifyNativeTermination(terminal, false, false, false);
+        output.terminal = ClassifyNativeTermination(terminal, false, callsAllowed, false);
         json choice = {{"message", {{"role", "assistant"}, {"content", content}}}};
+        if (!calls.empty())
+        {
+            json requested = json::array();
+            for (std::size_t index = 0; index < calls.size(); ++index)
+                requested.push_back({{"id", calls[index].id.empty() ? "call_" + std::to_string(index) : calls[index].id},
+                    {"type", "function"}, {"function", {{"name", calls[index].name}, {"arguments", calls[index].arguments}}}});
+            choice["message"]["tool_calls"] = std::move(requested);
+        }
         if (!terminal.finishReason.empty())
             choice["finish_reason"] = terminal.finishReason;
         json assembled = {{"choices", json::array({std::move(choice)})}};
@@ -1405,11 +1664,6 @@ namespace
     // Tool definitions and the replayed steps take room in the template that the text
     // budget never sees. Below this context a tier keeps the deterministic routers instead.
     constexpr int MinimumToolContextTokens = 16384;
-    // Bounds on what the model may ask for in one reply; past them a call is cut and its
-    // arguments fail validation rather than growing without limit.
-    constexpr std::size_t MaximumToolCallsPerReply = 8;
-    constexpr std::size_t MaximumToolNameBytes = 64;
-    constexpr std::size_t MaximumToolArgumentBytes = 16 * 1024;
 
     // The tool list in the OpenAI request shape. Empty when a schema does not parse,
     // so a broken definition fails the request plainly instead of reaching the server.
@@ -1622,16 +1876,19 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     }
 
     std::string posture;
+    std::string standing;
     std::string replyNote;
     bool sourceExplanation = false;
     {
         std::lock_guard postureLock(postureMutex);
         posture = activePosture;
+        standing = activeStanding;
         replyNote = activeReplyNote;
         sourceExplanation = activeSourceExplanation;
     }
 
-    const auto priorityParagraphs = CaptureTurnPriorityParagraphs(posture);
+    // Standing text can hold the answer posture, which compaction must still keep.
+    const auto priorityParagraphs = CaptureTurnPriorityParagraphs(standing.empty() ? posture : standing + "\n\n" + posture);
     // Pictures attached to this message. An endpoint started without a projector would
     // reject them, so they are left out with a note the model must pass on instead.
     std::vector<conversationImage> turnImages;
@@ -1683,7 +1940,7 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     json requestBody;
     json messages =
         builder.BuildMessages(activeProfile, context, queryEmbedding.values, queryEmbedding.bSuccess ? queryEmbedding.model : "",
-            &output.timings, posture, &output.promptSections, memoryAccess, replyNote, bStablePromptPrefix, stopToken);
+            &output.timings, posture, &output.promptSections, memoryAccess, replyNote, bStablePromptPrefix, stopToken, standing);
     const auto inputMessageCount = messages.size();
     bool omittedVideoHistory = false;
     if (currentVideoInspection && messages.size() > 2 && messages.front().value("role", "") == "system" &&
@@ -1741,12 +1998,20 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                                                 static_cast<std::size_t>(contextTokens)))
                                           : 0;
 
+    // Compaction drops history, and with it the messages the continuity lines repeat, so
+    // it starts from the messages as they were built.
+    const json withEveryExcerpt = messages;
+    if (bStablePromptPrefix)
+        DropRepeatedContinuity(messages);
     const json originalMessages = messages;
     auto measured = CountBackendPrompt(
         host, port, apiKey, modelName, withTranscript(messages), activeReasoning, stopToken, toolDefinitions, frameResponseFormat);
     const auto usableTokens = static_cast<long long>(contextTokens) - responseTokens - ContextReserveTokens;
     if (!measured || usableTokens <= 0 || *measured > static_cast<std::size_t>(usableTokens))
     {
+        messages = withEveryExcerpt;
+        if (bStablePromptPrefix)
+            InlineStandingContext(messages, standing);
         messages = BoundMessagesForContext(messages, contextTokens, responseTokens + fittingReserve, priorityParagraphs);
         if (measured && !messages.empty())
         {
@@ -1816,10 +2081,28 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
         requestBody["response_format"] = frameResponseFormat;
     else if (!factualImageInspection)
     {
-        requestBody["dry_multiplier"] = 0.8;
-        requestBody["dry_base"] = 1.75;
-        requestBody["dry_allowed_length"] = 2;
-        requestBody["dry_penalty_last_n"] = 4096;
+        // Text this reply may have to hand back as it stands: a tool result in play,
+        // something the runtime read for the turn, or a number, path, file name or
+        // quotation in what the person just said.
+        bool carriesText = (offerTools && !tools->rounds.empty()) || (latestUser != context.rend() && HoldsExactText(latestUser->content));
+        for (auto message = textMessages.begin(); message != textMessages.end() && !carriesText; ++message)
+        {
+            const auto content = message->find("content");
+            carriesText = content != message->end() && content->is_string() && HoldsGroundingText(content->get_ref<const std::string&>());
+        }
+        // Or in the few things they said before it ("the other file in there"), unless
+        // what they ask for now is a joke: that needs nothing handed back.
+        constexpr int MessagesStillInHand = 4;
+        const bool performing = !carriesText && latestUser != context.rend() && AsksForAPerformance(latestUser->content);
+        int considered = 0;
+        for (auto said = context.rbegin(); said != context.rend() && considered < MessagesStillInHand && !carriesText && !performing; ++said)
+        {
+            if (said->role != "user" || said->content.empty())
+                continue;
+            carriesText = HoldsExactText(said->content);
+            ++considered;
+        }
+        ApplyRepetitionBrake(requestBody, carriesText ? RepeatBrake::Carried : performing ? RepeatBrake::Performed : RepeatBrake::Spoken);
     }
     requestBody["stop"] = json::array();
     for (const char* marker : StopMarkers)
@@ -1942,24 +2225,9 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
                     break;
                 if (!firstTokenAt)
                     firstTokenAt = std::chrono::steady_clock::now();
-                auto slot = std::find(requestedIndexes.begin(), requestedIndexes.end(), fragment.index);
-                if (slot == requestedIndexes.end())
-                {
-                    if (requestedCalls.size() >= MaximumToolCallsPerReply)
-                        continue;
-                    requestedIndexes.push_back(fragment.index);
-                    requestedCalls.emplace_back();
-                    slot = requestedIndexes.end() - 1;
-                }
-                auto& call = requestedCalls[static_cast<std::size_t>(slot - requestedIndexes.begin())];
-                if (!fragment.id.empty())
-                    call.id = revia::utf8::Prefix(fragment.id, 128);
-                if (call.name.size() + fragment.name.size() <= MaximumToolNameBytes)
-                    call.name += fragment.name;
-                // Past the bound the arguments are cut, which fails schema validation:
-                // the model is told its call was malformed instead of being trusted.
-                if (call.arguments.size() < MaximumToolArgumentBytes)
-                    call.arguments += fragment.arguments.substr(0, MaximumToolArgumentBytes - call.arguments.size());
+                // Cut arguments fail schema validation: the model is told its call was
+                // malformed instead of being trusted.
+                AddToolCallFragment(requestedCalls, requestedIndexes, fragment);
             }
             const std::string& token = event.content;
             if (token.empty())
@@ -2274,10 +2542,11 @@ responseOutput llamaCppService::GenerateResponse(const std::vector<conversationM
     return output;
 }
 
-void llamaCppService::SetPosture(std::string posture)
+void llamaCppService::SetPosture(std::string posture, std::string standing)
 {
     std::lock_guard postureLock(postureMutex);
     activePosture = std::move(posture);
+    activeStanding = std::move(standing);
     // A note belongs to the turn its posture was set for. Cleared here so a turn that
     // sets a posture and no note cannot inherit the previous turn's conclusion.
     activeReplyNote.clear();
@@ -2485,11 +2754,27 @@ responseOutput llamaCppService::GenerateCodeReview(const std::string& instructio
     if (purpose == revia::llm::CodeReviewPurpose::SavedObservation)
         return GeneratePlannerResponse(instructions, material, 384, true, stopToken, revia::llm::InferencePriority::Background, 0.6F,
             "saved source review", schema, std::min(768, thinkingTokens));
-    // Room for a forty-line replacement and the prose that justifies it. Low temperature:
-    // this is judgement about code, and a creative answer is a wrong one.
+    // Room for an agent worker's whole-file write, which its schema allows up to 8,192 characters,
+    // and for a reviewer's full deliverable. At 1,600 tokens a live 9B's write of a new function was
+    // cut off after 4,767 characters and the run failed; so was one reviewer's write-up, in 20
+    // Agent Studio coding runs.
+    // The schema still bounds every field, so most answers stay short. Low temperature: this is
+    // judgement about code, and a creative answer is a wrong one.
     return GeneratePlannerResponse(
-        instructions, material, 1600, true, stopToken,
+        instructions, material, 3072, true, stopToken,
         revia::llm::InferencePriority::Background, 0.2F, "self code review", schema);
+}
+
+responseOutput llamaCppService::GenerateWorkerToolStep(const std::string& instructions, const std::string& task,
+    const revia::llm::ToolExchange& tools, const std::stop_token stopToken) const
+{
+    // The worker's step in the model's own tool-call format rather than a JSON schema: file text
+    // arrives and leaves as plain text, and the model may say what it found before it acts.
+    // Replaying a fixing worker on six coding tasks, a 9B solved 17 of 24 this way and 11 of 24 when
+    // the text before its write was taken away; Revia's JSON step solved 12. Same budget, temperature
+    // and read timeout as a code review.
+    return GeneratePlannerResponse(instructions, task, 3072, false, stopToken, revia::llm::InferencePriority::Background, 0.2F,
+        "self code review", {}, 0, &tools);
 }
 
 responseOutput llamaCppService::GenerateComputerSubgoal(const std::string& instruction,
@@ -2618,7 +2903,8 @@ Preserve the answer's useful content and Revia's voice when replacing it. Do not
 
 responseOutput llamaCppService::GeneratePlannerResponse(const std::string& systemPrompt, const std::string& userRequest,
     const int maxTokens, const bool structuredJson, const std::stop_token stopToken, const revia::llm::InferencePriority priority,
-    const float requestTemperature, const std::string& operation, const std::string& responseSchema, const int reasoningBudget) const
+    const float requestTemperature, const std::string& operation, const std::string& responseSchema, const int reasoningBudget,
+    const revia::llm::ToolExchange* tools) const
 {
     responseOutput output;
     output.bShouldSpeak = false;
@@ -2647,6 +2933,26 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
         {"stream", true}, {"stream_options", {{"include_usage", true}}}};
     if (operation == "private creation")
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+    const bool callsAllowed = tools != nullptr && tools->allowCalls;
+    if (tools != nullptr)
+    {
+        // The earlier rounds after the task, and the tools in the request's own field, so the
+        // server's chat template writes them in the model's own format.
+        const json definitions = ToolDefinitionsJson(*tools);
+        if (definitions.empty())
+        {
+            output.reason = operation + " offered no valid tool definitions.";
+            return output;
+        }
+        for (const auto& message : ToolTranscriptMessages(*tools))
+        {
+            nlohmann::ordered_json replayed = message;
+            requestBody["messages"].push_back(std::move(replayed));
+        }
+        requestBody["tools"] = definitions;
+        requestBody["tool_choice"] = callsAllowed ? "auto" : "none";
+        requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
+    }
     if (structuredJson)
     {
         requestBody["response_format"] = {{"type", "json_object"}};
@@ -2658,16 +2964,13 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
                         {"schema", operation == "saved source review" ? nlohmann::ordered_json::parse(responseSchema)
                                                                      : nlohmann::ordered_json(json::parse(responseSchema))}}}};
         requestBody["chat_template_kwargs"] = {{"enable_thinking", false}};
-        // Not for a code review. DRY penalises repeating text that is already in the
-        // context, and a review's whole job is to repeat the code it replaces exactly
-        // and then most of it again as the replacement. With it on, she shortened the
-        // lines she meant with "...", dropped their indentation, and replies ended
-        // mid-string, and the edit could never be found in the file.
-        if (operation != "self code review" && operation != "saved source review")
-        {
-            requestBody["dry_multiplier"] = 0.8;
-            requestBody["dry_penalty_last_n"] = 4096;
-        }
+        // No DRY on a reply that code reads. DRY penalises repeating text that is
+        // already in the context, and what these replies carry is such text, which has
+        // to arrive unchanged: the numbers in a sum, the path in an action, the name of
+        // the control to press, the words the person asked her to type. A code review
+        // showed it first: she shortened the lines she meant with "...", dropped their
+        // indentation, and the edit could never be found in the file. The schema and the
+        // token ceiling bound these replies instead.
     }
 
     if (operation == "saved source review")
@@ -2711,7 +3014,7 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
     std::stop_callback cancelRequest(stopToken, [&]() { requestCancellation.request_stop(); client.stop(); });
     std::stop_callback preemptRequest(preemptionToken, [&]() { requestCancellation.request_stop(); client.stop(); });
     const auto requestStarted = std::chrono::steady_clock::now();
-    const CompletionResult result = PostCompletion(client, encodedRequest);
+    const CompletionResult result = PostCompletion(client, encodedRequest, callsAllowed);
     output.timings.push_back({
         "planner_request_total", ElapsedMilliseconds(requestStarted), true});
     inferenceLease = {};
@@ -2751,13 +3054,21 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
         output.reason = operation + " was interrupted before a recognized native completion.";
         return output;
     }
+    // A step cut off by the token ceiling may hold a call whose arguments end mid-file.
+    if (tools != nullptr && result.terminal == NativeTerminalState::OutputLimit)
+    {
+        output.reason = operation + " reached its output limit before finishing its tool step.";
+        return output;
+    }
 
     try
     {
         const json response = json::parse(result.body);
+        // A reply that only calls tools may carry no text at all.
+        const bool contentOptional = tools != nullptr;
         if (!response.contains("choices") || response["choices"].empty() ||
             !response["choices"][0].contains("message") ||
-            !response["choices"][0]["message"].contains("content"))
+            (!contentOptional && !response["choices"][0]["message"].contains("content")))
         {
             output.reason = operation +
                 " response was missing choices[0].message.content.";
@@ -2787,8 +3098,35 @@ responseOutput llamaCppService::GeneratePlannerResponse(const std::string& syste
             output.bTokensReported = output.TotalTokens() > 0;
         }
 
-        output.response = response["choices"][0]["message"]["content"].get<std::string>();
-        output.bSuccess = !output.response.empty();
+        const auto& message = response["choices"][0]["message"];
+        // Without tools the content must be text, as before; with them it may be absent or null.
+        output.response = !contentOptional                                         ? message["content"].get<std::string>()
+                          : message.contains("content") && message["content"].is_string() ? message["content"].get<std::string>()
+                                                                                         : std::string();
+        if (callsAllowed && message.contains("tool_calls") && message["tool_calls"].is_array())
+        {
+            for (const auto& call : message["tool_calls"])
+            {
+                if (output.toolCalls.size() >= MaximumToolCallsPerReply)
+                    break;
+                revia::llm::ToolCall requested;
+                requested.id = revia::utf8::Prefix(call.value("id", std::string()), 128);
+                if (call.contains("function") && call["function"].is_object())
+                {
+                    const auto& function = call["function"];
+                    requested.name = revia::utf8::Prefix(function.value("name", std::string()), MaximumToolNameBytes);
+                    // Some servers send the arguments as an object rather than text.
+                    if (function.contains("arguments"))
+                        requested.arguments = function["arguments"].is_string() ? function["arguments"].get<std::string>()
+                                                                                : function["arguments"].dump();
+                    requested.arguments = revia::utf8::Prefix(requested.arguments, MaximumToolArgumentBytes);
+                }
+                if (requested.id.empty())
+                    requested.id = "call_" + std::to_string(output.toolCalls.size());
+                output.toolCalls.push_back(std::move(requested));
+            }
+        }
+        output.bSuccess = !output.response.empty() || !output.toolCalls.empty();
         if (!output.bSuccess)
         {
             output.reason = operation + " returned an empty decision.";
@@ -3070,8 +3408,10 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
             {"top_k", 20},
             {"top_p", 0.8},
             {"min_p", 0.0},
-            {"dry_multiplier", 0.8},
-            {"dry_penalty_last_n", 4096},
+            // No DRY. The summary has to carry the person's fact across as they gave it,
+            // and DRY lowers the chance of every token that would. A live 9B told a
+            // sister's phone number kept it exactly in none of 18 tries with DRY at 0.8,
+            // saving an invented number in most, and in all 18 without it.
             {"max_tokens", 256},
             // Streamed so a user's turn preempts classification at once.
             {"stream", true},
@@ -3099,7 +3439,9 @@ memoryDecision llamaCppService::EvaluateMemory(const std::string& userMessage, c
             return false;
         }
 
-        if (stopToken.stop_requested() || preemptionToken.stop_requested() || InterruptedNativeCompletion(result.terminal))
+        // An answer that arrived whole is kept even when the person spoke as it finished:
+        // the work is done, and discarding it only meant asking again.
+        if (stopToken.stop_requested() || InterruptedNativeCompletion(result.terminal))
         {
             verdict.bPreempted = preemptionToken.stop_requested();
             verdict.reason = stopToken.stop_requested() ? "Memory evaluation was cancelled."

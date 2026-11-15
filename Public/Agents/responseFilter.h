@@ -40,6 +40,15 @@ struct ResponseFilterContext
     }
 
     [[nodiscard]] std::string Describe() const;
+    // The two halves of Describe(). What is true of this turn only (the answer posture,
+    // whether earlier history is excluded, whether the screen was observed), and what the
+    // settings say (internet and desktop control), which changes only when a setting does
+    // and can therefore sit in the part of the prompt the model server keeps cached.
+    [[nodiscard]] std::string DescribeTurn() const;
+    [[nodiscard]] std::string DescribeSettings() const;
+
+private:
+    [[nodiscard]] std::string DescribeParts(bool turnFacts, bool settings) const;
 };
 
 // Additional prompt-marker defense when fragmenting already-approved output.

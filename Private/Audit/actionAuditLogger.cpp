@@ -14,6 +14,14 @@ namespace revia::audit
 namespace
 {
 
+// Error text from Windows comes in the console's code page on a non-English system, and
+// a strict dump throws on it. The record is written after the effect ran, so a throw
+// there lost the result and left the task blocked; such bytes are replaced instead.
+std::string SafeDump(const nlohmann::json& value)
+{
+    return value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+}
+
 std::string UtcTimestamp()
 {
     const auto now = std::chrono::system_clock::now();
@@ -175,7 +183,7 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
         {
             entry["process"] = {{"executable", actions::PathToUtf8(request.process.executable)},
                 {"working_directory", actions::PathToUtf8(request.process.workingDirectory)},
-                {"arguments_digest", ContentDigest(nlohmann::json(request.process.arguments).dump())},
+                {"arguments_digest", ContentDigest(SafeDump(nlohmann::json(request.process.arguments)))},
                 {"argument_count", request.process.arguments.size()}, {"environment_count", request.process.environment.size()},
                 {"timeout_ms", request.process.timeoutMs}, {"canonical_executable", actions::PathToUtf8(decision.canonicalExecutable)}};
             if (result.process)
@@ -194,7 +202,7 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
                 {"path_digest", ContentDigest(guest.path)}, {"content_digest", ContentDigest(guest.content)}, {"content_bytes", guest.content.size()},
                 {"expected_digest", guest.expectedDigest}, {"executable", guest.executable},
                 {"working_directory_digest", ContentDigest(guest.workingDirectory)},
-                {"arguments_digest", ContentDigest(nlohmann::json(guest.arguments).dump())},
+                {"arguments_digest", ContentDigest(SafeDump(nlohmann::json(guest.arguments)))},
                 {"argument_count", guest.arguments.size()}, {"timeout_ms", guest.timeoutMs}, {"run_id", guest.runId},
                 {"code_digest", ContentDigest(guest.code)}, {"code_bytes", guest.code.size()}, {"pattern_digest", ContentDigest(guest.pattern)},
                 {"publish", guest.publish}, {"file_count", guest.files.size()}, {"review_digest", ContentDigest(guest.review)}};
@@ -312,7 +320,7 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
             captured.sourceLocator = actions::PathToUtf8(path) + "#" + eventId;
             auto redacted = entry;
             redacted.erase("timestamp");
-            captured.digest = ContentDigest(redacted.dump());
+            captured.digest = ContentDigest(SafeDump(redacted));
             captured.mediaType = "application/json";
             captured.observedAtUnixMs = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
@@ -323,7 +331,7 @@ bool ActionAuditLogger::WriteRecord(const actions::ActionRequest& request, const
                 return false;
             reference = std::move(captured);
         }
-        return journal->AppendActionRecord(entry.dump(), eventId, kind, transactionId, reference).Durable();
+        return journal->AppendActionRecord(SafeDump(entry), eventId, kind, transactionId, reference).Durable();
     }
     catch (const std::exception&)
     {

@@ -1,0 +1,102 @@
+{
+ "NVIDIA GeForce RTX 5070": [
+  {
+   "megabytes": 16,
+   "page_locked": false,
+   "seconds": 0.002132900001015514,
+   "gigabytes_per_second": 7.325706780702631
+  },
+  {
+   "megabytes": 16,
+   "page_locked": true,
+   "seconds": 0.0012556000147014856,
+   "gigabytes_per_second": 12.444249615364004
+  },
+  {
+   "megabytes": 64,
+   "page_locked": false,
+   "seconds": 0.00982600002316758,
+   "gigabytes_per_second": 6.360675743195454
+  },
+  {
+   "megabytes": 64,
+   "page_locked": true,
+   "seconds": 0.004734999965876341,
+   "gigabytes_per_second": 13.199577708641582
+  },
+  {
+   "megabytes": 256,
+   "page_locked": false,
+   "seconds": 0.036289699957706034,
+   "gigabytes_per_second": 6.8890070816612825
+  },
+  {
+   "megabytes": 256,
+   "page_locked": true,
+   "seconds": 0.018691100005526096,
+   "gigabytes_per_second": 13.37534976144189
+  },
+  {
+   "megabytes": 1024,
+   "page_locked": false,
+   "seconds": 0.141253300011158,
+   "gigabytes_per_second": 7.079480620424494
+  },
+  {
+   "megabytes": 1024,
+   "page_locked": true,
+   "seconds": 0.07457719999365509,
+   "gigabytes_per_second": 13.408923908179423
+  }
+ ],
+ "NVIDIA GeForce RTX 2070 SUPER": [
+  {
+   "megabytes": 16,
+   "page_locked": false,
+   "seconds": 0.0029016000335104764,
+   "gigabytes_per_second": 5.384959959866083
+  },
+  {
+   "megabytes": 16,
+   "page_locked": true,
+   "seconds": 0.002569700009189546,
+   "gigabytes_per_second": 6.080476298448528
+  },
+  {
+   "megabytes": 64,
+   "page_locked": false,
+   "seconds": 0.010573099949397147,
+   "gigabytes_per_second": 5.911227577448901
+  },
+  {
+   "megabytes": 64,
+   "page_locked": true,
+   "seconds": 0.010188499989453703,
+   "gigabytes_per_second": 6.134367185031639
+  },
+  {
+   "megabytes": 256,
+   "page_locked": false,
+   "seconds": 0.04251269996166229,
+   "gigabytes_per_second": 5.880595686123171
+  },
+  {
+   "megabytes": 256,
+   "page_locked": true,
+   "seconds": 0.040485500008799136,
+   "gigabytes_per_second": 6.175050325318074
+  },
+  {
+   "megabytes": 1024,
+   "page_locked": false,
+   "seconds": 0.17109660001005977,
+   "gigabytes_per_second": 5.8446515006213104
+  },
+  {
+   "megabytes": 1024,
+   "page_locked": true,
+   "seconds": 0.1611964000039734,
+   "gigabytes_per_second": 6.203612487470878
+  }
+ ]
+}
