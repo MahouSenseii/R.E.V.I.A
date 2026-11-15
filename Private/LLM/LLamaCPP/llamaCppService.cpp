@@ -2731,10 +2731,14 @@ responseOutput llamaCppService::GenerateCodeReview(const std::string& instructio
     if (purpose == revia::llm::CodeReviewPurpose::SavedObservation)
         return GeneratePlannerResponse(instructions, material, 384, true, stopToken, revia::llm::InferencePriority::Background, 0.6F,
             "saved source review", schema, std::min(768, thinkingTokens));
-    // Room for a forty-line replacement and the prose that justifies it. Low temperature:
-    // this is judgement about code, and a creative answer is a wrong one.
+    // Room for an agent worker's whole-file write, which its schema allows up to 8,192 characters,
+    // and for a reviewer's full deliverable. At 1,600 tokens a live 9B's write of a new function was
+    // cut off after 4,767 characters and the run failed; so was one reviewer's write-up, in 20
+    // Agent Studio coding runs.
+    // The schema still bounds every field, so most answers stay short. Low temperature: this is
+    // judgement about code, and a creative answer is a wrong one.
     return GeneratePlannerResponse(
-        instructions, material, 1600, true, stopToken,
+        instructions, material, 3072, true, stopToken,
         revia::llm::InferencePriority::Background, 0.2F, "self code review", schema);
 }
 

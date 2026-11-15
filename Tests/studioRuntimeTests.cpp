@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 #include <mutex>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -40,7 +41,7 @@ struct NativeActionFixture
     std::filesystem::path approved = temporary.root / "approved";
     std::filesystem::path marker = approved / "marker.txt";
 
-    explicit NativeActionFixture(const char* mode = "approved_scope")
+    explicit NativeActionFixture(const char* mode = "approved_scope", const char* risk = "read_only")
         : session(revia::runtime::CompanionPaths(temporary.root, {"native-action", "Native action fixture", "assistant", false}))
     {
         std::filesystem::create_directories(approved);
@@ -51,7 +52,7 @@ struct NativeActionFixture
         {
             std::ofstream output(temporary.root / "capabilities.json");
             output << nlohmann::json{{"mode", mode}, {"approvedRoots", {revia::actions::PathToUtf8(approved)}},
-                {"autoApproveRiskThrough", "read_only"}, {"createMissingApprovedRoots", false}}
+                {"autoApproveRiskThrough", risk}, {"createMissingApprovedRoots", false}}
                           .dump();
         }
         std::string error;
@@ -796,6 +797,87 @@ void TestToolStudioNoToolCompletionStillAwaitsAcceptance()
                 "A complete no-tool analytical deliverable did not advance through ordinary verification.");
 }
 
+// A worker that may write, asked for a change, may not stop before it has written; asked only to
+// review, it may stop once it has read. On ten coding tasks a live 9B stopped after one read in
+// every run until stopping was left out of what its step may answer.
+void TestToolStudioWriterKeepsGoingUntilItWrites()
+{
+    using namespace revia::runtime;
+    using json = nlohmann::json;
+    for (const bool askedForAChange : {true, false})
+    {
+        NativeActionFixture fixture("approved_scope", "reversible_write");
+        const std::string marker = revia::actions::PathToUtf8(fixture.marker);
+        std::mutex seenMutex;
+        // For each step of the worker that may write: how many receipts it had, whether it had
+        // written, and whether tool:null was among the answers it was offered.
+        std::vector<std::tuple<std::size_t, bool, bool>> steps;
+        bool unchangedRefused = false;
+        HeldMemoryBackend backend({},
+            [&](const json& wire)
+            {
+                const auto& properties = wire.at("response_format").at("json_schema").at("schema").at("properties");
+                if (!properties.contains("tool"))
+                    return CompleteStudioDeliverable(wire).dump();
+                const auto& choices = properties.at("tool").at("anyOf");
+                const auto offers = [&](const auto& test) { return std::any_of(choices.begin(), choices.end(), test); };
+                const bool mayEnd = offers([](const json& choice) { return choice.value("type", "") == "null"; });
+                const bool mayWrite = offers([](const json& choice)
+                    { return choice.contains("properties") && choice.at("properties").at("action").value("const", "") == "write_text_file"; });
+                const auto& content = wire.at("messages").at(1).at("content").get_ref<const std::string&>();
+                const auto receipts = json::parse(content.substr(0, content.find("\n\nHost note:"))).at("toolReceipts");
+                const bool wrote = std::any_of(receipts.begin(), receipts.end(),
+                    [](const json& receipt) { return receipt.value("action", "") == "write_text_file" && receipt.value("succeeded", false); });
+                if (mayWrite)
+                {
+                    std::lock_guard lock(seenMutex);
+                    steps.emplace_back(receipts.size(), wrote, mayEnd);
+                }
+                if (receipts.empty())
+                    return json{{"tool", {{"action", "read_text_file"}, {"source", marker}}}}.dump();
+                // First the file written back exactly as it was read, which changes nothing, then the change.
+                if (mayWrite && askedForAChange && !wrote && receipts.size() <= 2)
+                {
+                    if (receipts.size() == 2)
+                    {
+                        std::lock_guard lock(seenMutex);
+                        const auto& refused = receipts.at(1);
+                        unchangedRefused = !refused.value("succeeded", true) && !refused.value("attempted", true) &&
+                                           refused.value("message", "").find("nothing would change") != std::string::npos;
+                    }
+                    return json{{"tool", {{"action", "write_text_file"}, {"source", marker},
+                                             {"content", receipts.size() == 1 ? "PRIVATE_NATIVE_ACTION_SENTINEL_5F9A" : "FIXED_MARKER_5F9A"},
+                                             {"expected_digest", receipts.at(0).at("contentDigest")}}}}
+                        .dump();
+                }
+                return std::string(R"({"tool":null})");
+            });
+        backend.release.store(true);
+        ReviaSessionTestAccess::ConfigureStartupBrains(fixture.session, backend.port);
+        std::string error;
+        Check(fixture.session.StartAgentWorkflow(askedForAChange ? "Fix the sentinel spelling in marker.txt." : "Review marker.txt for its sentinel.",
+                  AgentProviderMode::LocalWithTools, error),
+            error);
+        ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+        std::lock_guard lock(seenMutex);
+        Check(steps.size() >= 2, "The worker that may write took fewer than two steps.");
+        for (const auto& [receipts, wrote, mayEnd] : steps)
+        {
+            if (receipts == 0)
+                Check(!mayEnd, "A first step could stop with nothing read.");
+            else if (askedForAChange && !wrote)
+                Check(!mayEnd, "Asked for a change, the worker could stop before it had written anything.");
+            else
+                Check(mayEnd, askedForAChange ? "Having written, the worker could not stop." : "Asked only to review, the worker could not stop after reading.");
+        }
+        Check(unchangedRefused == askedForAChange, "Writing the file back unchanged was not refused as a change that changes nothing.");
+        std::ifstream written(fixture.marker);
+        const std::string now((std::istreambuf_iterator<char>(written)), std::istreambuf_iterator<char>());
+        Check((now == "FIXED_MARKER_5F9A") == askedForAChange,
+            askedForAChange ? "The requested change was not written." : "A review-only run changed the file.");
+    }
+}
+
 void TestLocalStudioGrammarPinsNativeEvidence()
 {
     using namespace revia::runtime;
@@ -950,6 +1032,7 @@ void RunStudioStopDiagnosticsTests()
     TestToolStudioStopFailureDiagnostic(true);
     TestToolStudioStopFailureDiagnostic(false);
     TestToolStudioNoToolCompletionStillAwaitsAcceptance();
+    TestToolStudioWriterKeepsGoingUntilItWrites();
 }
 
 void RunStudioRuntimeTests()

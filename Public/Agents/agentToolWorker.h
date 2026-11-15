@@ -11,6 +11,9 @@ namespace revia::agents
 
 inline constexpr std::size_t WorkerToolOutputReservation = 16384;
 inline constexpr unsigned MaximumWorkerToolsPerAttempt = 4;
+// The worker that may write looks for what to change before it writes: a listing, the test and
+// a source file or two, then the write.
+inline constexpr unsigned MaximumWritingWorkerToolsPerAttempt = 6;
 
 // What a worker's tool step may answer: one bounded action, or null to stop choosing.
 // With `mayEnd` false, null is left out. That is for a first step, where nothing has been
