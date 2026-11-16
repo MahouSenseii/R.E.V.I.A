@@ -15,7 +15,9 @@
 #include <string_view>
 #include <fstream>
 #include <map>
+#include <sstream>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -93,6 +95,188 @@ bool AskedToRunAProgram(const nlohmann::json& receipts)
 {
     return std::any_of(receipts.begin(), receipts.end(), [](const nlohmann::json& receipt)
         { return receipt.is_object() && receipt.value("action", std::string{}) == "execute_process"; });
+}
+
+// The approved program that takes a short script on its command line, and the argument that
+// introduces one. Python only: it is what the measured runs had, and its -c is unambiguous.
+// Empty when the owner has approved no such program.
+std::pair<std::string, std::string> InlineScriptProgram(const std::vector<std::filesystem::path>& approved)
+{
+    for (const auto& executable : approved)
+    {
+        auto name = actions::PathToUtf8(executable.filename());
+        std::transform(name.begin(), name.end(), name.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (name.ends_with(".exe") && name.starts_with("python"))
+            return {actions::PathToUtf8(executable), "-c"};
+    }
+    return {};
+}
+
+// What this worker's receipts say about the programs it had the host run.
+struct ProgramRuns
+{
+    // Runs of what the owner named: everything that is not a script of the worker's own.
+    unsigned named = 0;
+    bool namedFailed = false;
+    // Runs of a script the worker wrote itself, given on the command line after `inlineFlag`.
+    unsigned own = 0;
+    bool lastOwnFailed = false;
+    // The first failed run of what the owner named, as one line: what was run and how it ended.
+    std::string failure;
+};
+
+std::string OneLine(std::string text, const std::size_t maximum)
+{
+    std::replace_if(text.begin(), text.end(), [](const unsigned char ch) { return ch < 0x20; }, ' ');
+    return utf8::Prefix(utf8::Sanitize(text), maximum);
+}
+
+// What a process receipt ran and how it ended, on one line: its arguments, its exit code, and
+// the last line it printed (for a failed Python run, the error).
+std::string RunLine(const nlohmann::json& receipt)
+{
+    std::string command;
+    if (receipt.contains("arguments") && receipt["arguments"].is_array())
+        for (const auto& argument : receipt["arguments"])
+            if (argument.is_string())
+                command += (command.empty() ? "" : " ") + argument.get<std::string>();
+    std::string output = receipt.value("output", std::string{});
+    while (!output.empty() && static_cast<unsigned char>(output.back()) <= 0x20)
+        output.pop_back();
+    const auto lastBreak = output.find_last_of('\n');
+    const std::string last = lastBreak == std::string::npos ? output : output.substr(lastBreak + 1);
+    const std::string ended = receipt.value("timedOut", false)  ? "timed out"
+                              : receipt.contains("exitCode")    ? "exit " + std::to_string(receipt.value("exitCode", 0))
+                              : receipt.value("succeeded", false) ? "ran"
+                                                                  : "did not run";
+    return "ran " + OneLine(command, 240) + " -> " + ended + (last.empty() ? "" : ": " + OneLine(last, 160));
+}
+
+ProgramRuns RunsOf(const nlohmann::json& receipts, const std::string& inlineFlag)
+{
+    ProgramRuns runs;
+    for (const auto& receipt : receipts)
+    {
+        if (!receipt.is_object() || receipt.value("action", std::string{}) != "execute_process" || !receipt.value("attempted", false))
+            continue;
+        const bool failed = !receipt.value("succeeded", false);
+        if (!inlineFlag.empty() && receipt.contains("arguments") && receipt["arguments"].is_array() && !receipt["arguments"].empty() &&
+            receipt["arguments"].front().is_string() && receipt["arguments"].front().get<std::string>() == inlineFlag)
+        {
+            ++runs.own;
+            runs.lastOwnFailed = failed;
+            continue;
+        }
+        ++runs.named;
+        if (failed && !runs.namedFailed)
+        {
+            runs.namedFailed = true;
+            runs.failure = RunLine(receipt);
+        }
+    }
+    return runs;
+}
+
+// The files an earlier worker's host receipts say it wrote, by the path in the host's own line.
+std::vector<std::string> WrittenFiles(const std::vector<agents::WorkflowArtifact>& prerequisites)
+{
+    std::vector<std::string> files;
+    const std::string wrote = ": wrote ";
+    for (const auto& artifact : prerequisites)
+    {
+        try
+        {
+            const auto content = nlohmann::json::parse(artifact.content);
+            std::istringstream evidence(content.at("evidence").get<std::string>());
+            for (std::string line; std::getline(evidence, line);)
+            {
+                const auto at = line.find(wrote);
+                const auto end = line.rfind(" (");
+                if (!line.starts_with("Host receipt ") || line.find(" write_text_file succeeded ") == std::string::npos ||
+                    at == std::string::npos || end == std::string::npos || end <= at + wrote.size())
+                    continue;
+                auto file = line.substr(at + wrote.size(), end - at - wrote.size());
+                if (std::find(files.begin(), files.end(), file) == files.end())
+                    files.push_back(std::move(file));
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+    return files;
+}
+
+// A model's own evidence with nothing in it that could pass for the host's. Only the host writes
+// a line that begins "Host receipt": the reports and the result repeat such lines as the host's
+// record of what was run, so one a model wrote itself would be taken for it. A host line the model
+// copied after its own words is cut away (the host's lines follow whole: a live 9B reviewer quoted
+// the line about the test, and the result carried it twice); a line of its own that begins so is
+// marked as the worker's.
+std::string OwnWords(const std::string& evidence)
+{
+    std::string words;
+    std::istringstream lines(evidence);
+    for (std::string line; std::getline(lines, line);)
+    {
+        if (const auto copied = line.find("Host receipt "); copied != std::string::npos && line.find(" sha256=", copied) != std::string::npos)
+            line.erase(copied);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\r'))
+            line.pop_back();
+        if (line.starts_with("Host receipt "))
+            line.insert(0, "Said by the worker: ");
+        if (!line.empty())
+            words += (words.empty() ? "" : "\n") + line;
+    }
+    return words;
+}
+
+// The host's line about a failed check a checking worker wrote itself, when a write-up or
+// report carries one in its evidence: what was run and how it ended. Empty otherwise.
+std::string FailedOwnCheck(const std::string& artifactContent)
+{
+    try
+    {
+        const auto content = nlohmann::json::parse(artifactContent);
+        std::istringstream evidence(content.at("evidence").get<std::string>());
+        const std::string own = ": ran -c ";
+        for (std::string line; std::getline(evidence, line);)
+            if (const auto at = line.find(own);
+                line.starts_with("Host receipt ") && line.find(" execute_process failed ") != std::string::npos && at != std::string::npos)
+                return line.substr(at + 2);
+    }
+    catch (...)
+    {
+    }
+    return {};
+}
+
+// The host's own lines about programs that were run, as they stand in the evidence of the
+// write-ups a report is made from. A report repeats them, so what Revia finally tells the owner
+// names what was run and how it ended in the host's words, whatever the model's summary says.
+std::string ProgramEvidence(const std::vector<agents::WorkflowArtifact>& prerequisites)
+{
+    std::vector<std::string> lines;
+    for (const auto& artifact : prerequisites)
+    {
+        try
+        {
+            const auto content = nlohmann::json::parse(artifact.content);
+            std::istringstream evidence(content.at("evidence").get<std::string>());
+            for (std::string line; std::getline(evidence, line);)
+                if (line.starts_with("Host receipt ") && line.find(" execute_process ") != std::string::npos &&
+                    std::find(lines.begin(), lines.end(), line) == lines.end())
+                    lines.push_back(line);
+        }
+        catch (...)
+        {
+        }
+    }
+    std::string out;
+    for (const auto& line : lines)
+        if (out.size() + line.size() < 1024)
+            out += "\n" + line;
+    return out;
 }
 
 // One spelling per file, so a listing's "D:/a/b.h" and a read of "D:\a\B.h" are the same file.
@@ -534,7 +718,12 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
         const auto review = [&](const std::string& prompt, const std::string& input, const std::string& schema)
         { return askProvider([&] { return router.ReviewCode(prompt, input, schema, stop); }); };
         std::string hostEvidence;
+        // The host's lines about what a worker changed and ran. They are kept whole when its
+        // evidence is cut to size: the lines of six reads fill what a worker's evidence keeps, and
+        // the line about a write after them would be cut away.
+        std::string hostEffects;
         std::string deliverableNote;
+        std::string failedRun;
         bool modelEndedToolSelection = false;
         if (mode == AgentProviderMode::LocalWithTools && request.node.role == agents::WorkflowRole::Worker)
         {
@@ -589,6 +778,21 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             // left out of what the step may answer, in 18 of 20, and read the test first in the rest.
             const bool ownerNamedAProgram = allowProcess && NamesAnApprovedProgram(request.node.inputText, scope.settings.process.approvedExecutables);
             const auto actingToolSchema = agents::WorkerToolSchema(allowWrites, allowProcess, false);
+            // A check of the checking worker's own, once the test the owner named has passed. A passing
+            // test shows only what it asserts: in 40 live runs of ten coding tasks, 33 fixes passed the
+            // named test, 11 of those failed a hidden check of behaviour the project's own documentation
+            // states, and 9 of the 11 were accepted, among them all 6 of a 35B-A3B's. Only where the
+            // session asks for it (SetAgentOwnCheck), in a run that may change files, when the owner
+            // asked for a change, named an approved program that takes a script on its command line,
+            // and a file was written.
+            const auto inlineScript = allowProcess && scope.settings.process.allowCommandInterpreters
+                                          ? InlineScriptProgram(scope.settings.process.approvedExecutables)
+                                          : std::pair<std::string, std::string>{};
+            const bool changeRun =
+                scope.settings.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite && AsksForAChange(request.node.inputText);
+            const auto written = allowProcess ? WrittenFiles(request.prerequisites) : std::vector<std::string>{};
+            const bool ownCheck =
+                agentOwnCheck.load() && ownerNamedAProgram && changeRun && !inlineScript.first.empty() && !written.empty();
             // Likewise, when the owner's words ask for a change, the worker that may write is kept
             // going until it has written a file; it still stops at its tool limit. On ten coding tasks
             // whose objective does not name the file to change, a live 9B that could write stopped
@@ -600,7 +804,9 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             // Finding what to change takes looking first: a listing, the test and one or two source
             // files came before the write in most of the same tasks done in a plain tool loop. With
             // four steps 12 of those 40 replays ran out before writing; with six, 3.
-            const unsigned toolLimit = allowWrites ? agents::MaximumWritingWorkerToolsPerAttempt : agents::MaximumWorkerToolsPerAttempt;
+            const unsigned toolLimit = allowWrites ? agents::MaximumWritingWorkerToolsPerAttempt
+                                       : ownCheck  ? agents::MaximumCheckingWorkerToolsPerAttempt
+                                                   : agents::MaximumWorkerToolsPerAttempt;
             // Runs one admitted action under this worker's narrowed authority and records its host
             // receipt. Empty when the attempt has to end: budget, admission, audit or runtime failure.
             const auto runAction = [&](actions::ActionRequest& action) -> std::optional<actions::ActionOutcome>
@@ -643,9 +849,18 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                 auto outcome = actionRuntime.ExecuteScopedFor(authorityStamp, action, policy, delegatedProcess, stop);
                 const auto receipt = agents::WorkerToolReceipt(action, outcome);
                 material["toolReceipts"].push_back(nlohmann::json::parse(receipt));
-                hostEvidence += "\nHost receipt " + action.id + " " + actions::ToString(action.type) + " " +
+                // For a program, what was run and how it ended, on one line. The line used to be the
+                // start of its output alone ("ok"), which named neither the script nor the exit code,
+                // and a report made from it could only repeat a worker's own account of the run.
+                const bool effect = action.type == actions::ActionType::ExecuteProcess || action.type == actions::ActionType::WriteTextFile;
+                (effect ? hostEffects : hostEvidence) += "\nHost receipt " + action.id + " " + actions::ToString(action.type) + " " +
                                 (outcome.Succeeded() ? "succeeded" : "failed") + " sha256=" + audit::ContentDigest(receipt) + ": " +
-                                utf8::Prefix(utf8::Sanitize(outcome.result.content.empty() ? outcome.Message() : outcome.result.content), 180);
+                                (action.type == actions::ActionType::ExecuteProcess
+                                        ? RunLine(material["toolReceipts"].back())
+                                    // A write, by the file it wrote: the line said only that a file had been written.
+                                    : action.type == actions::ActionType::WriteTextFile && outcome.Succeeded()
+                                        ? "wrote " + OneLine(actions::PathToUtf8(action.source), 400) + " (" + std::to_string(action.value.size()) + " bytes)"
+                                        : utf8::Prefix(utf8::Sanitize(outcome.result.content.empty() ? outcome.Message() : outcome.result.content), 180));
                 if (!outcome.auditError.empty() || !outcome.runtimeError.empty() || stop.stop_requested())
                     return std::nullopt;
                 return outcome;
@@ -805,8 +1020,25 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                 // For the worker that may run programs the note works ahead of the instructions and
                 // not after the material, where 20 of 20 replays still stopped.
                 const bool noProgramRun = allowProcess && !AskedToRunAProgram(material["toolReceipts"]);
+                const auto runs = RunsOf(material["toolReceipts"], inlineScript.second);
+                // Due once the named test has passed, until this worker has run a script of its own.
+                // tool:null is left out of that step, as it is before the named test is run. The wording
+                // is the plainest of four replayed on a 35B-A3B's 19 fixes that passed their named test;
+                // none of the others made the checks more often right: being made to read the changed
+                // file first, with a second look at a failed check (checks of internals, and no check
+                // corrected; stopped after 8 fixes), room to work the expected values out before the
+                // tool, or a rule against values worked out by hand.
+                const bool ownCheckDue = ownCheck && runs.named > 0 && !runs.namedFailed && runs.own == 0;
                 const std::string progress =
-                    !nothingRun && noProgramRun
+                    ownCheckDue
+                        ? "The test the input names has been run and passed. A passing test shows only what it asserts, so check "
+                          "the changed code once more with a check of your own. If this worker has not read the changed file as "
+                          "it is now, read it first. Then run " + inlineScript.first + " with two arguments: " + inlineScript.second +
+                          ", and a short Python script (at most four assert lines, under 600 characters, no comments) that imports "
+                          "the changed code and asserts behaviour its documentation or the input states and the named test does "
+                          "not cover, such as the edge cases they name. Assert only what the documentation states in so many "
+                          "words; do not guess at values it does not give. "
+                    : !nothingRun && noProgramRun
                         ? "No program has been run by this worker yet: if the input asks for a program or a test to be run, run "
                           "it now, because tool:null leaves it un-run. "
                     : !nothingRun      ? ""
@@ -838,9 +1070,9 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                     "Writes require a prior read's exact contentDigest or missing for a new file. Never invent a digest. "
                     "Only the host can report execution; returned tools remain subject to current authority.",
                     material.dump() + UnreadListedFilesNote(material["toolReceipts"]),
-                    nothingRun                              ? firstToolSchema
-                    : noProgramRun && ownerNamedAProgram ? actingToolSchema
-                                                          : toolSchema);
+                    nothingRun                                             ? firstToolSchema
+                    : (noProgramRun && ownerNamedAProgram) || ownCheckDue ? actingToolSchema
+                                                                          : toolSchema);
                 if (!proposal || !usagePersisted)
                     return result;
                 std::optional<actions::ActionRequest> action;
@@ -861,6 +1093,11 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                 if (!outcome)
                     return result;
                 if (action->type == actions::ActionType::ExecuteProcess && outcome->result.attempted && !outcome->Succeeded())
+                    break;
+                // Its own check is this worker's last step. Left to go on, a 9B ran check after check
+                // to its limit; shown its failed check and asked to look again, a 35B-A3B stopped in 5
+                // of 5 replays without correcting even a missing import.
+                if (ownCheck && RunsOf(material["toolReceipts"], inlineScript.second).own > 0)
                     break;
             }
             instructions =
@@ -894,6 +1131,31 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             if (allowProcess && !AskedToRunAProgram(material["toolReceipts"]))
                 deliverableNote += " No host receipt shows a program run by this worker: do not say that a test or program was "
                                    "run, passed or failed.";
+            const auto ran = RunsOf(material["toolReceipts"], inlineScript.second);
+            if (changeRun && allowProcess && ran.named > 0 && !ran.namedFailed)
+                // Naming what was not checked is asked for and is not a failing: told only to name it, a
+                // 9B parent turned a correct fix down for the honest list of what no receipt checked.
+                deliverableNote += ran.lastOwnFailed
+                                       ? " This worker's own check failed. Say so in acceptanceCriteria, with the behaviour it asserted "
+                                         "and its error, beside the named test that passed. It may be the check that is wrong, so it "
+                                         "does not make verified false: the owner will decide. Do not call the change correct."
+                                   : ran.own > 0
+                                       ? " Say in acceptanceCriteria what the host receipts show was run and whether it passed: the "
+                                         "named test, and this worker's own check with the behaviour it asserted. Name documented "
+                                         "behaviour that no receipt checks as not checked; that alone does not make verified false. "
+                                         "Do not call the change correct beyond what was run."
+                                       : " Only the test the input names was run: say what it showed, and do not call the change "
+                                         "correct beyond what that test asserts.";
+            // The test the owner named failing is the host's own finding, not the model's to weigh:
+            // where the owner asked for a change, such work is not verified, whatever the write-up
+            // says. A failed check of the worker's own is not treated so. Replayed on 19 fixes by a
+            // 35B-A3B that passed their named test, such a check failed on 4 or 5 of the 6 wrong ones
+            // and on 4 or 5 of the 13 right ones, in each of three wordings; a 9B's failed on none of
+            // its 4 wrong fixes and on 3 of its 6 right ones. On a right fix the check expected 122400
+            // seconds of "1d2h", or opened a file whose name it had guessed. So it is reported, and
+            // holds back only the automatic acceptance (AdvanceAgentWorkflow).
+            if (changeRun && allowProcess && ran.namedFailed)
+                failedRun = ran.failure;
         }
         // The reviewer and the acceptance check read several workers' write-ups, and took one
         // worker's "the test was not run by this worker" for the state of the whole run. On a live
@@ -905,6 +1167,19 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             deliverableNote = "\n\nHost note: each worker's deliverable speaks only for that worker. Where one says it did not run a "
                               "test, and another worker's host receipt shows the test was run, the test was run. Judge verified from "
                               "the host receipts as a whole.";
+        // What the host's receipts say was run, repeated under this report's own evidence.
+        const std::string programEvidence =
+            mode == AgentProviderMode::LocalWithTools && request.node.role != agents::WorkflowRole::Worker ? ProgramEvidence(request.prerequisites)
+                                                                                                       : std::string{};
+        if (!programEvidence.empty())
+            deliverableNote += programEvidence.find(" execute_process failed ") != std::string::npos && programEvidence.find(": ran -c ") != std::string::npos
+                                   ? " A check the checking worker wrote itself failed. Say so plainly, with what it asserted and its "
+                                     "error, beside what else the receipts show was run. It may be the check that is wrong, so it "
+                                     "does not by itself make the work unverified: the owner will decide. Do not call the change "
+                                     "correct."
+                                   : " A passing test shows only what it asserts: say what the receipts show was run, and name what "
+                                     "was not checked. What was not checked does not by itself make the work unverified; a failed "
+                                     "run of the test the owner named does.";
         // Brief reports in a run whose workers may change files. In such a 35B-A3B run most of the
         // time went to the write-ups and reports after the fix (about 190 of 245 s, at 28 tokens a
         // second), not to the fix. Replaying 36 of them from ten runs, asked to be brief and
@@ -940,16 +1215,33 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
             // The schema left them out, so the model could neither drop nor invent one.
             if (hostReferences)
                 payload["prerequisiteEvidence"] = EvidenceReferences(request.prerequisiteReferences);
-            if (!hostEvidence.empty())
-                payload["evidence"] = utf8::Prefix(payload.at("evidence").get<std::string>(), 480) + utf8::Prefix(hostEvidence, 1536);
+            if (!hostEvidence.empty() || !hostEffects.empty())
+            {
+                const std::string effects = utf8::Prefix(hostEffects, 1536);
+                payload["evidence"] = OwnWords(utf8::Prefix(payload.at("evidence").get<std::string>(), 480)) +
+                                      utf8::Prefix(hostEvidence, 1536 - effects.size()) + effects;
+            }
+            // Every report of a run with tools, whether or not a program was run: a reviewer's own
+            // line must not reach the parent's report as the host's.
+            else if (mode == AgentProviderMode::LocalWithTools && request.node.role != agents::WorkflowRole::Worker)
+            {
+                // A brief report's own evidence is 480 characters by its schema; a full one keeps the
+                // room the host's lines leave it.
+                auto words = OwnWords(utf8::Prefix(payload.at("evidence").get<std::string>(), brief ? 480 : 2048 - programEvidence.size()));
+                if (words.empty() && programEvidence.empty())
+                    words = "The report gave no evidence in its own words.";
+                payload["evidence"] = words + programEvidence;
+            }
             result.artifact.content = payload.dump();
             std::string validation;
-            result.verified = claimedVerified && agents::ValidateDeliverable(request.node.deliverableContract, result.artifact.content,
-                                                     request.prerequisiteReferences, validation);
+            result.verified = claimedVerified && failedRun.empty() &&
+                              agents::ValidateDeliverable(request.node.deliverableContract, result.artifact.content,
+                                  request.prerequisiteReferences, validation);
             result.artifact.id = request.node.id + "-artifact";
             result.artifact.version = request.attempt;
             result.artifact.hash = agents::AgentWorkflow::ArtifactHash(result.artifact.content);
             result.diagnostic = result.verified ? "Bounded analytical response contract passed."
+                                : !failedRun.empty() ? "The test or program the owner named failed: " + failedRun
                                 : claimedVerified ? "The provider deliverable contract was invalid."
                                 : modelEndedToolSelection ? "The model ended tool selection and declared insufficient evidence."
                                                          : "The provider declared insufficient evidence.";
@@ -981,6 +1273,9 @@ bool ReviaSession::StartAgentWorkflow(const std::string& objective, const AgentP
     {
         options.budget.maximumActiveMilliseconds = 300000;
         options.budget.maximumReportedTokens = 60000;
+        // Twelve calls for the worker that may write and six for one that also runs a check of its own.
+        if (agentOwnCheck.load())
+            options.budget.maximumToolCalls = 20;
     }
     if (!LaunchAgentWorkflow(id, objective, mode, options, outError))
         return false;
@@ -1269,6 +1564,11 @@ void ReviaSession::AdvanceAgentWorkflow()
     }
     else if (parent->attempts.back().verified)
     {
+        // A check the checking worker wrote itself failed. The report says so; accepting work
+        // with such a check against it is the owner's decision, not an automatic one.
+        const auto candidate = agentWorkflow.CandidateArtifact();
+        if (candidate && !FailedOwnCheck(candidate->content).empty())
+            return;
         (void)agentWorkflow.Decide(agents::ParentDecision::Accept, error);
     }
 }
@@ -1283,17 +1583,12 @@ agents::WorkflowSnapshot ReviaSession::AgentWorkflowSnapshot() const
     return agentWorkflow.Snapshot();
 }
 
-std::string ReviaSession::AgentWorkflowResult() const
+// A reviewed deliverable as the owner reads it: its summary, its evidence and every section.
+static std::string DeliverableText(const agents::WorkflowArtifact& artifact)
 {
-    const auto artifact = agentWorkflow.AcceptedArtifact();
-    if (!artifact)
-        return {};
-    if (workflowProviderMode.load() == AgentProviderMode::Demonstration)
-        return "The deterministic workflow diagnostic completed: two workers, one justified recovery, reviewer evidence and separate "
-               "companion acceptance.";
     try
     {
-        const auto result = nlohmann::json::parse(artifact->content);
+        const auto result = nlohmann::json::parse(artifact.content);
         std::string candidate = result.at("summary").get<std::string>() + "\n\n" + result.at("evidence").get<std::string>();
         for (const auto section : {agents::DeliverableSection::Steps, agents::DeliverableSection::Constraints,
                  agents::DeliverableSection::Risks, agents::DeliverableSection::AcceptanceCriteria})
@@ -1316,7 +1611,37 @@ std::string ReviaSession::AgentWorkflowResult() const
     }
     catch (...)
     {
-        return "The accepted analytical artifact is available privately, but its summary could not be displayed.";
+        return "The analytical artifact is available privately, but its summary could not be displayed.";
     }
+}
+
+std::string ReviaSession::AgentWorkflowResult() const
+{
+    const auto artifact = agentWorkflow.AcceptedArtifact();
+    if (!artifact)
+        return {};
+    if (workflowProviderMode.load() == AgentProviderMode::Demonstration)
+        return "The deterministic workflow diagnostic completed: two workers, one justified recovery, reviewer evidence and separate "
+               "companion acceptance.";
+    return DeliverableText(*artifact);
+}
+
+void ReviaSession::SetAgentOwnCheck(const bool enabled)
+{
+    agentOwnCheck.store(enabled);
+}
+
+std::string ReviaSession::AgentWorkflowPendingReport() const
+{
+    if (workflowProviderMode.load() == AgentProviderMode::Demonstration)
+        return {};
+    const auto candidate = agentWorkflow.CandidateArtifact();
+    if (!candidate)
+        return {};
+    const auto failed = FailedOwnCheck(candidate->content);
+    if (failed.empty())
+        return {};
+    return "Not accepted automatically. The test named in the request passed, but a further check the checking worker wrote itself "
+           "failed: " + failed + "\nSuch a check can itself be wrong. Read it, then accept the work or not.\n\n" + DeliverableText(*candidate);
 }
 }

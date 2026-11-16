@@ -12,13 +12,18 @@ namespace revia::agents
 {
 
 inline constexpr std::size_t WorkerToolOutputReservation = 16384;
+// How much of a run's arguments its receipt repeats: the command, or a short script given on it.
+inline constexpr std::size_t WorkerToolArgumentBytes = 2048;
 inline constexpr unsigned MaximumWorkerToolsPerAttempt = 4;
+// The checking worker of a run that may change files, when it is to run a check of its own after
+// the named test: what it reads first, the test, and the check, which is its last step.
+inline constexpr unsigned MaximumCheckingWorkerToolsPerAttempt = 6;
 // The worker that may write looks for what to change before it writes: a listing, the test and
 // a source file or two, then the write. It counts model replies, as one reply may read several
 // files at once.
 inline constexpr unsigned MaximumWritingWorkerToolsPerAttempt = 6;
-// Its tool calls across those replies, bounded below the workflow's own 16 so that the checking
-// worker after it keeps room for its own (MaximumWorkerToolsPerAttempt).
+// Its tool calls across those replies, bounded below the workflow's own 16 (20 where the checking
+// worker also runs a check of its own) so that the checking worker after it keeps room for its own.
 inline constexpr unsigned MaximumWritingWorkerCallsPerAttempt = 12;
 
 // What a worker's tool step may answer: one bounded action, or null to stop choosing.

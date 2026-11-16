@@ -117,7 +117,8 @@ json Workflow(const ReviaSession& session)
         nodes.push_back({{"id", node.id}, {"state", revia::agents::ToString(node.state)}, {"attempts", attempts}});
     }
     json view = {{"state", revia::agents::ToString(snapshot.state)}, {"providerCalls", snapshot.providerCalls},
-        {"toolCalls", snapshot.toolCalls}, {"nodes", nodes}, {"result", session.AgentWorkflowResult()}};
+        {"toolCalls", snapshot.toolCalls}, {"nodes", nodes}, {"result", session.AgentWorkflowResult()},
+        {"stopped", session.AgentWorkflowStoppedReport()}, {"pending", session.AgentWorkflowPendingReport()}};
     if (const auto task = session.DelegatedTask())
         view["task"] = {{"status", ToString(task->status)}, {"objective", task->objective}, {"access", task->access},
             {"reason", task->reason}, {"detail", task->detail}};
@@ -205,6 +206,8 @@ int main(int argc, char** argv)
         };
         if (!session->Start())
             throw std::runtime_error("ReviaSession did not start.");
+        // A trial of the checking worker's own check, which is off unless a script asks for it.
+        session->SetAgentOwnCheck(script.value("agentOwnCheck", false));
         subscribe();
         transcript["hostsAfterStart"] = ReviaSessionTestAccess::DisabledHosts(*session);
         for (const auto& conversation : script.at("conversations"))
@@ -217,6 +220,7 @@ int main(int argc, char** argv)
                 session = std::make_unique<ReviaSession>();
                 if (!session->Start())
                     throw std::runtime_error("ReviaSession did not restart.");
+                session->SetAgentOwnCheck(script.value("agentOwnCheck", false));
                 subscribe();
                 record["restarted"] = true;
             }
@@ -287,8 +291,9 @@ int main(int argc, char** argv)
                     const auto running = [&]
                     {
                         const auto state = session->AgentWorkflowSnapshot().state;
+                        // A run held for the owner's decision has ended as far as this trial goes.
                         return state == revia::agents::WorkflowState::Running || state == revia::agents::WorkflowState::Waiting ||
-                               state == revia::agents::WorkflowState::AwaitingAcceptance;
+                               (state == revia::agents::WorkflowState::AwaitingAcceptance && session->AgentWorkflowPendingReport().empty());
                     };
                     while (running() && std::chrono::steady_clock::now() < deadline)
                     {

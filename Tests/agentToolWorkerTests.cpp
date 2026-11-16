@@ -168,6 +168,24 @@ void RunAgentToolWorkerTests()
     const auto longDirectory = "C:/" + std::string(2040, '\x02');
     processIdentity.process.executable = actions::Utf8ToPath(longExecutable);
     processIdentity.process.workingDirectory = actions::Utf8ToPath(longDirectory);
+    // What was run is part of the receipt: the arguments, up to a bound, never cut mid-argument.
+    {
+        actions::ActionRequest ran = processIdentity;
+        ran.process.executable = actions::Utf8ToPath("C:/approved/python.exe");
+        ran.process.workingDirectory = actions::Utf8ToPath("C:/workspace");
+        ran.process.arguments = {"-c", "assert merge([[1, 2], [2, 3]]) == [[1, 3]]"};
+        actions::ActionOutcome passed;
+        passed.result.succeeded = passed.result.attempted = true;
+        passed.result.content = "ok";
+        const auto told = nlohmann::json::parse(agents::WorkerToolReceipt(ran, passed));
+        Check(told.at("arguments") == nlohmann::json::array({"-c", "assert merge([[1, 2], [2, 3]]) == [[1, 3]]"}) &&
+                  told.at("truncated") == false,
+            "A process receipt did not say what was run.");
+        ran.process.arguments = {"-c", std::string(1000, 'a'), std::string(1000, 'b'), std::string(1000, 'c')};
+        const auto bounded = nlohmann::json::parse(agents::WorkerToolReceipt(ran, passed));
+        Check(bounded.at("arguments").size() == 3 && bounded.at("arguments").at(2) == std::string(1000, 'b') && bounded.at("truncated") == true,
+            "A process receipt's arguments were not bounded, or were cut without saying so.");
+    }
     const auto processReceipt = agents::WorkerToolReceipt(processIdentity, outcome);
     const auto identities = nlohmann::json::parse(processReceipt);
     bool unavailable = false;

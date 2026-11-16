@@ -27,6 +27,9 @@ class AgentStudioPanel final : public QWidget
         std::function<bool(const std::string&, const std::string&, const std::string&, std::string&)> retry;
         std::function<bool(revia::agents::ParentDecision, std::string&)> decide;
         std::function<std::string()> deliverable;
+        // What a run that stopped unverified left behind, or the report a run awaits the owner's
+        // decision on, for the same box.
+        std::function<std::string()> stopped;
     };
 
     explicit AgentStudioPanel(Controls controls, QWidget* parent = nullptr);

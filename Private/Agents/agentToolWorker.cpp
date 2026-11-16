@@ -300,10 +300,27 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
     Json receipt = {{"actionId", BoundedText(request.id, 128)}, {"action", actions::ToString(request.type)},
         {"succeeded", outcome.Succeeded()}, {"attempted", outcome.result.attempted}, {"message", BoundedText(outcome.Message(), 1024)},
         {"contentDigest", contentDigest}, {"output", output}, {"truncated", truncated}};
+    std::vector<std::string> arguments;
     if (request.type == actions::ActionType::ExecuteProcess)
     {
         AddPathIdentity(receipt, "executable", request.process.executable);
         AddPathIdentity(receipt, "working_directory", request.process.workingDirectory);
+        // What was run. A receipt gave the program, its folder and its output, never the
+        // arguments, so a write-up made from receipts could say "exit code 0" and not which
+        // script that was, and a second run by the same worker looked like the first.
+        std::size_t bytes = 0;
+        for (const auto& argument : request.process.arguments)
+        {
+            auto shown = BoundedText(argument, 1024);
+            bytes += shown.size();
+            if (shown.size() < argument.size() || bytes > WorkerToolArgumentBytes)
+            {
+                receipt["truncated"] = true;
+                break;
+            }
+            arguments.push_back(std::move(shown));
+        }
+        receipt["arguments"] = arguments;
     }
     else
         AddPathIdentity(receipt, "source", request.source);
@@ -349,6 +366,13 @@ std::string WorkerToolReceipt(const actions::ActionRequest& request, const actio
     {
         written = utf8::Prefix(written, written.size() / 2);
         receipt["written"] = written;
+        receipt["truncated"] = true;
+        encoded = receipt.dump();
+    }
+    while (encoded.size() > WorkerToolOutputReservation && !arguments.empty())
+    {
+        arguments.pop_back();
+        receipt["arguments"] = arguments;
         receipt["truncated"] = true;
         encoded = receipt.dump();
     }

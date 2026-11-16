@@ -281,6 +281,8 @@ struct ReviaSessionTestAccess
         return session.ExecuteAction(std::move(request));
     }
     static void JoinWorkflow(ReviaSession& session) { session.agentWorkflow.Join(); }
+    // What the session does of itself with a workflow awaiting acceptance, as its event poll does.
+    static void AdvanceWorkflow(ReviaSession& session) { session.AdvanceAgentWorkflow(); }
     static void SetDelegationMode(ReviaSession& session, agents::DelegationMode mode) { session.delegationMode.store(mode); }
     // Ends only the report loop and joins its current tail, without cancelling the record
     // or invalidating the session. Publication callbacks may have just changed that record.

@@ -1,5 +1,6 @@
 #include "Runtime/reviaSession.h"
 
+#include "Agents/responseFilter.h"
 #include "Core/utf8.h"
 
 #include <nlohmann/json.hpp>
@@ -495,6 +496,72 @@ agents::ToolExecution ReviaSession::CancelDelegatedTaskForChat(const std::string
     if (!CancelDelegatedTask(taskId, error))
         return agents::ToolExecution::Fail(error);
     return agents::ToolExecution::Ok("Cancelled task " + taskId + ". Nothing more from it will be reported.");
+}
+
+// A run that stops unverified used to leave Agent Studio with one line per worker ("verified
+// evidence was not established") and an empty deliverable box, although a worker may by then
+// have changed a file. This is what the owner is shown instead: the same facts a chat task's
+// report is made from, worded for reading rather than for relaying.
+std::string ReviaSession::AgentWorkflowStoppedReport() const
+{
+    const auto snapshot = agentWorkflow.Snapshot();
+    if ((snapshot.state != agents::WorkflowState::Paused && snapshot.state != agents::WorkflowState::Exhausted) ||
+        workflowProviderMode.load() == AgentProviderMode::Demonstration)
+        return {};
+    constexpr std::size_t MaximumReportCharacters = 2400;
+    const auto reports = agentWorkflow.WorkerDeliverables();
+    std::string text = snapshot.state == agents::WorkflowState::Exhausted
+                           ? "This run spent its budget before its work was verified, so nothing was accepted.\n"
+                           : "This run stopped before its work was verified, so nothing was accepted.\n";
+    for (const auto& node : snapshot.nodes)
+    {
+        text += "- " + node.workingOn + ": " + agents::ToString(node.state);
+        if (!node.attempts.empty())
+        {
+            const auto& attempt = node.attempts.back();
+            text += " (attempt " + std::to_string(attempt.ordinal) + ", " + (attempt.verified ? "verified" : "unverified") +
+                    (attempt.diagnostic.empty() ? std::string{} : "; " + OneLine(attempt.diagnostic)) + ")";
+        }
+        text += "\n";
+    }
+    bool wrote = false;
+    for (const auto& report : reports)
+        wrote = wrote || report.artifact.content.find(" write_text_file succeeded ") != std::string::npos;
+    if (wrote)
+        text += "A host receipt shows a file was written during this run. That change is still on disk.\n";
+    // A run its checking worker stopped over a check that worker wrote itself. A live 9B called a
+    // right fix unverified because its own check expected one working day from Monday to Tuesday.
+    for (const auto& report : reports)
+    {
+        try
+        {
+            const auto evidence = Json::parse(report.artifact.content).at("evidence").get<std::string>();
+            const auto failed = evidence.find(" execute_process failed ");
+            const auto own = failed == std::string::npos ? failed : evidence.find(": ran -c ", failed);
+            if (own == std::string::npos || evidence.find('\n', failed) < own)
+                continue;
+            text += "The test named in the request passed, but a further check the checking worker wrote itself failed: " +
+                    evidence.substr(own + 2, evidence.find('\n', own) == std::string::npos ? std::string::npos : evidence.find('\n', own) - own - 2) +
+                    "\nSuch a check can itself be wrong. Read it before trusting it or the change.\n";
+            break;
+        }
+        catch (...)
+        {
+        }
+    }
+    if (reports.empty())
+        return text + "No worker handed anything in. Retry the stopped step with changed input, or start again.";
+    text += "What each worker handed in follows. It is that worker's own account and is not confirmed; only the lines that begin "
+            "\"Host receipt\" are the host's own record.\n";
+    for (const auto& report : reports)
+    {
+        const auto node =
+            std::find_if(snapshot.nodes.begin(), snapshot.nodes.end(), [&](const auto& item) { return item.id == report.nodeId; });
+        const std::string label = node == snapshot.nodes.end() ? report.nodeId : node->workingOn;
+        text += "\n" + label + (report.verified ? " (verified by its own worker, not reviewed):\n" : " (NOT verified):\n") +
+                utf8::Prefix(DeliverableSections(report.artifact), MaximumReportCharacters) + "\n";
+    }
+    return agents::ResponseFilter{}.ApplyHard("Bounded analytical deliverable", text, {}, 8000).text;
 }
 
 bool ReviaSession::CancelDelegatedTask(const std::string& taskId, std::string& outError)
