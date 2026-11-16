@@ -5,9 +5,11 @@
 #include "Planning/structuredActionParser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <nlohmann/json.hpp>
 #include <set>
+#include <string_view>
 
 namespace revia::agents
 {
@@ -280,6 +282,193 @@ std::string WritingWorkerToolResult(const actions::ActionRequest& request, const
         return text.empty() ? "The file is empty." : text;
     }
     return "Wrote " + std::to_string(request.value.size()) + " bytes to " + name + ".";
+}
+
+std::vector<llm::ToolDefinition> CheckingWorkerTools()
+{
+    const auto pathOnly = [](const char* about)
+    {
+        return Json{{"type", "object"}, {"properties", {{"path", {{"type", "string"}, {"description", about}}}}},
+            {"required", Json::array({"path"})}, {"additionalProperties", false}}
+            .dump();
+    };
+    return {
+        {"list_directory", "List the files and folders in one folder.", pathOnly("Absolute path of a folder inside the approved folders.")},
+        {"read_text_file", "Read one text file.", pathOnly("Absolute path of a file inside the approved folders.")},
+        {"run_program", "Run the approved program in the project folder and get its exit code and output.",
+            Json{{"type", "object"},
+                {"properties", {{"arguments", {{"type", "array"}, {"items", {{"type", "string"}}},
+                                                  {"description", "What follows the program on its command line, one item an argument. To "
+                                                                  "run a script file, its path is the only item."}}}}},
+                {"required", Json::array({"arguments"})}, {"additionalProperties", false}}
+                .dump()},
+        // What -c means for the script is said here. Untold, a 35B-A3B's check of a command-line program
+        // copied `Path(__file__)` from the project's test in 2 of 4 replays and named a file it had not
+        // seen in a third; each ended in an error of the check's own.
+        {"run_check", "Run a short Python script of your own and get its exit code and output. It runs as python -c in the project "
+                      "folder: there is no __file__, so name a file by its path from that folder, and only files you have seen "
+                      "listed. Only after the test the task names has passed.",
+            Json{{"type", "object"},
+                {"properties", {{"script", {{"type", "string"}, {"description", "The Python source: imports and assert lines."}}}}},
+                {"required", Json::array({"script"})}, {"additionalProperties", false}}
+                .dump()}};
+}
+
+bool ParseCheckingWorkerCall(const llm::ToolCall& call, const std::filesystem::path& program, const std::filesystem::path& python,
+    const std::filesystem::path& folder, const int timeoutMs, std::optional<actions::ActionRequest>& outAction, bool& outOwnCheck,
+    std::string& outError)
+{
+    outAction.reset();
+    outOwnCheck = call.name == "run_check";
+    const bool run = call.name == "run_program";
+    if (!run && !outOwnCheck && call.name != "read_text_file" && call.name != "list_directory")
+    {
+        outError = "Not run: there is no tool named \"" + utf8::Prefix(utf8::Sanitize(call.name), 64) +
+                   "\". The tools are list_directory, read_text_file, run_program and run_check.";
+        return false;
+    }
+    outError = run           ? "Not run: run_program takes a JSON object with the arguments that follow the program, one item each."
+               : outOwnCheck ? "Not run: run_check takes a JSON object with one Python script."
+                             : "Not run: " + call.name + " takes a JSON object with one absolute path.";
+    if (call.arguments.size() > 4 * MaximumCheckingWorkerScriptBytes || !utf8::IsValid(call.arguments))
+        return false;
+    try
+    {
+        const auto arguments = Json::parse(call.arguments);
+        if (!arguments.is_object() || arguments.size() != 1)
+            return false;
+        Json action;
+        if (run || outOwnCheck)
+        {
+            Json given = Json::array();
+            if (outOwnCheck)
+            {
+                if (!arguments.contains("script") || !arguments["script"].is_string())
+                    return false;
+                const auto& script = arguments["script"].get_ref<const std::string&>();
+                if (script.empty() || script.size() > MaximumCheckingWorkerScriptBytes || script.find('\0') != std::string::npos)
+                {
+                    outError = "Not run: the script is empty or longer than " + std::to_string(MaximumCheckingWorkerScriptBytes) + " bytes.";
+                    return false;
+                }
+                // A script that only prints passes whatever the code does: a live 9B's check of a wrong
+                // fix printed the value it should have asserted, and exited 0.
+                if (script.find("assert") == std::string::npos && script.find("raise") == std::string::npos)
+                {
+                    outError = "Not run: the script asserts nothing, so it would pass whatever the code does. Assert what the "
+                               "documentation states.";
+                    return false;
+                }
+                given = {"-c", script};
+            }
+            else
+            {
+                if (!arguments.contains("arguments") || !arguments["arguments"].is_array() || arguments["arguments"].size() > 32)
+                    return false;
+                for (const auto& item : arguments["arguments"])
+                {
+                    if (!item.is_string() || item.get_ref<const std::string&>().size() > 1024 ||
+                        item.get_ref<const std::string&>().find('\0') != std::string::npos)
+                        return false;
+                    given.push_back(item);
+                }
+                // The program is named by the host. A 9B gave it again as the first argument ("python",
+                // "main.py", "config.json") in 2 of 30 replays, and Python then looked for a file of that
+                // name: the program's path, file name or name without its extension is never an argument
+                // to itself, so it is dropped, as the JSON step drops it.
+                if (!given.empty())
+                {
+                    const auto fold = [](std::string text)
+                    {
+                        std::replace(text.begin(), text.end(), '\\', '/');
+                        std::transform(text.begin(), text.end(), text.begin(),
+                            [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                        return text;
+                    };
+                    const auto first = fold(given.front().get<std::string>());
+                    if (first == fold(actions::PathToUtf8(program)) || first == fold(actions::PathToUtf8(program.filename())) ||
+                        first == fold(actions::PathToUtf8(program.stem())))
+                        given.erase(given.begin());
+                }
+            }
+            const auto& executable = outOwnCheck ? python : program;
+            if (executable.empty() || folder.empty())
+            {
+                outError = outOwnCheck ? "Not run: no approved program takes a script on its command line." : "Not run: no approved program is named.";
+                return false;
+            }
+            action = {{"action", "execute_process"}, {"executable", actions::PathToUtf8(executable)},
+                {"working_directory", actions::PathToUtf8(folder)}, {"arguments", std::move(given)}, {"timeout_ms", timeoutMs}};
+        }
+        else
+        {
+            if (!arguments.contains("path") || !arguments["path"].is_string())
+                return false;
+            const auto& path = arguments["path"].get_ref<const std::string&>();
+            if (path.empty() || path.size() > 2048 || path.find('\0') != std::string::npos || !actions::Utf8ToPath(path).is_absolute())
+            {
+                outError = "Not run: the path must be absolute, inside the approved folders.";
+                return false;
+            }
+            action = {{"action", call.name}, {"source", path}};
+        }
+        auto parsed = planning::StructuredActionParser::ParseObject(action);
+        if (!parsed.succeeded)
+            return false;
+        parsed.request.requestedBy = "agent-workflow";
+        outAction = std::move(parsed.request);
+        outError.clear();
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+std::string CheckingWorkerToolResult(const actions::ActionRequest& request, const actions::ActionOutcome& outcome)
+{
+    if (request.type != actions::ActionType::ExecuteProcess)
+        return WritingWorkerToolResult(request, outcome);
+    if (!outcome.result.process || !outcome.result.attempted)
+    {
+        const std::string said = BoundedText(outcome.Message(), 1024);
+        return "Not run: " + (said.empty() ? std::string("the host could not run this call.") : said);
+    }
+    const auto& process = *outcome.result.process;
+    std::string text = process.timedOut ? "timed out" : "exit " + std::to_string(process.exitCode);
+    const std::string printed = BoundedText(process.standardOutput, 2048) + "\n" + BoundedText(process.standardError, 2048);
+    const auto first = printed.find_first_not_of(" \t\r\n");
+    if (first != std::string::npos)
+        text += "\n" + printed.substr(first, printed.find_last_not_of(" \t\r\n") - first + 1);
+    return text;
+}
+
+bool CheckScriptItselfFailed(const process::ProcessResult& result)
+{
+    if (result.timedOut || result.exitCode == 0)
+        return false;
+    std::string error, innermost;
+    std::size_t start = 0;
+    const auto& text = result.standardError;
+    while (start < text.size())
+    {
+        auto end = text.find('\n', start);
+        if (end == std::string::npos)
+            end = text.size();
+        std::string line = text.substr(start, end - start);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (line.find("File \"") != std::string::npos)
+            innermost = line;
+        if (!line.empty())
+            error = line;
+        start = end + 1;
+    }
+    static constexpr std::array<std::string_view, 6> own = {"NameError", "SyntaxError", "IndentationError", "TabError", "ModuleNotFoundError",
+        "ImportError"};
+    return innermost.find("File \"<string>\"") != std::string::npos &&
+           std::any_of(own.begin(), own.end(), [&](const std::string_view name) { return error.starts_with(name); });
 }
 
 std::string WorkerToolReceipt(const actions::ActionRequest& request, const actions::ActionOutcome& outcome)

@@ -25,6 +25,12 @@ int main(int argc, char** argv)
     // it says "fail".
     if (mode == "-c")
     {
+        // A script with an error of its own, as Python reports one raised in the script's lines.
+        if (argc > 2 && std::string(argv[2]).find("broken") != std::string::npos)
+        {
+            std::cerr << "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nNameError: name 'broken' is not defined\n";
+            return 1;
+        }
         if (argc > 2 && std::string(argv[2]).find("fail") != std::string::npos)
         {
             std::cerr << "Traceback\nAssertionError: fixture check failed\n";

@@ -92,6 +92,67 @@ void RunAgentToolWorkerTests()
     Check(!agents::ParseWorkerToolResponse(process, true, false, action, error), "Process request bypassed captured worker grant.");
     Check(agents::ParseWorkerToolResponse(process, false, true, action, error) && action->type == actions::ActionType::ExecuteProcess,
         "Explicitly granted typed process request failed.");
+    // The checking worker's calls in the model's own format: the named program with the arguments
+    // that follow it, a script of its own with the approved Python, and nothing else.
+    {
+        const auto program = actions::Utf8ToPath("C:/approved/python.exe");
+        const auto folder = actions::Utf8ToPath("C:/workspace");
+        std::optional<actions::ActionRequest> made;
+        bool own = true;
+        std::string said;
+        const auto tools = agents::CheckingWorkerTools();
+        Check(tools.size() == 4 && tools.at(2).name == "run_program" && tools.at(3).name == "run_check",
+            "The checking worker's tools are not the four it is told of.");
+        // The program named again as the first argument is dropped: by its name without its extension here.
+        Check(agents::ParseCheckingWorkerCall({"c1", "run_program", R"({"arguments":["python","test_x.py"]})"}, program, program, folder, 3000, made,
+                  own, said) &&
+                  made && !own && made->type == actions::ActionType::ExecuteProcess && made->process.arguments == std::vector<std::string>{"test_x.py"} &&
+                  made->process.executable == program && made->process.workingDirectory == folder && made->process.timeoutMs == 3000,
+            "A named run was refused, kept the program's own name as an argument, or lost its program, folder or limit: " + said);
+        Check(agents::ParseCheckingWorkerCall({"c2", "run_check", R"({"script":"from x import f\nassert f(1) == 1"})"}, program, program, folder,
+                  3000, made, own, said) &&
+                  made && own && made->process.arguments == std::vector<std::string>{"-c", "from x import f\nassert f(1) == 1"},
+            "A check of the worker's own was refused or not run as a script: " + said);
+        Check(!agents::ParseCheckingWorkerCall({"c3", "run_check", R"({"script":""})"}, program, program, folder, 3000, made, own, said) && !made &&
+                  !agents::ParseCheckingWorkerCall({"c4", "run_check", R"({"script":"assert True"})"}, program, {}, folder, 3000, made, own, said) &&
+                  said == "Not run: no approved program takes a script on its command line." &&
+                  !agents::ParseCheckingWorkerCall({"c5", "write_text_file", R"({"path":"C:/workspace/a.py","content":"x"})"}, program, program,
+                      folder, 3000, made, own, said) &&
+                  said.find("there is no tool named") != std::string::npos &&
+                  !agents::ParseCheckingWorkerCall({"c6", "run_program", R"({"arguments":"test_x.py"})"}, program, program, folder, 3000, made, own,
+                      said),
+            "An empty script, a check with no Python to run it, a write, or a run without a list of arguments was accepted.");
+        // A check that asserts nothing would pass whatever the code does.
+        Check(!agents::ParseCheckingWorkerCall({"c7", "run_check", R"j({"script":"from x import f\nprint(f(1))"})j"}, program, program, folder, 3000,
+                  made, own, said) &&
+                  said.starts_with("Not run: the script asserts nothing"),
+            "A script of the worker's own that asserts nothing was run as a check.");
+        // A script that fails on an error in its own lines checked nothing; a failed assertion, and an
+        // error raised inside the code it imported, are findings.
+        process::ProcessResult script;
+        script.exitCode = 1;
+        script.standardError = "Traceback (most recent call last):\n  File \"<string>\", line 5, in <module>\nNameError: name 'Decimal' is not defined\n";
+        Check(agents::CheckScriptItselfFailed(script), "A NameError in the script's own lines was taken for a finding.");
+        script.standardError = "  File \"<string>\", line 3\n    assert f(\n            ^\nSyntaxError: '(' was never closed\n";
+        Check(agents::CheckScriptItselfFailed(script), "A script that does not parse was taken for a finding.");
+        script.standardError = "Traceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nAssertionError: 3 != 4\n";
+        Check(!agents::CheckScriptItselfFailed(script), "A failed assertion was dismissed as the script's own error.");
+        script.standardError = "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"C:\\workspace\\cache.py\", line 7, in "
+                               "get\nNameError: name 'itms' is not defined\n";
+        Check(!agents::CheckScriptItselfFailed(script), "An error raised inside the checked code was dismissed as the script's own.");
+        script.exitCode = 0;
+        script.standardError = "NameError: printed by a passing script";
+        Check(!agents::CheckScriptItselfFailed(script), "A script that passed was called broken.");
+        actions::ActionRequest ran;
+        ran.type = actions::ActionType::ExecuteProcess;
+        actions::ActionOutcome ended;
+        ended.result.attempted = true;
+        ended.result.process = process::ProcessResult{};
+        ended.result.process->exitCode = 1;
+        ended.result.process->standardError = "Traceback\nAssertionError: 3 != 4\n";
+        Check(agents::CheckingWorkerToolResult(ran, ended) == "exit 1\nTraceback\nAssertionError: 3 != 4",
+            "A run's result does not show the model how it ended and what it printed: " + agents::CheckingWorkerToolResult(ran, ended));
+    }
     actions::ActionRequest read;
     read.id = "host-action-id";
     read.type = actions::ActionType::ReadTextFile;

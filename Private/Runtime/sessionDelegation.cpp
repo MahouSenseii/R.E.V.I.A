@@ -529,19 +529,22 @@ std::string ReviaSession::AgentWorkflowStoppedReport() const
         wrote = wrote || report.artifact.content.find(" write_text_file succeeded ") != std::string::npos;
     if (wrote)
         text += "A host receipt shows a file was written during this run. That change is still on disk.\n";
-    // A run its checking worker stopped over a check that worker wrote itself. A live 9B called a
+    // A run its checking worker stopped over a further check of its own. A live 9B called a
     // right fix unverified because its own check expected one working day from Monday to Tuesday.
     for (const auto& report : reports)
     {
         try
         {
             const auto evidence = Json::parse(report.artifact.content).at("evidence").get<std::string>();
+            // The host's own words for such a run (agentStudioRuntime.cpp, RunLine).
+            const std::string marker = ": ran its own check: ";
             const auto failed = evidence.find(" execute_process failed ");
-            const auto own = failed == std::string::npos ? failed : evidence.find(": ran -c ", failed);
+            const auto own = failed == std::string::npos ? failed : evidence.find(marker, failed);
             if (own == std::string::npos || evidence.find('\n', failed) < own)
                 continue;
-            text += "The test named in the request passed, but a further check the checking worker wrote itself failed: " +
-                    evidence.substr(own + 2, evidence.find('\n', own) == std::string::npos ? std::string::npos : evidence.find('\n', own) - own - 2) +
+            const auto from = own + marker.size();
+            text += "The test named in the request passed, but a further check of the checking worker's own failed: " +
+                    evidence.substr(from, evidence.find('\n', from) == std::string::npos ? std::string::npos : evidence.find('\n', from) - from) +
                     "\nSuch a check can itself be wrong. Read it before trusting it or the change.\n";
             break;
         }

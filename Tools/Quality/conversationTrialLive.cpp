@@ -206,8 +206,9 @@ int main(int argc, char** argv)
         };
         if (!session->Start())
             throw std::runtime_error("ReviaSession did not start.");
-        // A trial of the checking worker's own check, which is off unless a script asks for it.
-        session->SetAgentOwnCheck(script.value("agentOwnCheck", false));
+        // A trial with or without the checking worker's own check, where a script says which.
+        if (script.contains("agentOwnCheck"))
+            session->SetAgentOwnCheck(script.at("agentOwnCheck").get<bool>());
         subscribe();
         transcript["hostsAfterStart"] = ReviaSessionTestAccess::DisabledHosts(*session);
         for (const auto& conversation : script.at("conversations"))
@@ -220,7 +221,8 @@ int main(int argc, char** argv)
                 session = std::make_unique<ReviaSession>();
                 if (!session->Start())
                     throw std::runtime_error("ReviaSession did not restart.");
-                session->SetAgentOwnCheck(script.value("agentOwnCheck", false));
+                if (script.contains("agentOwnCheck"))
+                    session->SetAgentOwnCheck(script.at("agentOwnCheck").get<bool>());
                 subscribe();
                 record["restarted"] = true;
             }

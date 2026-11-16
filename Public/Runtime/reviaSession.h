@@ -295,13 +295,15 @@ class ReviaSession
     // For a run that stopped before its work was verified (paused or out of budget): where it
     // stopped, and what each worker handed in, marked as unconfirmed. Empty for any other state.
     [[nodiscard]] std::string AgentWorkflowStoppedReport() const;
-    // For a reviewed run that was not accepted automatically because a check its checking worker
-    // wrote itself failed: that check, and the report awaiting the owner's decision. Empty otherwise.
+    // For a reviewed run that was not accepted automatically because a further check of its
+    // checking worker's own failed: that check, and the report awaiting the owner's decision. Empty
+    // otherwise.
     [[nodiscard]] std::string AgentWorkflowPendingReport() const;
-    // Whether the checking worker of a run that may change files also writes and runs a check of
-    // its own once the test the owner named has passed. Off unless set: measured on ten coding
-    // tasks, a 35B-A3B's check failed on 4 or 5 of 6 wrong fixes but also on 4 or 5 of 13 right
-    // ones, and a 9B's on none of 4 wrong fixes and 3 of 6 right ones. For this session only.
+    // Whether the checking worker of a run that may change files also runs a check of its own once
+    // the test the owner named has passed. On unless turned off. Live on ten coding tasks with it
+    // on, a 35B-A3B's two wrong fixes that passed their named test were both stopped and a 9B's 5
+    // of 7 (without it: none of 4, and 3 of 5); a right fix was stopped by the check in 1 of 7 runs
+    // that reached one for the 35B and none of 5 for the 9B. For this session only.
     void SetAgentOwnCheck(bool enabled);
     // The chat-delegated task the shared workflow belongs to, when it came from chat.
     [[nodiscard]] std::optional<DelegatedTaskView> DelegatedTask() const;
@@ -1142,7 +1144,7 @@ class ReviaSession
     std::uint64_t lastSpeechObservationId = 0;
     bool speechIssuesLoaded = false;
     std::atomic<bool> speechHistoryWarningReported{false};
-    std::atomic<bool> agentOwnCheck{false};
+    std::atomic<bool> agentOwnCheck{true};
     // Arbitrates audio ownership; synthesis and song playback keep their own owners.
     speech::SpeechCoordinator speechCoordinator;
     // Which coordinated intent currently owns the speech backend, so the floor is
