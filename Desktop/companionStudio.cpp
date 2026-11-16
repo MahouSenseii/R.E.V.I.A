@@ -137,6 +137,11 @@ void ReviaWindow::BuildCompanionControls()
     controls.decide = [this](const revia::agents::ParentDecision decision, std::string& error)
     { return Session().DecideAgentWorkflow(decision, error); };
     controls.deliverable = [this]() { return Session().AgentWorkflowResult(); };
+    controls.stopped = [this]()
+    {
+        const auto stopped = Session().AgentWorkflowStoppedReport();
+        return stopped.empty() ? Session().AgentWorkflowPendingReport() : stopped;
+    };
     agentStudioPanel = new AgentStudioPanel(std::move(controls), scroll);
     scroll->setWidget(agentStudioPanel);
     BuildAdditionalStudioPanels();

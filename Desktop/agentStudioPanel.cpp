@@ -231,10 +231,23 @@ void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incomi
     snapshot = incoming;
     observationAge.start();
     observedUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-    deliverable->setVisible(snapshot.state == WorkflowState::Accepted);
+    // A run that stopped unverified says where it stopped and what its workers handed in, and one
+    // held for the owner's decision shows the report to decide on. The box used to be hidden in
+    // both, and the owner was left with one line a worker.
+    const bool stoppedUnverified = snapshot.state == WorkflowState::Paused || snapshot.state == WorkflowState::Exhausted ||
+                                   snapshot.state == WorkflowState::AwaitingAcceptance;
+    const QString stoppedReport = stoppedUnverified && controls.stopped ? Text(controls.stopped()) : QString();
+    deliverable->setVisible(snapshot.state == WorkflowState::Accepted || !stoppedReport.isEmpty());
     if (snapshot.state == WorkflowState::Accepted && controls.deliverable)
     {
         deliverable->setPlainText(Text(controls.deliverable()));
+    }
+    else if (!stoppedReport.isEmpty())
+    {
+        // Set once: every snapshot arrives here, and setting the same text again would move the
+        // owner back to the top while they read.
+        if (deliverable->toPlainText() != stoppedReport)
+            deliverable->setPlainText(stoppedReport);
     }
     else
         deliverable->clear();
