@@ -310,11 +310,22 @@ int main(int argc, char** argv)
                     const std::string marker = "a further check of the checking worker's own failed: ";
                     const std::string report = session->AgentWorkflowPendingReport() + "\n" + session->AgentWorkflowStoppedReport();
                     const auto failedAt = report.find(marker);
-                    if (studio.contains("sendBack") && !running() && failedAt != std::string::npos)
+                    // Or, where the script says so, a run that stopped unverified after the named step had finished.
+                    const auto ended = session->AgentWorkflowSnapshot();
+                    const std::string backNode = studio.contains("sendBack") ? studio.at("sendBack").value("node", std::string("analysis")) : std::string();
+                    const bool stoppedAfterNode =
+                        ended.state == revia::agents::WorkflowState::Paused &&
+                        std::any_of(ended.nodes.begin(), ended.nodes.end(),
+                            [&](const auto& node) { return node.id == backNode && node.state == revia::agents::WorkflowState::Succeeded; });
+                    if (studio.contains("sendBack") && !running() &&
+                        (failedAt != std::string::npos || (studio.at("sendBack").value("whenStopped", false) && stoppedAfterNode)))
                     {
                         const auto& back = studio.at("sendBack");
-                        const auto from = failedAt + marker.size();
-                        const std::string failed = report.substr(from, report.find('\n', from) == std::string::npos ? std::string::npos : report.find('\n', from) - from);
+                        const auto from = failedAt == std::string::npos ? 0 : failedAt + marker.size();
+                        const std::string failed =
+                            failedAt == std::string::npos
+                                ? back.value("withoutCheck", std::string("the checking step could not establish that the change meets the documented rules"))
+                                : report.substr(from, report.find('\n', from) == std::string::npos ? std::string::npos : report.find('\n', from) - from);
                         std::string revised = back.value("input", std::string("{objective}\n\n{failed}"));
                         for (const auto& [key, value] : {std::pair<std::string, std::string>{"{objective}", studio.at("objective").get<std::string>()},
                                  std::pair<std::string, std::string>{"{failed}", failed}})

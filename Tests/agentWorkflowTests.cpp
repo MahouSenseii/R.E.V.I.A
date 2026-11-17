@@ -546,6 +546,39 @@ void TestAStoppedRunCanBeSentBack()
         "The sent-back run did not redo the finished step and the step that had failed.");
 }
 
+// Sending a run back adds the budget of one more pass, once: a run that spent its budget in the first pass
+// can redo the step, a second send-back adds nothing, and the grant survives a saved checkpoint.
+void TestSendingBackBuysTheRedoABudgetOnce()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    auto spec = Spec();
+    // Exactly what one pass needs: two workers and the reviewer.
+    spec.budget.maximumRequests = 3;
+    const auto provider = [](const NodeRequest& request, std::stop_token) { return Verified(request); };
+    Check(workflow.Start(spec, Stamp(), provider, error), "Budget fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::AwaitingAcceptance && workflow.Snapshot().requests == 3,
+        "The budget fixture's first pass did not use its three requests.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Retry("first", "changed input", "sent back", error),
+        "A run that spent its budget in the first pass could not redo a step after it was sent back.");
+    Check(workflow.Snapshot().budget.maximumRequests == 6 && workflow.Snapshot().budget.maximumToolOutputBytes == 524288,
+        "The snapshot does not show the budget the send-back added.");
+    const auto path = Checkpoint("rework-budget");
+    Check(workflow.Save(path, error), "The sent-back run could not be saved.");
+    AgentWorkflow restored;
+    Check(restored.Load(path, error) && restored.Resume(Stamp(), provider, error), "The sent-back run did not resume from its checkpoint.");
+    restored.Join();
+    Check(restored.Snapshot().state == WorkflowState::AwaitingAcceptance && restored.Snapshot().requests == 5 &&
+              Node(restored.Snapshot(), "first").attempts.size() == 2,
+        "The redo did not run within the added budget.");
+    Check(restored.Decide(ParentDecision::Rework, error) && restored.Save(path, error), "A second send-back was refused.");
+    const auto saved = CheckpointBytes(path);
+    Check(saved.find("\"reportedTokens\":40000") != std::string::npos && saved.find("\"reportedTokens\":80000") == std::string::npos &&
+              saved.find("\"reworkBudget\":true") != std::string::npos,
+        "The redo's budget was not added exactly once.");
+}
+
 void TestCancelledLateCompletionIsNotAdmitted()
 {
     std::mutex mutex;
@@ -1040,6 +1073,7 @@ void RunAgentWorkflowTests()
     TestExpectedFailureAndChangedEvidenceRecovery();
     TestReworkReopensAFinishedStep();
     TestAStoppedRunCanBeSentBack();
+    TestSendingBackBuysTheRedoABudgetOnce();
     TestCancelledLateCompletionIsNotAdmitted();
     TestInterruptedCheckpointAndRestartBudgets();
     TestDurableEvidenceAndInvalidCheckpointRejection();

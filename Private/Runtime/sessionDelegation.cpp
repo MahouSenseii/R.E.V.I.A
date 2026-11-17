@@ -629,6 +629,9 @@ bool ReviaSession::AdvanceDelegatedWorkflow(const agents::WorkflowSnapshot& snap
             return false;
         auto& record = *delegation;
         auto& view = record.view;
+        // The run's budget as it stands: a send-back in Agent Studio adds a redo's budget, and judging
+        // "spent" against the amounts this task started with would report a verified redo as out of budget.
+        view.budget = snapshot.budget;
         // Over, whatever the workflow does next. Only an explicit restart from Agent Studio
         // reopens it (ReopenDelegationFor), and it never takes the automatic acceptance.
         if (view.status != DelegatedTaskStatus::Working && view.status != DelegatedTaskStatus::Reviewing &&

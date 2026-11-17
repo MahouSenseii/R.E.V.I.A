@@ -186,6 +186,8 @@ struct WorkflowSnapshot
     std::uint32_t providerCalls = 0;
     std::uint32_t toolCalls = 0;
     std::uint64_t toolOutputBytes = 0;
+    // What the run may spend in all, as it stands now: a send-back adds a redo's budget once.
+    WorkflowBudget budget;
     std::vector<WorkflowNodeSnapshot> nodes;
 };
 
