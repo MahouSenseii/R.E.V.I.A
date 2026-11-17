@@ -517,6 +517,9 @@ void TestAStoppedRunCanBeSentBack()
     AgentWorkflow workflow;
     std::string error;
     std::atomic<int> firstCalls = 0;
+    std::mutex seenMutex;
+    std::vector<WorkflowArtifact> reviewerNow;
+    std::vector<WorkflowArtifact> reviewerEarlier;
     const auto provider = [&](const NodeRequest& request, std::stop_token)
     {
         auto result = Verified(request);
@@ -525,6 +528,12 @@ void TestAStoppedRunCanBeSentBack()
         // The second worker's first attempt does not verify.
         if (request.node.id == "second" && request.attempt == 1)
             result.verified = false;
+        if (request.node.id == "reviewer")
+        {
+            std::lock_guard lock(seenMutex);
+            reviewerNow = request.prerequisites;
+            reviewerEarlier = request.earlierPrerequisites;
+        }
         return result;
     };
     Check(workflow.Start(Spec(), Stamp(), provider, error), "Stopped-run fixture did not start.");
@@ -544,6 +553,12 @@ void TestAStoppedRunCanBeSentBack()
     Check(firstCalls == 2 && Node(redone, "first").attempts.size() == 2 && Node(redone, "second").attempts.size() == 2 &&
               Node(redone, "second").attempts.back().verified && redone.state == WorkflowState::AwaitingAcceptance,
         "The sent-back run did not redo the finished step and the step that had failed.");
+    // A step after a redone one is also given what the earlier attempt handed in: a redo that changes
+    // nothing leaves the first attempt's change in place. Only a verified attempt has anything to give.
+    std::lock_guard lock(seenMutex);
+    Check(reviewerNow.size() == 2 && reviewerNow.at(0).id == "first-artifact" && reviewerNow.at(0).version == 2 &&
+              reviewerEarlier.size() == 1 && reviewerEarlier.at(0).id == "first-artifact" && reviewerEarlier.at(0).version == 1,
+        "A step after a redone one was not given what the earlier attempt handed in.");
 }
 
 // Sending a run back adds the budget of one more pass, once: a run that spent its budget in the first pass

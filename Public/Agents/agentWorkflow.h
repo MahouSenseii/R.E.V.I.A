@@ -122,6 +122,10 @@ struct NodeRequest
     std::uint32_t attempt = 0;
     std::vector<WorkflowArtifact> prerequisites;
     std::vector<ArtifactReference> prerequisiteReferences;
+    // What earlier attempts of the steps this one depends on handed in, oldest first, without the
+    // ones in `prerequisites`. A redo that changes nothing leaves the earlier attempt's change where
+    // it was, so a step that checks the work can still see what was changed.
+    std::vector<WorkflowArtifact> earlierPrerequisites;
 };
 
 struct NodeResult

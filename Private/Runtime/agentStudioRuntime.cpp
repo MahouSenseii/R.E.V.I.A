@@ -818,7 +818,16 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                                     : std::filesystem::path{};
             const bool changeRun =
                 scope.settings.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite && AsksForAChange(request.node.inputText);
-            const auto written = allowProcess ? WrittenFiles(request.prerequisites) : std::vector<std::string>{};
+            // What was written counts from every attempt of the steps before this one: a redo that
+            // changes nothing leaves the earlier attempt's change in the files. Live on a 9B, a run that
+            // stopped over a failed check of this worker's own was sent back, the fixing worker wrote
+            // the same content again (not a write), this worker then ran the named test alone, which
+            // had passed all along, and the wrong fix was accepted.
+            auto written = allowProcess ? WrittenFiles(request.prerequisites) : std::vector<std::string>{};
+            if (allowProcess)
+                for (auto& file : WrittenFiles(request.earlierPrerequisites))
+                    if (std::find(written.begin(), written.end(), file) == written.end())
+                        written.push_back(std::move(file));
             const bool ownCheck = agentOwnCheck.load() && ownerNamedAProgram && changeRun && !python.empty() && !written.empty() &&
                                   !scope.settings.approvedRoots.empty();
             // Set while the host runs a check of the worker's own, so that its receipt says so: a

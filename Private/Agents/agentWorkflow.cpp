@@ -701,6 +701,10 @@ struct AgentWorkflow::Impl
                             request.prerequisites.push_back(*source.artifact);
                             attempt.view.prerequisites.push_back(
                                 {dependency, source.artifact->id, source.artifact->version, source.artifact->hash});
+                            for (const auto& earlier : source.history)
+                                if (earlier.artifact && (earlier.artifact->id != source.artifact->id ||
+                                                            earlier.artifact->version != source.artifact->version))
+                                    request.earlierPrerequisites.push_back(*earlier.artifact);
                         }
                         request.prerequisiteReferences = attempt.view.prerequisites;
                         node.history.push_back(std::move(attempt));

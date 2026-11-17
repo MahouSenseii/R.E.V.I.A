@@ -1213,6 +1213,44 @@ void TestToolStudioCheckerRunsACheckOfItsOwn(const CheckerCase scenario)
                   sentBack.starts_with("You sent this run back for rework, so nothing was accepted.") &&
                   sentBack.find("a further check of the checking worker's own failed: " + check) != std::string::npos,
             "A stopped run could not be sent back, or its report lost the failed check: " + sentBack);
+        // The redo writes the file back as it is, which is not a write. The first attempt's change is
+        // still in the file, so the checking worker is held to a check of its own again and the run is
+        // not accepted on the named test alone. Live on a 9B, the wrong fix of such a run was accepted.
+        std::size_t stepsBefore = 0;
+        {
+            std::lock_guard lock(seenMutex);
+            stepsBefore = steps.size();
+        }
+        Check(fixture.session.RetryAgentNode(
+                  "analysis", "Fix the marker file in the approved folder once more, then run python.exe with cwd to confirm it.", {}, error),
+            error);
+        ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+        const auto redone = fixture.session.AgentWorkflowSnapshot();
+        const auto fixing = std::find_if(redone.nodes.begin(), redone.nodes.end(), [](const auto& node) { return node.id == "analysis"; });
+        const auto rechecked =
+            std::find_if(redone.nodes.begin(), redone.nodes.end(), [](const auto& node) { return node.id == "verification"; });
+        std::string markerNow;
+        {
+            std::ifstream stream(fixture.marker, std::ios::binary);
+            markerNow.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+        }
+        Check(fixing != redone.nodes.end() && fixing->attempts.size() == 2 && fixing->attempts.back().verified &&
+                  markerNow == "FIXED_MARKER_5F9A",
+            "The redo fixture did not hand in a second attempt that left the file as it was.");
+        {
+            std::lock_guard lock(seenMutex);
+            std::string seen;
+            for (std::size_t index = stepsBefore; index < steps.size(); ++index)
+                seen += "\n[" + steps[index].text.substr(0, 160) + "]";
+            Check(steps.size() == stepsBefore + 2 &&
+                      steps.back().text.find("Then call run_check with a short Python script") != std::string::npos,
+                "After a redo that changed nothing, the checking worker was not held to a check of its own:" + seen);
+        }
+        const auto stoppedAgain = fixture.session.AgentWorkflowStoppedReport();
+        Check(redone.state == WorkflowState::Paused && rechecked != redone.nodes.end() && rechecked->attempts.size() == 2 &&
+                  !rechecked->attempts.back().verified && fixture.session.AgentWorkflowResult().empty() &&
+                  stoppedAgain.find("a further check of the checking worker's own failed: " + check) != std::string::npos,
+            "A sent-back run whose redo changed nothing was accepted, or did not say which check failed: " + stoppedAgain);
         return;
     }
     {
