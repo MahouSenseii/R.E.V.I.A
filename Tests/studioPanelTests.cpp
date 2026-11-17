@@ -1,3 +1,4 @@
+#include "../Desktop/agentStudioPanel.h"
 #include "../Desktop/learningStudioPanel.h"
 #include "../Desktop/developmentStudioPanel.h"
 #include "../Desktop/audienceStudioPanel.h"
@@ -180,6 +181,53 @@ void TestRecognitionRequiresExplicitConsentAndClearsPrivateInputs()
         "Companion reset retained recognition enrollment or private audience choice.");
 }
 
+// Work that awaits the owner's decision can be sent back, and after that any step that ran is offered
+// for a redo, not only one that failed.
+void TestAgentWorkCanBeSentBack()
+{
+    using namespace revia::agents;
+    std::vector<ParentDecision> decided;
+    AgentStudioPanel::Controls controls;
+    controls.decide = [&](const ParentDecision decision, std::string&)
+    {
+        decided.push_back(decision);
+        return true;
+    };
+    AgentStudioPanel panel(controls);
+    auto* sendBack = panel.findChild<QPushButton*>("agentSendBack");
+    auto* retryNode = panel.findChild<QComboBox*>("agentRetryNode");
+    Check(sendBack && retryNode && !sendBack->isEnabled(), "Send back is missing, or is offered with no work to decide on.");
+    WorkflowSnapshot held;
+    held.id = "controlled-workflow";
+    held.state = WorkflowState::AwaitingAcceptance;
+    WorkflowNodeSnapshot parent, worker;
+    parent.id = "parent";
+    parent.role = WorkflowRole::Parent;
+    parent.workingOn = "Parent acceptance";
+    worker.id = "analysis";
+    worker.parentId = "parent";
+    worker.role = WorkflowRole::Worker;
+    worker.workingOn = "Fixing worker";
+    worker.state = WorkflowState::Succeeded;
+    worker.attempts.emplace_back();
+    held.nodes = {parent, worker};
+    panel.SetSnapshot(held);
+    Check(sendBack->isEnabled() && retryNode->count() == 0, "Held work cannot be sent back, or a finished step is offered for a redo before it is.");
+    sendBack->click();
+    Check(decided == std::vector<ParentDecision>{ParentDecision::Rework} &&
+              panel.findChild<QLabel*>("agentFeedback")->text().startsWith("Sent back."),
+        "Send back did not ask for rework, or did not say what to do next.");
+    held.state = WorkflowState::Paused;
+    held.parentDecision = ParentDecision::Rework;
+    panel.SetSnapshot(held);
+    Check(!sendBack->isEnabled() && retryNode->count() == 1 && retryNode->itemData(0).toString() == "analysis",
+        "After work was sent back, its finished step is not offered for a redo.");
+    // A run that stopped unverified can be sent back as well.
+    held.parentDecision = ParentDecision::Pending;
+    panel.SetSnapshot(held);
+    Check(sendBack->isEnabled() && retryNode->count() == 0, "A stopped run cannot be sent back.");
+}
+
 void TestControlledSnapshotsFitResponsiveLayouts()
 {
     auto* learning = new LearningStudioPanel({});
@@ -229,6 +277,7 @@ void RunStudioPanelTests()
     TestExactCandidateDecisionAndCompanionReset();
     TestDevelopmentStagesAndReset();
     TestRecognitionRequiresExplicitConsentAndClearsPrivateInputs();
+    TestAgentWorkCanBeSentBack();
     TestControlledSnapshotsFitResponsiveLayouts();
     std::cout << "Studio panel checks passed: exact parent decisions, distinct stages and companion reset.\n";
 }

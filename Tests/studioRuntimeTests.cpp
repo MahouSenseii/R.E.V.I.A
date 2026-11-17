@@ -1205,6 +1205,52 @@ void TestToolStudioCheckerRunsACheckOfItsOwn(const CheckerCase scenario)
                                "\nSuch a check can itself be wrong. Read it before trusting it or the change.") != std::string::npos &&
                   stopped.find("ran cwd -> exit 0") != std::string::npos,
             "A run its checking worker stopped over its own check did not say that the named test passed and which check failed: " + stopped);
+        // Such a run can be sent back, so that the step that wrote can be redone; the report keeps the failed check.
+        Check(fixture.session.DecideAgentWorkflow(ParentDecision::Rework, error), error);
+        const auto sentBack = fixture.session.AgentWorkflowStoppedReport();
+        Check(fixture.session.AgentWorkflowSnapshot().state == WorkflowState::Paused &&
+                  fixture.session.AgentWorkflowSnapshot().parentDecision == ParentDecision::Rework &&
+                  sentBack.starts_with("You sent this run back for rework, so nothing was accepted.") &&
+                  sentBack.find("a further check of the checking worker's own failed: " + check) != std::string::npos,
+            "A stopped run could not be sent back, or its report lost the failed check: " + sentBack);
+        // The redo writes the file back as it is, which is not a write. The first attempt's change is
+        // still in the file, so the checking worker is held to a check of its own again and the run is
+        // not accepted on the named test alone. Live on a 9B, the wrong fix of such a run was accepted.
+        std::size_t stepsBefore = 0;
+        {
+            std::lock_guard lock(seenMutex);
+            stepsBefore = steps.size();
+        }
+        Check(fixture.session.RetryAgentNode(
+                  "analysis", "Fix the marker file in the approved folder once more, then run python.exe with cwd to confirm it.", {}, error),
+            error);
+        ReviaSessionTestAccess::JoinWorkflow(fixture.session);
+        const auto redone = fixture.session.AgentWorkflowSnapshot();
+        const auto fixing = std::find_if(redone.nodes.begin(), redone.nodes.end(), [](const auto& node) { return node.id == "analysis"; });
+        const auto rechecked =
+            std::find_if(redone.nodes.begin(), redone.nodes.end(), [](const auto& node) { return node.id == "verification"; });
+        std::string markerNow;
+        {
+            std::ifstream stream(fixture.marker, std::ios::binary);
+            markerNow.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+        }
+        Check(fixing != redone.nodes.end() && fixing->attempts.size() == 2 && fixing->attempts.back().verified &&
+                  markerNow == "FIXED_MARKER_5F9A",
+            "The redo fixture did not hand in a second attempt that left the file as it was.");
+        {
+            std::lock_guard lock(seenMutex);
+            std::string seen;
+            for (std::size_t index = stepsBefore; index < steps.size(); ++index)
+                seen += "\n[" + steps[index].text.substr(0, 160) + "]";
+            Check(steps.size() == stepsBefore + 2 &&
+                      steps.back().text.find("Then call run_check with a short Python script") != std::string::npos,
+                "After a redo that changed nothing, the checking worker was not held to a check of its own:" + seen);
+        }
+        const auto stoppedAgain = fixture.session.AgentWorkflowStoppedReport();
+        Check(redone.state == WorkflowState::Paused && rechecked != redone.nodes.end() && rechecked->attempts.size() == 2 &&
+                  !rechecked->attempts.back().verified && fixture.session.AgentWorkflowResult().empty() &&
+                  stoppedAgain.find("a further check of the checking worker's own failed: " + check) != std::string::npos,
+            "A sent-back run whose redo changed nothing was accepted, or did not say which check failed: " + stoppedAgain);
         return;
     }
     {
@@ -1249,9 +1295,25 @@ void TestToolStudioCheckerRunsACheckOfItsOwn(const CheckerCase scenario)
         "Work with a failed check against it was accepted automatically.");
     Check(pending.starts_with("Not accepted automatically. The test named in the request passed, but a further check "
                               "of the checking worker's own failed: " + check) &&
-              pending.find("Such a check can itself be wrong. Read it, then accept the work or not.") != std::string::npos &&
+              pending.find("Such a check can itself be wrong. Read it, then accept the work, send it back for rework, or reject it.") !=
+                  std::string::npos &&
               pending.find("ran cwd -> exit 0") != std::string::npos,
         "The owner was not shown the failed check with the report to decide on: " + pending);
+    if (scenario == CheckerCase::OwnRunOfTheProgramFails)
+    {
+        // Or the owner sends it back: nothing is accepted, the report says what to do next, and the
+        // step that wrote can be redone only with changed input.
+        Check(fixture.session.DecideAgentWorkflow(ParentDecision::Rework, error), error);
+        const auto sentBack = fixture.session.AgentWorkflowSnapshot();
+        const auto report = fixture.session.AgentWorkflowStoppedReport();
+        Check(sentBack.state == WorkflowState::Paused && sentBack.parentDecision == ParentDecision::Rework &&
+                  fixture.session.AgentWorkflowResult().empty() && fixture.session.AgentWorkflowPendingReport().empty() &&
+                  report.starts_with("You sent this run back for rework, so nothing was accepted."),
+            "Sending held work back accepted it, or the owner was not told what to do next: " + report);
+        Check(!fixture.session.RetryAgentNode("analysis", {}, {}, error) && !error.empty(),
+            "A sent-back step was redone without changed input.");
+        return;
+    }
     // The decision stays the owner's: accepting is theirs to do, and the result keeps the failed check.
     Check(fixture.session.DecideAgentWorkflow(ParentDecision::Accept, error), error);
     const auto result = fixture.session.AgentWorkflowResult();

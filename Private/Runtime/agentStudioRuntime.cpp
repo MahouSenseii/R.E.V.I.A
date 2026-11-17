@@ -818,7 +818,16 @@ agents::AgentWorkflow::Provider ReviaSession::AgentProvider(const AgentProviderM
                                     : std::filesystem::path{};
             const bool changeRun =
                 scope.settings.autoApproveRiskThrough >= actions::RiskLevel::ReversibleWrite && AsksForAChange(request.node.inputText);
-            const auto written = allowProcess ? WrittenFiles(request.prerequisites) : std::vector<std::string>{};
+            // What was written counts from every attempt of the steps before this one: a redo that
+            // changes nothing leaves the earlier attempt's change in the files. Live on a 9B, a run that
+            // stopped over a failed check of this worker's own was sent back, the fixing worker wrote
+            // the same content again (not a write), this worker then ran the named test alone, which
+            // had passed all along, and the wrong fix was accepted.
+            auto written = allowProcess ? WrittenFiles(request.prerequisites) : std::vector<std::string>{};
+            if (allowProcess)
+                for (auto& file : WrittenFiles(request.earlierPrerequisites))
+                    if (std::find(written.begin(), written.end(), file) == written.end())
+                        written.push_back(std::move(file));
             const bool ownCheck = agentOwnCheck.load() && ownerNamedAProgram && changeRun && !python.empty() && !written.empty() &&
                                   !scope.settings.approvedRoots.empty();
             // Set while the host runs a check of the worker's own, so that its receipt says so: a
@@ -1699,6 +1708,20 @@ bool ReviaSession::DecideAgentWorkflow(const agents::ParentDecision decision, st
             return false;
         }
     }
+    // A task handed off from chat is Revia's to report there first: her report worker owns it while
+    // it is active, and sending it back under her would leave that report describing work that is
+    // no longer the run's.
+    if (decision == agents::ParentDecision::Rework || decision == agents::ParentDecision::NeedEvidence)
+    {
+        const auto task = DelegatedTask();
+        if (task && task->taskId == agentWorkflow.Snapshot().id &&
+            (task->status == DelegatedTaskStatus::Working || task->status == DelegatedTaskStatus::Reviewing ||
+                task->status == DelegatedTaskStatus::Reporting))
+        {
+            outError = "This task was handed off from chat and Revia has not reported it there yet. Wait for her report, or reject it.";
+            return false;
+        }
+    }
     return agentWorkflow.Decide(decision, outError);
 }
 
@@ -1800,6 +1823,7 @@ std::string ReviaSession::AgentWorkflowPendingReport() const
     if (failed.empty())
         return {};
     return "Not accepted automatically. The test named in the request passed, but a further check of the checking worker's own "
-           "failed: " + failed + "\nSuch a check can itself be wrong. Read it, then accept the work or not.\n\n" + DeliverableText(*candidate);
+           "failed: " + failed + "\nSuch a check can itself be wrong. Read it, then accept the work, send it back for rework, or reject it.\n\n" +
+           DeliverableText(*candidate);
 }
 }

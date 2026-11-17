@@ -122,6 +122,10 @@ struct NodeRequest
     std::uint32_t attempt = 0;
     std::vector<WorkflowArtifact> prerequisites;
     std::vector<ArtifactReference> prerequisiteReferences;
+    // What earlier attempts of the steps this one depends on handed in, oldest first, without the
+    // ones in `prerequisites`. A redo that changes nothing leaves the earlier attempt's change where
+    // it was, so a step that checks the work can still see what was changed.
+    std::vector<WorkflowArtifact> earlierPrerequisites;
 };
 
 struct NodeResult
@@ -186,6 +190,8 @@ struct WorkflowSnapshot
     std::uint32_t providerCalls = 0;
     std::uint32_t toolCalls = 0;
     std::uint64_t toolOutputBytes = 0;
+    // What the run may spend in all, as it stands now: a send-back adds a redo's budget once.
+    WorkflowBudget budget;
     std::vector<WorkflowNodeSnapshot> nodes;
 };
 

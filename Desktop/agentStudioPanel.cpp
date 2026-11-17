@@ -114,8 +114,15 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
     accept = new QPushButton("Accept reviewed work", this);
     accept->setObjectName("agentAccept");
     auto* reject = new QPushButton("Reject", this);
+    // The workflow has always been able to take work back (ParentDecision::Rework, after which any
+    // step that ran may be redone with changed input), but no screen could ask for it: a run held
+    // for the owner's decision could only be accepted or rejected.
+    sendBack = new QPushButton("Send back for rework", this);
+    sendBack->setObjectName("agentSendBack");
+    sendBack->setToolTip("Keeps the run and what it has spent. Then choose the step to redo under Recovery and give it changed input.");
     acceptance->addWidget(accept, 0, 0);
     acceptance->addWidget(reject, 0, 1);
+    acceptance->addWidget(sendBack, 0, 2);
     layout->addLayout(acceptance);
 
     auto* recovery = new QGroupBox("Recovery with changed evidence", this);
@@ -173,6 +180,14 @@ AgentStudioPanel::AgentStudioPanel(Controls inputControls, QWidget* parent) : QW
         {
             std::string error;
             ShowResult(controls.decide(revia::agents::ParentDecision::Reject, error), error);
+        });
+    connect(sendBack, &QPushButton::clicked, this,
+        [this]()
+        {
+            std::string error;
+            const bool sent = controls.decide(revia::agents::ParentDecision::Rework, error);
+            ShowResult(sent, sent ? "Sent back. Choose the step to redo under Recovery, give it changed input or evidence, and retry."
+                                  : error);
         });
     connect(retry, &QPushButton::clicked, this,
         [this]()
@@ -255,6 +270,11 @@ void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incomi
     start->setEnabled(!running);
     cancel->setEnabled(running);
     accept->setEnabled(snapshot.state == WorkflowState::AwaitingAcceptance);
+    // Once the owner has sent the run back, any step that ran can be redone, not only one that failed.
+    const bool sentBack = snapshot.parentDecision == ParentDecision::Rework || snapshot.parentDecision == ParentDecision::NeedEvidence;
+    // Also from a run that stopped unverified: there the step to redo is often one that finished (the
+    // fix), while only the step that failed (its check) was offered.
+    sendBack->setEnabled(snapshot.state == WorkflowState::AwaitingAcceptance || (snapshot.state == WorkflowState::Paused && !sentBack));
     if (snapshot.id.empty())
     {
         summary->setText("No workflow started. Provider telemetry is unavailable.");
@@ -301,7 +321,7 @@ void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incomi
         item->setData(0, Qt::UserRole, Text(node.id));
         if (selectedId == Text(node.id))
             hierarchy->setCurrentItem(item);
-        if (node.state == WorkflowState::Failed || node.state == WorkflowState::Interrupted)
+        if (node.state == WorkflowState::Failed || node.state == WorkflowState::Interrupted || (sentBack && !node.attempts.empty()))
         {
             retryNode->addItem(Text(node.workingOn), Text(node.id));
         }

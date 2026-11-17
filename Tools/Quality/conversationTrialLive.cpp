@@ -305,6 +305,62 @@ int main(int argc, char** argv)
                     outcome["timedOut"] = running();
                     if (running())
                         session->CancelAgentWorkflow();
+                    // Send back, as the owner does in the panel: only when a check of the checking worker's own
+                    // failed, with the request again and that check as the changed input of the named step.
+                    const std::string marker = "a further check of the checking worker's own failed: ";
+                    const std::string report = session->AgentWorkflowPendingReport() + "\n" + session->AgentWorkflowStoppedReport();
+                    const auto failedAt = report.find(marker);
+                    // Or, where the script says so, a run that stopped unverified after the named step had finished.
+                    const auto ended = session->AgentWorkflowSnapshot();
+                    const std::string backNode = studio.contains("sendBack") ? studio.at("sendBack").value("node", std::string("analysis")) : std::string();
+                    const bool stoppedAfterNode =
+                        ended.state == revia::agents::WorkflowState::Paused &&
+                        std::any_of(ended.nodes.begin(), ended.nodes.end(),
+                            [&](const auto& node) { return node.id == backNode && node.state == revia::agents::WorkflowState::Succeeded; });
+                    if (studio.contains("sendBack") && !running() &&
+                        (failedAt != std::string::npos || (studio.at("sendBack").value("whenStopped", false) && stoppedAfterNode)))
+                    {
+                        const auto& back = studio.at("sendBack");
+                        const auto from = failedAt == std::string::npos ? 0 : failedAt + marker.size();
+                        const std::string failed =
+                            failedAt == std::string::npos
+                                ? back.value("withoutCheck", std::string("the checking step could not establish that the change meets the documented rules"))
+                                : report.substr(from, report.find('\n', from) == std::string::npos ? std::string::npos : report.find('\n', from) - from);
+                        std::string revised = back.value("input", std::string("{objective}\n\n{failed}"));
+                        for (const auto& [key, value] : {std::pair<std::string, std::string>{"{objective}", studio.at("objective").get<std::string>()},
+                                 std::pair<std::string, std::string>{"{failed}", failed}})
+                            for (auto at = revised.find(key); at != std::string::npos; at = revised.find(key, at + value.size()))
+                                revised.replace(at, key.size(), value);
+                        json sent = {{"before", Workflow(*session)}, {"failedCheck", failed}, {"input", revised}};
+                        // The files as the first attempt left them, for whoever judges it afterwards.
+                        if (back.contains("snapshot") && script.contains("approvedRoots") && !script.at("approvedRoots").empty())
+                        {
+                            std::error_code copyError;
+                            std::filesystem::copy(script.at("approvedRoots").at(0).get<std::string>(), back.at("snapshot").get<std::string>(),
+                                std::filesystem::copy_options::recursive, copyError);
+                            sent["snapshot"] = copyError ? "not copied: " + copyError.message() : back.at("snapshot").get<std::string>();
+                        }
+                        const auto sentAt = std::chrono::steady_clock::now();
+                        std::string backError;
+                        sent["decided"] = session->DecideAgentWorkflow(revia::agents::ParentDecision::Rework, backError);
+                        sent["decideError"] = backError;
+                        sent["reportAfterDecision"] = session->AgentWorkflowStoppedReport();
+                        sent["retried"] = sent["decided"].get<bool>() &&
+                                          session->RetryAgentNode(back.value("node", std::string("analysis")), revised,
+                                              back.value("evidence", std::string("The owner sent the run back over a failed check.")), backError);
+                        sent["retryError"] = backError;
+                        const auto backDeadline = sentAt + std::chrono::seconds(back.value("waitSeconds", 600));
+                        while (sent["retried"].get<bool>() && running() && std::chrono::steady_clock::now() < backDeadline)
+                        {
+                            session->PollBackgroundEvents();
+                            std::this_thread::sleep_for(100ms);
+                        }
+                        sent["timedOut"] = running();
+                        if (running())
+                            session->CancelAgentWorkflow();
+                        sent["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - sentAt).count();
+                        outcome["sendBack"] = sent;
+                    }
                 }
                 outcome["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - begun).count();
                 record["agentStudio"] = outcome;

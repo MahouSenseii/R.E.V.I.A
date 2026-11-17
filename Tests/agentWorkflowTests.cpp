@@ -477,6 +477,123 @@ void TestExpectedFailureAndChangedEvidenceRecovery()
     Check(!workflow.Start(Spec(), Stamp(), provider, error), "Start reset the budgets of the same workflow.");
 }
 
+// Work that was verified and awaits acceptance can be taken back: any step that ran may then be redone
+// with changed input, the steps that depend on it run again, and nothing spent is refunded.
+void TestReworkReopensAFinishedStep()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    std::atomic<int> firstCalls = 0, reviewerCalls = 0;
+    const auto provider = [&](const NodeRequest& request, std::stop_token)
+    {
+        if (request.node.id == "first")
+            ++firstCalls;
+        if (request.node.role == WorkflowRole::Reviewer)
+            ++reviewerCalls;
+        return Verified(request);
+    };
+    Check(workflow.Start(Spec(), Stamp(), provider, error), "Rework fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::AwaitingAcceptance && !workflow.Retry("first", "changed input", "sent back", error),
+        "A finished step was retried without the work being sent back.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Snapshot().state == WorkflowState::Paused &&
+              workflow.Snapshot().parentDecision == ParentDecision::Rework && !workflow.AcceptedArtifact(),
+        "Sending work back did not pause the workflow unaccepted.");
+    Check(!workflow.Retry("first", "first input", "evidence-1", error) && !workflow.Retry("first", "", "", error),
+        "A sent-back step was redone with nothing changed, or an empty box replaced its task.");
+    Check(workflow.Retry("first", "changed input", "sent back", error), "A sent-back step could not be redone with changed input.");
+    Check(workflow.Resume(Stamp(), provider, error), "The reworked workflow did not resume.");
+    workflow.Join();
+    const auto reworked = workflow.Snapshot();
+    Check(firstCalls == 2 && reviewerCalls == 2 && Node(reworked, "first").attempts.size() == 2 && Node(reworked, "second").attempts.size() == 1 &&
+              Node(reworked, "reviewer").attempts.back().prerequisites[0].version == 2 && reworked.requests == 5 &&
+              reworked.state == WorkflowState::AwaitingAcceptance && reworked.parentDecision == ParentDecision::Pending,
+        "Rework did not redo the step and its reviewer, redid a step nobody named, or refunded what was spent.");
+}
+
+// A run that stopped unverified can be sent back too: there the step to redo is often one that finished.
+void TestAStoppedRunCanBeSentBack()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    std::atomic<int> firstCalls = 0;
+    std::mutex seenMutex;
+    std::vector<WorkflowArtifact> reviewerNow;
+    std::vector<WorkflowArtifact> reviewerEarlier;
+    const auto provider = [&](const NodeRequest& request, std::stop_token)
+    {
+        auto result = Verified(request);
+        if (request.node.id == "first")
+            ++firstCalls;
+        // The second worker's first attempt does not verify.
+        if (request.node.id == "second" && request.attempt == 1)
+            result.verified = false;
+        if (request.node.id == "reviewer")
+        {
+            std::lock_guard lock(seenMutex);
+            reviewerNow = request.prerequisites;
+            reviewerEarlier = request.earlierPrerequisites;
+        }
+        return result;
+    };
+    Check(workflow.Start(Spec(), Stamp(), provider, error), "Stopped-run fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::Paused && Node(workflow.Snapshot(), "first").state == WorkflowState::Succeeded &&
+              !workflow.Retry("first", "changed input", "sent back", error) && !workflow.Decide(ParentDecision::Accept, error) &&
+              !workflow.Decide(ParentDecision::Reject, error),
+        "A stopped run let a finished step be redone without being sent back, or was accepted or rejected.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Snapshot().state == WorkflowState::Paused &&
+              workflow.Snapshot().parentDecision == ParentDecision::Rework,
+        "A stopped run could not be sent back.");
+    Check(workflow.Retry("first", "changed input", "sent back", error), "A sent-back finished step could not be redone.");
+    Check(workflow.Retry("second", "second input", "checked again", error), "The step that had failed could not be retried as well.");
+    Check(workflow.Resume(Stamp(), provider, error), "The sent-back run did not resume.");
+    workflow.Join();
+    const auto redone = workflow.Snapshot();
+    Check(firstCalls == 2 && Node(redone, "first").attempts.size() == 2 && Node(redone, "second").attempts.size() == 2 &&
+              Node(redone, "second").attempts.back().verified && redone.state == WorkflowState::AwaitingAcceptance,
+        "The sent-back run did not redo the finished step and the step that had failed.");
+    // A step after a redone one is also given what the earlier attempt handed in: a redo that changes
+    // nothing leaves the first attempt's change in place. Only a verified attempt has anything to give.
+    std::lock_guard lock(seenMutex);
+    Check(reviewerNow.size() == 2 && reviewerNow.at(0).id == "first-artifact" && reviewerNow.at(0).version == 2 &&
+              reviewerEarlier.size() == 1 && reviewerEarlier.at(0).id == "first-artifact" && reviewerEarlier.at(0).version == 1,
+        "A step after a redone one was not given what the earlier attempt handed in.");
+}
+
+// Sending a run back adds the budget of one more pass, once: a run that spent its budget in the first pass
+// can redo the step, a second send-back adds nothing, and the grant survives a saved checkpoint.
+void TestSendingBackBuysTheRedoABudgetOnce()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    auto spec = Spec();
+    // Exactly what one pass needs: two workers and the reviewer.
+    spec.budget.maximumRequests = 3;
+    const auto provider = [](const NodeRequest& request, std::stop_token) { return Verified(request); };
+    Check(workflow.Start(spec, Stamp(), provider, error), "Budget fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::AwaitingAcceptance && workflow.Snapshot().requests == 3,
+        "The budget fixture's first pass did not use its three requests.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Retry("first", "changed input", "sent back", error),
+        "A run that spent its budget in the first pass could not redo a step after it was sent back.");
+    Check(workflow.Snapshot().budget.maximumRequests == 6 && workflow.Snapshot().budget.maximumToolOutputBytes == 524288,
+        "The snapshot does not show the budget the send-back added.");
+    const auto path = Checkpoint("rework-budget");
+    Check(workflow.Save(path, error), "The sent-back run could not be saved.");
+    AgentWorkflow restored;
+    Check(restored.Load(path, error) && restored.Resume(Stamp(), provider, error), "The sent-back run did not resume from its checkpoint.");
+    restored.Join();
+    Check(restored.Snapshot().state == WorkflowState::AwaitingAcceptance && restored.Snapshot().requests == 5 &&
+              Node(restored.Snapshot(), "first").attempts.size() == 2,
+        "The redo did not run within the added budget.");
+    Check(restored.Decide(ParentDecision::Rework, error) && restored.Save(path, error), "A second send-back was refused.");
+    const auto saved = CheckpointBytes(path);
+    Check(saved.find("\"reportedTokens\":40000") != std::string::npos && saved.find("\"reportedTokens\":80000") == std::string::npos &&
+              saved.find("\"reworkBudget\":true") != std::string::npos,
+        "The redo's budget was not added exactly once.");
+}
+
 void TestCancelledLateCompletionIsNotAdmitted()
 {
     std::mutex mutex;
@@ -969,6 +1086,9 @@ void RunAgentWorkflowTests()
     TestIndependentWorkersOverlap();
     TestDependencyWaitAndSeparateParentAcceptance();
     TestExpectedFailureAndChangedEvidenceRecovery();
+    TestReworkReopensAFinishedStep();
+    TestAStoppedRunCanBeSentBack();
+    TestSendingBackBuysTheRedoABudgetOnce();
     TestCancelledLateCompletionIsNotAdmitted();
     TestInterruptedCheckpointAndRestartBudgets();
     TestDurableEvidenceAndInvalidCheckpointRejection();

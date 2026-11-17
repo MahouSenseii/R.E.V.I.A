@@ -1058,7 +1058,7 @@ if(BUILD_TESTING)
         set_tests_properties(Revia.DatasetCapturePolicy PROPERTIES ENVIRONMENT "REVIA_DATASET_EXPORT=$<TARGET_FILE:ReviaDatasetExport>")
     endif()
     if(TARGET ReviaDesktop)
-        add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp
+        add_executable(ReviaStudioPanelTests Tests/studioPanelTests.cpp Desktop/agentStudioPanel.cpp
                 Desktop/learningStudioPanel.cpp Desktop/developmentStudioPanel.cpp Desktop/audienceStudioPanel.cpp)
         target_compile_definitions(ReviaStudioPanelTests PRIVATE REVIA_STUDIO_PANEL_STANDALONE)
         target_include_directories(ReviaStudioPanelTests PRIVATE Desktop Tests)

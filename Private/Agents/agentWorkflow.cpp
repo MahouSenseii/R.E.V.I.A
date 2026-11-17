@@ -461,6 +461,8 @@ struct AgentWorkflow::Impl
     bool running = false;
     bool draining = false;
     bool parentEvaluation = false;
+    // The owner sent this run back once already, and the redo's budget was added then.
+    bool reworkBudgetGranted = false;
     std::uint64_t era = 0;
     std::size_t active = 0;
     std::deque<WorkflowSnapshot> notifications;
@@ -499,6 +501,7 @@ struct AgentWorkflow::Impl
     WorkflowSnapshot SnapshotLocked() const
     {
         auto value = summary;
+        value.budget = spec.budget;
         for (const auto& node : nodes)
         {
             auto view = node.view;
@@ -698,6 +701,10 @@ struct AgentWorkflow::Impl
                             request.prerequisites.push_back(*source.artifact);
                             attempt.view.prerequisites.push_back(
                                 {dependency, source.artifact->id, source.artifact->version, source.artifact->hash});
+                            for (const auto& earlier : source.history)
+                                if (earlier.artifact && (earlier.artifact->id != source.artifact->id ||
+                                                            earlier.artifact->version != source.artifact->version))
+                                    request.earlierPrerequisites.push_back(*earlier.artifact);
                         }
                         request.prerequisiteReferences = attempt.view.prerequisites;
                         node.history.push_back(std::move(attempt));
@@ -776,7 +783,7 @@ struct AgentWorkflow::Impl
             {"decision", snapshot.parentDecision}, {"sequence", snapshot.sequence}, {"requests", snapshot.requests},
             {"reportedTokens", snapshot.reportedTokens}, {"unreportedRequests", snapshot.unreportedRequests},
             {"providerCalls", snapshot.providerCalls}, {"toolCalls", snapshot.toolCalls}, {"toolOutputBytes", snapshot.toolOutputBytes},
-            {"parentEvaluation", parentEvaluation},
+            {"parentEvaluation", parentEvaluation}, {"reworkBudget", reworkBudgetGranted},
             {"budget", {{"parallel", budget.maximumParallel}, {"attempts", budget.maximumAttemptsPerNode},
                            {"requests", budget.maximumRequests}, {"activeMilliseconds", budget.maximumActiveMilliseconds},
                            {"reportedTokens", budget.maximumReportedTokens}, {"providerCalls", budget.maximumProviderCalls},
@@ -944,6 +951,7 @@ struct AgentWorkflow::Impl
         WorkflowSnapshot summary;
         std::vector<Node> nodes;
         bool parentEvaluation;
+        bool reworkBudgetGranted;
     };
     static CheckpointData Decode(const Json& value)
     {
@@ -1022,7 +1030,7 @@ struct AgentWorkflow::Impl
             throw std::runtime_error("acceptance");
         if (summary.state == WorkflowState::Running)
             summary.state = WorkflowState::Paused;
-        return {std::move(spec), std::move(summary), std::move(nodes), parentEvaluation};
+        return {std::move(spec), std::move(summary), std::move(nodes), parentEvaluation, value.value("reworkBudget", false)};
     }
 };
 
@@ -1258,6 +1266,7 @@ bool AgentWorkflow::Start(WorkflowSpec spec, runtime::RuntimeStamp stamp, Provid
         impl->active = 0;
         impl->running = true;
         impl->parentEvaluation = false;
+        impl->reworkBudgetGranted = false;
         const auto era = ++impl->era;
         impl->ObserveLocked();
         impl->runner = std::jthread([this, era] { impl->Run(era); });
@@ -1311,6 +1320,12 @@ bool AgentWorkflow::Retry(const std::string& nodeId, std::string changedInput, s
             error = "Tool recovery requires new observed evidence about the prior effects before another attempt.";
             return false;
         }
+        // A box left empty means "as it was". An empty revised input used to replace the step's task with
+        // nothing, and its worker then ran without one.
+        if (changedInput.empty())
+            changedInput = found->spec.inputText;
+        if (changedEvidence.empty())
+            changedEvidence = found->spec.evidenceKey;
         const auto fingerprint = InputFingerprint(changedInput, changedEvidence, found->spec.deliverableContract);
         if (fingerprint.empty() ||
             std::any_of(
@@ -1352,10 +1367,15 @@ bool AgentWorkflow::Decide(const ParentDecision decision, std::string& error)
 {
     {
         std::lock_guard lock(impl->mutex);
-        if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested() ||
-            decision == ParentDecision::Pending || ToString(decision) == "Unknown")
+        // Work can be taken back from a run that awaits a decision and from one that stopped unverified:
+        // in both, a step that finished may be the one to redo. Accepting and rejecting need the review.
+        const bool takingBack = decision == ParentDecision::Rework || decision == ParentDecision::NeedEvidence;
+        const bool stoppedUnverified = impl->summary.state == WorkflowState::Paused;
+        if ((impl->summary.state != WorkflowState::AwaitingAcceptance && !(takingBack && stoppedUnverified)) ||
+            impl->cancellation.stop_requested() || decision == ParentDecision::Pending || ToString(decision) == "Unknown")
         {
-            error = "Verified reviewer evidence is required before parent acceptance.";
+            error = takingBack ? "Only a run that awaits a decision or has stopped unverified can be sent back."
+                               : "Verified reviewer evidence is required before parent acceptance.";
             return false;
         }
         auto& parent =
@@ -1364,6 +1384,21 @@ bool AgentWorkflow::Decide(const ParentDecision decision, std::string& error)
         {
             error = "A verified parent deliverable is required before acceptance.";
             return false;
+        }
+        // The owner's decision to have work redone buys the redo a budget. What the first pass spent is not
+        // refunded: the same amount is added, once a run and inside the hard bounds. Without it a sent-back
+        // step could do nothing: a live 9B pass reserved all 262,144 bytes of tool output, and the first
+        // read of its redo was refused.
+        if (takingBack && !impl->reworkBudgetGranted)
+        {
+            auto& budget = impl->spec.budget;
+            budget.maximumRequests = std::min<std::uint32_t>(32, budget.maximumRequests * 2);
+            budget.maximumActiveMilliseconds = std::min<std::uint64_t>(3600000, budget.maximumActiveMilliseconds * 2);
+            budget.maximumReportedTokens = std::min<std::uint64_t>(1000000, budget.maximumReportedTokens * 2);
+            budget.maximumProviderCalls = std::min<std::uint32_t>(128, budget.maximumProviderCalls * 2);
+            budget.maximumToolCalls = std::min<std::uint32_t>(64, budget.maximumToolCalls * 2);
+            budget.maximumToolOutputBytes = std::min<std::uint64_t>(1048576, budget.maximumToolOutputBytes * 2);
+            impl->reworkBudgetGranted = true;
         }
         const auto state = decision == ParentDecision::Accept   ? WorkflowState::Accepted
                            : decision == ParentDecision::Reject ? WorkflowState::Rejected
@@ -1573,6 +1608,7 @@ bool AgentWorkflow::Load(const std::filesystem::path& path, std::string& error)
         impl->cancellation = {};
         impl->active = 0;
         impl->parentEvaluation = decoded.parentEvaluation;
+        impl->reworkBudgetGranted = decoded.reworkBudgetGranted;
         ++impl->era;
         error.clear();
         return true;
