@@ -1249,9 +1249,25 @@ void TestToolStudioCheckerRunsACheckOfItsOwn(const CheckerCase scenario)
         "Work with a failed check against it was accepted automatically.");
     Check(pending.starts_with("Not accepted automatically. The test named in the request passed, but a further check "
                               "of the checking worker's own failed: " + check) &&
-              pending.find("Such a check can itself be wrong. Read it, then accept the work or not.") != std::string::npos &&
+              pending.find("Such a check can itself be wrong. Read it, then accept the work, send it back for rework, or reject it.") !=
+                  std::string::npos &&
               pending.find("ran cwd -> exit 0") != std::string::npos,
         "The owner was not shown the failed check with the report to decide on: " + pending);
+    if (scenario == CheckerCase::OwnRunOfTheProgramFails)
+    {
+        // Or the owner sends it back: nothing is accepted, the report says what to do next, and the
+        // step that wrote can be redone only with changed input.
+        Check(fixture.session.DecideAgentWorkflow(ParentDecision::Rework, error), error);
+        const auto sentBack = fixture.session.AgentWorkflowSnapshot();
+        const auto report = fixture.session.AgentWorkflowStoppedReport();
+        Check(sentBack.state == WorkflowState::Paused && sentBack.parentDecision == ParentDecision::Rework &&
+                  fixture.session.AgentWorkflowResult().empty() && fixture.session.AgentWorkflowPendingReport().empty() &&
+                  report.starts_with("You sent this run back for rework, so nothing was accepted."),
+            "Sending held work back accepted it, or the owner was not told what to do next: " + report);
+        Check(!fixture.session.RetryAgentNode("analysis", {}, {}, error) && !error.empty(),
+            "A sent-back step was redone without changed input.");
+        return;
+    }
     // The decision stays the owner's: accepting is theirs to do, and the result keeps the failed check.
     Check(fixture.session.DecideAgentWorkflow(ParentDecision::Accept, error), error);
     const auto result = fixture.session.AgentWorkflowResult();

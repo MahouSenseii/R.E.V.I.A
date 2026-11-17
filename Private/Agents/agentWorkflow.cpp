@@ -1311,6 +1311,12 @@ bool AgentWorkflow::Retry(const std::string& nodeId, std::string changedInput, s
             error = "Tool recovery requires new observed evidence about the prior effects before another attempt.";
             return false;
         }
+        // A box left empty means "as it was". An empty revised input used to replace the step's task with
+        // nothing, and its worker then ran without one.
+        if (changedInput.empty())
+            changedInput = found->spec.inputText;
+        if (changedEvidence.empty())
+            changedEvidence = found->spec.evidenceKey;
         const auto fingerprint = InputFingerprint(changedInput, changedEvidence, found->spec.deliverableContract);
         if (fingerprint.empty() ||
             std::any_of(

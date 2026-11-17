@@ -1699,6 +1699,20 @@ bool ReviaSession::DecideAgentWorkflow(const agents::ParentDecision decision, st
             return false;
         }
     }
+    // A task handed off from chat is Revia's to report there first: her report worker owns it while
+    // it is active, and sending it back under her would leave that report describing work that is
+    // no longer the run's.
+    if (decision == agents::ParentDecision::Rework || decision == agents::ParentDecision::NeedEvidence)
+    {
+        const auto task = DelegatedTask();
+        if (task && task->taskId == agentWorkflow.Snapshot().id &&
+            (task->status == DelegatedTaskStatus::Working || task->status == DelegatedTaskStatus::Reviewing ||
+                task->status == DelegatedTaskStatus::Reporting))
+        {
+            outError = "This task was handed off from chat and Revia has not reported it there yet. Wait for her report, or reject it.";
+            return false;
+        }
+    }
     return agentWorkflow.Decide(decision, outError);
 }
 
@@ -1800,6 +1814,7 @@ std::string ReviaSession::AgentWorkflowPendingReport() const
     if (failed.empty())
         return {};
     return "Not accepted automatically. The test named in the request passed, but a further check of the checking worker's own "
-           "failed: " + failed + "\nSuch a check can itself be wrong. Read it, then accept the work or not.\n\n" + DeliverableText(*candidate);
+           "failed: " + failed + "\nSuch a check can itself be wrong. Read it, then accept the work, send it back for rework, or reject it.\n\n" +
+           DeliverableText(*candidate);
 }
 }

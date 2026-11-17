@@ -61,4 +61,5 @@ class AgentStudioPanel final : public QWidget
     QPushButton* start = nullptr;
     QPushButton* cancel = nullptr;
     QPushButton* accept = nullptr;
+    QPushButton* sendBack = nullptr;
 };

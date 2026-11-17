@@ -510,9 +510,13 @@ std::string ReviaSession::AgentWorkflowStoppedReport() const
         return {};
     constexpr std::size_t MaximumReportCharacters = 2400;
     const auto reports = agentWorkflow.WorkerDeliverables();
+    const bool sentBack = snapshot.state == agents::WorkflowState::Paused && (snapshot.parentDecision == agents::ParentDecision::Rework ||
+                                                                                 snapshot.parentDecision == agents::ParentDecision::NeedEvidence);
     std::string text = snapshot.state == agents::WorkflowState::Exhausted
                            ? "This run spent its budget before its work was verified, so nothing was accepted.\n"
-                           : "This run stopped before its work was verified, so nothing was accepted.\n";
+                           : sentBack ? "You sent this run back for rework, so nothing was accepted. Choose the step to redo under Recovery, give "
+                                        "it changed input or evidence, and retry. The time and tokens already spent still count.\n"
+                                      : "This run stopped before its work was verified, so nothing was accepted.\n";
     for (const auto& node : snapshot.nodes)
     {
         text += "- " + node.workingOn + ": " + agents::ToString(node.state);

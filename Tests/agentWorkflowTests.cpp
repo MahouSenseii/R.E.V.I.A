@@ -477,6 +477,40 @@ void TestExpectedFailureAndChangedEvidenceRecovery()
     Check(!workflow.Start(Spec(), Stamp(), provider, error), "Start reset the budgets of the same workflow.");
 }
 
+// Work that was verified and awaits acceptance can be taken back: any step that ran may then be redone
+// with changed input, the steps that depend on it run again, and nothing spent is refunded.
+void TestReworkReopensAFinishedStep()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    std::atomic<int> firstCalls = 0, reviewerCalls = 0;
+    const auto provider = [&](const NodeRequest& request, std::stop_token)
+    {
+        if (request.node.id == "first")
+            ++firstCalls;
+        if (request.node.role == WorkflowRole::Reviewer)
+            ++reviewerCalls;
+        return Verified(request);
+    };
+    Check(workflow.Start(Spec(), Stamp(), provider, error), "Rework fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::AwaitingAcceptance && !workflow.Retry("first", "changed input", "sent back", error),
+        "A finished step was retried without the work being sent back.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Snapshot().state == WorkflowState::Paused &&
+              workflow.Snapshot().parentDecision == ParentDecision::Rework && !workflow.AcceptedArtifact(),
+        "Sending work back did not pause the workflow unaccepted.");
+    Check(!workflow.Retry("first", "first input", "evidence-1", error) && !workflow.Retry("first", "", "", error),
+        "A sent-back step was redone with nothing changed, or an empty box replaced its task.");
+    Check(workflow.Retry("first", "changed input", "sent back", error), "A sent-back step could not be redone with changed input.");
+    Check(workflow.Resume(Stamp(), provider, error), "The reworked workflow did not resume.");
+    workflow.Join();
+    const auto reworked = workflow.Snapshot();
+    Check(firstCalls == 2 && reviewerCalls == 2 && Node(reworked, "first").attempts.size() == 2 && Node(reworked, "second").attempts.size() == 1 &&
+              Node(reworked, "reviewer").attempts.back().prerequisites[0].version == 2 && reworked.requests == 5 &&
+              reworked.state == WorkflowState::AwaitingAcceptance && reworked.parentDecision == ParentDecision::Pending,
+        "Rework did not redo the step and its reviewer, redid a step nobody named, or refunded what was spent.");
+}
+
 void TestCancelledLateCompletionIsNotAdmitted()
 {
     std::mutex mutex;
@@ -969,6 +1003,7 @@ void RunAgentWorkflowTests()
     TestIndependentWorkersOverlap();
     TestDependencyWaitAndSeparateParentAcceptance();
     TestExpectedFailureAndChangedEvidenceRecovery();
+    TestReworkReopensAFinishedStep();
     TestCancelledLateCompletionIsNotAdmitted();
     TestInterruptedCheckpointAndRestartBudgets();
     TestDurableEvidenceAndInvalidCheckpointRejection();
