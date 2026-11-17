@@ -1358,10 +1358,15 @@ bool AgentWorkflow::Decide(const ParentDecision decision, std::string& error)
 {
     {
         std::lock_guard lock(impl->mutex);
-        if (impl->summary.state != WorkflowState::AwaitingAcceptance || impl->cancellation.stop_requested() ||
-            decision == ParentDecision::Pending || ToString(decision) == "Unknown")
+        // Work can be taken back from a run that awaits a decision and from one that stopped unverified:
+        // in both, a step that finished may be the one to redo. Accepting and rejecting need the review.
+        const bool takingBack = decision == ParentDecision::Rework || decision == ParentDecision::NeedEvidence;
+        const bool stoppedUnverified = impl->summary.state == WorkflowState::Paused;
+        if ((impl->summary.state != WorkflowState::AwaitingAcceptance && !(takingBack && stoppedUnverified)) ||
+            impl->cancellation.stop_requested() || decision == ParentDecision::Pending || ToString(decision) == "Unknown")
         {
-            error = "Verified reviewer evidence is required before parent acceptance.";
+            error = takingBack ? "Only a run that awaits a decision or has stopped unverified can be sent back."
+                               : "Verified reviewer evidence is required before parent acceptance.";
             return false;
         }
         auto& parent =

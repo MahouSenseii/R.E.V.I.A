@@ -270,9 +270,11 @@ void AgentStudioPanel::SetSnapshot(const revia::agents::WorkflowSnapshot& incomi
     start->setEnabled(!running);
     cancel->setEnabled(running);
     accept->setEnabled(snapshot.state == WorkflowState::AwaitingAcceptance);
-    sendBack->setEnabled(snapshot.state == WorkflowState::AwaitingAcceptance);
     // Once the owner has sent the run back, any step that ran can be redone, not only one that failed.
     const bool sentBack = snapshot.parentDecision == ParentDecision::Rework || snapshot.parentDecision == ParentDecision::NeedEvidence;
+    // Also from a run that stopped unverified: there the step to redo is often one that finished (the
+    // fix), while only the step that failed (its check) was offered.
+    sendBack->setEnabled(snapshot.state == WorkflowState::AwaitingAcceptance || (snapshot.state == WorkflowState::Paused && !sentBack));
     if (snapshot.id.empty())
     {
         summary->setText("No workflow started. Provider telemetry is unavailable.");

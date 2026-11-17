@@ -222,6 +222,10 @@ void TestAgentWorkCanBeSentBack()
     panel.SetSnapshot(held);
     Check(!sendBack->isEnabled() && retryNode->count() == 1 && retryNode->itemData(0).toString() == "analysis",
         "After work was sent back, its finished step is not offered for a redo.");
+    // A run that stopped unverified can be sent back as well.
+    held.parentDecision = ParentDecision::Pending;
+    panel.SetSnapshot(held);
+    Check(sendBack->isEnabled() && retryNode->count() == 0, "A stopped run cannot be sent back.");
 }
 
 void TestControlledSnapshotsFitResponsiveLayouts()

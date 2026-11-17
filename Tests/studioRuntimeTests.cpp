@@ -1205,6 +1205,14 @@ void TestToolStudioCheckerRunsACheckOfItsOwn(const CheckerCase scenario)
                                "\nSuch a check can itself be wrong. Read it before trusting it or the change.") != std::string::npos &&
                   stopped.find("ran cwd -> exit 0") != std::string::npos,
             "A run its checking worker stopped over its own check did not say that the named test passed and which check failed: " + stopped);
+        // Such a run can be sent back, so that the step that wrote can be redone; the report keeps the failed check.
+        Check(fixture.session.DecideAgentWorkflow(ParentDecision::Rework, error), error);
+        const auto sentBack = fixture.session.AgentWorkflowStoppedReport();
+        Check(fixture.session.AgentWorkflowSnapshot().state == WorkflowState::Paused &&
+                  fixture.session.AgentWorkflowSnapshot().parentDecision == ParentDecision::Rework &&
+                  sentBack.starts_with("You sent this run back for rework, so nothing was accepted.") &&
+                  sentBack.find("a further check of the checking worker's own failed: " + check) != std::string::npos,
+            "A stopped run could not be sent back, or its report lost the failed check: " + sentBack);
         return;
     }
     {

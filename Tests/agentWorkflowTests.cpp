@@ -511,6 +511,41 @@ void TestReworkReopensAFinishedStep()
         "Rework did not redo the step and its reviewer, redid a step nobody named, or refunded what was spent.");
 }
 
+// A run that stopped unverified can be sent back too: there the step to redo is often one that finished.
+void TestAStoppedRunCanBeSentBack()
+{
+    AgentWorkflow workflow;
+    std::string error;
+    std::atomic<int> firstCalls = 0;
+    const auto provider = [&](const NodeRequest& request, std::stop_token)
+    {
+        auto result = Verified(request);
+        if (request.node.id == "first")
+            ++firstCalls;
+        // The second worker's first attempt does not verify.
+        if (request.node.id == "second" && request.attempt == 1)
+            result.verified = false;
+        return result;
+    };
+    Check(workflow.Start(Spec(), Stamp(), provider, error), "Stopped-run fixture did not start.");
+    workflow.Join();
+    Check(workflow.Snapshot().state == WorkflowState::Paused && Node(workflow.Snapshot(), "first").state == WorkflowState::Succeeded &&
+              !workflow.Retry("first", "changed input", "sent back", error) && !workflow.Decide(ParentDecision::Accept, error) &&
+              !workflow.Decide(ParentDecision::Reject, error),
+        "A stopped run let a finished step be redone without being sent back, or was accepted or rejected.");
+    Check(workflow.Decide(ParentDecision::Rework, error) && workflow.Snapshot().state == WorkflowState::Paused &&
+              workflow.Snapshot().parentDecision == ParentDecision::Rework,
+        "A stopped run could not be sent back.");
+    Check(workflow.Retry("first", "changed input", "sent back", error), "A sent-back finished step could not be redone.");
+    Check(workflow.Retry("second", "second input", "checked again", error), "The step that had failed could not be retried as well.");
+    Check(workflow.Resume(Stamp(), provider, error), "The sent-back run did not resume.");
+    workflow.Join();
+    const auto redone = workflow.Snapshot();
+    Check(firstCalls == 2 && Node(redone, "first").attempts.size() == 2 && Node(redone, "second").attempts.size() == 2 &&
+              Node(redone, "second").attempts.back().verified && redone.state == WorkflowState::AwaitingAcceptance,
+        "The sent-back run did not redo the finished step and the step that had failed.");
+}
+
 void TestCancelledLateCompletionIsNotAdmitted()
 {
     std::mutex mutex;
@@ -1004,6 +1039,7 @@ void RunAgentWorkflowTests()
     TestDependencyWaitAndSeparateParentAcceptance();
     TestExpectedFailureAndChangedEvidenceRecovery();
     TestReworkReopensAFinishedStep();
+    TestAStoppedRunCanBeSentBack();
     TestCancelledLateCompletionIsNotAdmitted();
     TestInterruptedCheckpointAndRestartBudgets();
     TestDurableEvidenceAndInvalidCheckpointRejection();
